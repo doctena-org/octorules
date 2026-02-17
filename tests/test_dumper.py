@@ -108,17 +108,20 @@ class TestDumpZoneRules:
         # API fields should be stripped, but ref preserved
         assert "id" not in data["redirect_rules"][0]
         assert data["redirect_rules"][0]["ref"] == "r1"
+        assert result.read_text().startswith("---\n")
 
     def test_dump_empty_rules(self, tmp_path):
         result = dump_zone_rules("example.com", {}, tmp_path)
-        assert result is None
+        assert result is not None
+        assert result.read_text() == "---\n"
 
     def test_dump_unknown_phase_skipped(self, tmp_path):
         rules = {
             "unknown_phase": [{"ref": "r1", "expression": "true"}],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        assert result is None
+        assert result is not None
+        assert result.read_text() == "---\n"
 
     def test_dump_creates_output_dir(self, tmp_path):
         output_dir = tmp_path / "sub" / "dir"
@@ -289,14 +292,15 @@ class TestCFApiResilience:
         assert "new_future_phase" not in data  # Not in PHASE_BY_CF, so skipped
         assert len(data) == 1
 
-    def test_all_unknown_phases_results_in_no_dump(self, tmp_path):
-        """If all phases from CF are unknown, dump returns None."""
+    def test_all_unknown_phases_results_in_empty_dump(self, tmp_path):
+        """If all phases from CF are unknown, dump produces an empty --- file."""
         rules = {
             "http_request_unknown_a": [{"ref": "r1", "expression": "true"}],
             "http_request_unknown_b": [{"ref": "r2", "expression": "true"}],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        assert result is None
+        assert result is not None
+        assert result.read_text() == "---\n"
 
     def test_action_parameters_with_nested_new_fields(self, tmp_path):
         """New nested fields in action_parameters are preserved."""

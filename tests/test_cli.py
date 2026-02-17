@@ -78,7 +78,7 @@ class TestBuildParser:
     def test_zone_filter(self):
         parser = build_parser()
         args = parser.parse_args(["--zone", "example.com", "plan"])
-        assert args.zone == "example.com"
+        assert args.zones == ["example.com"]
 
     def test_config_path(self):
         parser = build_parser()
@@ -167,12 +167,12 @@ class TestGetZones:
         assert set(zones) == {"example.com", "other.com"}
 
     def test_filter_valid_zone(self, sample_config):
-        zones = _get_zones(sample_config, "example.com")
+        zones = _get_zones(sample_config, ["example.com"])
         assert zones == ["example.com"]
 
     def test_filter_invalid_zone(self, sample_config):
         with pytest.raises(ConfigError, match="not found"):
-            _get_zones(sample_config, "nonexistent.com")
+            _get_zones(sample_config, ["nonexistent.com"])
 
 
 class TestCmdPlan:
@@ -188,23 +188,40 @@ class TestCmdPlan:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_plan(sample_config, "example.com")
+        result = cmd_plan(sample_config, ["example.com"])
+        assert result == 0
+
+    @patch("octorules.cli.CloudflareProvider")
+    def test_has_changes_exit_code(self, mock_provider_cls, sample_config):
+        """--exit-code flag returns 2 when changes are detected."""
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        result = cmd_plan(sample_config, ["example.com"], exit_code=True)
         assert result == 2
+
+    @patch("octorules.cli.CloudflareProvider")
+    def test_no_changes_exit_code(self, mock_provider_cls, sample_config):
+        """--exit-code flag returns 0 when there are no changes."""
+        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        result = cmd_plan(sample_config, ["example.com"], exit_code=True)
+        assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
     def test_zone_filter(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_plan(sample_config, "example.com")
+        cmd_plan(sample_config, ["example.com"])
         # Should only call get_all_phase_rules once (for the filtered zone)
         mock_provider_cls.return_value.get_all_phase_rules.assert_called_once_with(
             "zone-abc",
+            zone_name="example.com",
             cf_phases=None,
         )
 
     @patch("octorules.cli.CloudflareProvider")
     def test_no_rules_file_means_no_changes(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_plan(sample_config, "example.com")
+        result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
@@ -212,7 +229,7 @@ class TestCmdPlan:
         """Zone with no rules file should log at debug level."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.DEBUG, logger="octorules"):
-            cmd_plan(sample_config, "example.com")
+            cmd_plan(sample_config, ["example.com"])
         assert "No rules file for zone example.com" in caplog.text
 
 
@@ -229,7 +246,7 @@ class TestCmdSync:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_sync(sample_config, "example.com")
+        result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
         call_args = mock_provider_cls.return_value.put_phase_rules.call_args
@@ -252,7 +269,7 @@ class TestCmdSync:
             "    expression: 'true'\n"
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_sync(sample_config, "example.com")
+        result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
         assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
 
@@ -280,7 +297,7 @@ class TestCmdSync:
             "API rate limited", request=MagicMock(), body=None
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         assert "API rate limited" in caplog.text
 
@@ -296,7 +313,7 @@ class TestCmdSync:
             request=MagicMock()
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
 
     @patch("octorules.cli.CloudflareProvider")
@@ -307,7 +324,7 @@ class TestCmdSync:
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         mock_provider_cls.return_value.put_phase_rules.side_effect = TypeError("bad arg")
         with pytest.raises(TypeError, match="bad arg"):
-            cmd_sync(sample_config, "example.com")
+            cmd_sync(sample_config, ["example.com"])
 
     @patch("octorules.cli.CloudflareProvider")
     def test_sync_aborts_on_first_failure(self, mock_provider_cls, sample_config):
@@ -327,7 +344,7 @@ class TestCmdSync:
         mock_provider_cls.return_value.put_phase_rules.side_effect = APIError(
             "Forbidden", request=MagicMock(), body=None
         )
-        result = cmd_sync(sample_config, "example.com")
+        result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         # Fail-fast: only one PUT attempted, second phase never reached
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
@@ -357,7 +374,7 @@ class TestCmdSync:
 
         mock_provider_cls.return_value.put_phase_rules.side_effect = put_side_effect
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         assert "Successfully synced before failure" in caplog.text
 
@@ -402,7 +419,7 @@ class TestCmdSync:
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
         assert "redirect_rules: applying 1 change(s)" in caplog.text
         assert "cache_rules: applying 1 change(s)" in caplog.text
@@ -416,9 +433,10 @@ class TestCmdSync:
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.DEBUG, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
-        assert "PUT http_request_dynamic_redirect zone=zone-abc rules=1" in caplog.text
+        assert "PUT http_request_dynamic_redirect zone=example.com (ID=zone-abc)" in caplog.text
+        assert "rules=1" in caplog.text
 
     @patch("octorules.cli.CloudflareProvider")
     def test_sync_reads_rules_once(self, mock_provider_cls, sample_config):
@@ -430,7 +448,7 @@ class TestCmdSync:
         with patch.object(
             sample_config, "load_zone_rules", wraps=sample_config.load_zone_rules
         ) as spy:
-            cmd_sync(sample_config, "example.com")
+            cmd_sync(sample_config, ["example.com"])
             # Should only be called once (during planning), not again during apply
             spy.assert_called_once_with("example.com")
 
@@ -440,9 +458,11 @@ class TestCmdDump:
     def test_dump_no_rules(self, mock_provider_cls, sample_config, caplog):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_dump(sample_config, "example.com", None)
+            result = cmd_dump(sample_config, ["example.com"], None)
         assert result == 0
-        assert "No rules found" in caplog.text
+        assert "Dumped example.com" in caplog.text
+        dumped = sample_config.rules_dir / "example.com.yaml"
+        assert dumped.read_text() == "---\n"
 
     @patch("octorules.cli.CloudflareProvider")
     def test_dump_writes_file(self, mock_provider_cls, sample_config, caplog):
@@ -452,7 +472,7 @@ class TestCmdDump:
             ],
         }
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_dump(sample_config, "example.com", None)
+            result = cmd_dump(sample_config, ["example.com"], None)
         assert result == 0
         assert "Dumped example.com" in caplog.text
         assert (sample_config.rules_dir / "example.com.yaml").exists()
@@ -465,7 +485,7 @@ class TestCmdDump:
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
-        result = cmd_dump(sample_config, "example.com", str(out_dir))
+        result = cmd_dump(sample_config, ["example.com"], str(out_dir))
         assert result == 0
         assert (out_dir / "example.com.yaml").exists()
 
@@ -514,13 +534,13 @@ class TestCmdValidate:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 0
         assert "All rules valid" in caplog.text
 
     def test_no_rules_file(self, sample_config, caplog):
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 0
         assert "skipped" in caplog.text
 
@@ -535,7 +555,7 @@ class TestCmdValidate:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - expression: 'true'\n")
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 1
         assert "missing required 'ref'" in caplog.text
 
@@ -543,7 +563,7 @@ class TestCmdValidate:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n")
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 1
         assert "missing required 'expression'" in caplog.text
 
@@ -553,7 +573,7 @@ class TestCmdValidate:
             "redirect_rules:\n  - ref: r1\n    expression: 'a'\n  - ref: r1\n    expression: 'b'\n"
         )
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 1
         assert "Duplicate ref" in caplog.text
 
@@ -561,7 +581,7 @@ class TestCmdValidate:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n")
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 1
         assert "must specify an 'action'" in caplog.text
 
@@ -569,7 +589,7 @@ class TestCmdValidate:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("typo_rules:\n  - ref: r1\n    expression: 'true'\n")
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 0  # warning only, not an error
         assert "Unknown phase" in caplog.text
 
@@ -579,7 +599,7 @@ class TestCmdValidate:
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         output_file = tmp_path / "validate.txt"
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com", output_file=str(output_file))
+            result = cmd_validate(sample_config, ["example.com"], output_file=str(output_file))
         assert result == 0
         assert output_file.exists()
         content = output_file.read_text()
@@ -592,7 +612,7 @@ class TestCmdValidate:
         rules_file.write_text("redirect_rules:\n  - expression: 'true'\n")
         output_file = tmp_path / "validate.txt"
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com", output_file=str(output_file))
+            result = cmd_validate(sample_config, ["example.com"], output_file=str(output_file))
         assert result == 1
         content = output_file.read_text()
         assert "ERROR" in content
@@ -603,7 +623,7 @@ class TestCmdValidate:
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         bad_path = str(sample_config.rules_dir)  # directory, not a file
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com", output_file=bad_path)
+            result = cmd_validate(sample_config, ["example.com"], output_file=bad_path)
         assert result == 1
         assert "Failed to write output file" in caplog.text
 
@@ -618,7 +638,7 @@ class TestCmdValidate:
             "    expression: 'b'\n"
         )
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com")
+            result = cmd_validate(sample_config, ["example.com"])
         assert result == 0
         assert "redirect_rules: OK (1 rule(s))" in caplog.text
         assert "cache_rules: OK (1 rule(s))" in caplog.text
@@ -636,7 +656,7 @@ class TestCmdCompare:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_compare(sample_config, "example.com")
+        result = cmd_compare(sample_config, ["example.com"])
         assert result == 1
 
     @patch("octorules.cli.CloudflareProvider")
@@ -648,15 +668,16 @@ class TestCmdCompare:
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
-        result = cmd_compare(sample_config, "example.com")
+        result = cmd_compare(sample_config, ["example.com"])
         assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
     def test_zone_filter(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_compare(sample_config, "example.com")
+        cmd_compare(sample_config, ["example.com"])
         mock_provider_cls.return_value.get_all_phase_rules.assert_called_once_with(
             "zone-abc",
+            zone_name="example.com",
             cf_phases=None,
         )
 
@@ -672,7 +693,7 @@ class TestCmdCompare:
             "    expression: 'true'\n"
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_compare(sample_config, "example.com", phase_filter=["redirect_rules"])
+        result = cmd_compare(sample_config, ["example.com"], phase_filter=["redirect_rules"])
         assert result == 1
 
     @patch("octorules.cli.CloudflareProvider")
@@ -682,7 +703,7 @@ class TestCmdCompare:
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
-            cmd_compare(sample_config, "example.com", checksum=True)
+            cmd_compare(sample_config, ["example.com"], checksum=True)
         assert "checksum=" in caplog.text
         for line in caplog.text.splitlines():
             if "checksum=" in line:
@@ -721,7 +742,7 @@ class TestCmdReport:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, "example.com", report_format="csv")
+        cmd_report(sample_config, ["example.com"], report_format="csv")
         out = capsys.readouterr().out
         assert "yaml_only" in out
         assert "redirect_rules" in out
@@ -735,7 +756,7 @@ class TestCmdReport:
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
-        cmd_report(sample_config, "example.com", report_format="csv")
+        cmd_report(sample_config, ["example.com"], report_format="csv")
         out = capsys.readouterr().out
         assert "in_sync" in out
 
@@ -746,7 +767,7 @@ class TestCmdReport:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, "example.com", report_format="json")
+        cmd_report(sample_config, ["example.com"], report_format="json")
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "zones" in data
@@ -756,9 +777,10 @@ class TestCmdReport:
     @patch("octorules.cli.CloudflareProvider")
     def test_zone_filter(self, mock_provider_cls, sample_config, capsys):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, "example.com", report_format="csv")
+        cmd_report(sample_config, ["example.com"], report_format="csv")
         mock_provider_cls.return_value.get_all_phase_rules.assert_called_once_with(
             "zone-abc",
+            zone_name="example.com",
             cf_phases=None,
         )
 
@@ -775,7 +797,7 @@ class TestCmdReport:
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_report(
-            sample_config, "example.com", phase_filter=["redirect_rules"], report_format="csv"
+            sample_config, ["example.com"], phase_filter=["redirect_rules"], report_format="csv"
         )
         out = capsys.readouterr().out
         assert "redirect_rules" in out
@@ -788,7 +810,7 @@ class TestCmdReport:
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
-        cmd_report(sample_config, "example.com", report_format="csv")
+        cmd_report(sample_config, ["example.com"], report_format="csv")
         out = capsys.readouterr().out
         assert "live_only" in out
 
@@ -970,7 +992,7 @@ class TestAlwaysDryRun:
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            result = cmd_sync(config, "example.com")
+            result = cmd_sync(config, ["example.com"])
         assert result == 0
         # Should NOT have called put_phase_rules
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
@@ -993,7 +1015,7 @@ class TestAlwaysDryRun:
             },
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_sync(config, "example.com")
+        result = cmd_sync(config, ["example.com"])
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
@@ -1140,7 +1162,7 @@ class TestPhaseFiltering:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_plan(sample_config, "example.com", phase_filter=["redirect_rules"])
+        cmd_plan(sample_config, ["example.com"], phase_filter=["redirect_rules"])
         call_kwargs = mock_provider_cls.return_value.get_all_phase_rules.call_args
         assert call_kwargs[1]["cf_phases"] == ["http_request_dynamic_redirect"]
 
@@ -1148,7 +1170,7 @@ class TestPhaseFiltering:
     def test_no_phase_filter_fetches_all(self, mock_provider_cls, sample_config):
         """Without phase filter, cf_phases should be None (fetch all)."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        cmd_plan(sample_config, "example.com")
+        cmd_plan(sample_config, ["example.com"])
         call_kwargs = mock_provider_cls.return_value.get_all_phase_rules.call_args
         assert call_kwargs[1]["cf_phases"] is None
 
@@ -1164,8 +1186,8 @@ class TestPhaseFiltering:
             "    expression: 'true'\n"
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_plan(sample_config, "example.com", phase_filter=["redirect_rules"])
-        assert result == 2  # has changes
+        result = cmd_plan(sample_config, ["example.com"], phase_filter=["redirect_rules"])
+        assert result == 0  # has changes, but no --exit-code flag
         # But only redirect_rules should be in the plan
 
     @patch("octorules.cli.CloudflareProvider")
@@ -1180,7 +1202,7 @@ class TestPhaseFiltering:
             "    expression: 'true'\n"
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_sync(sample_config, "example.com", phase_filter=["redirect_rules"])
+        result = cmd_sync(sample_config, ["example.com"], phase_filter=["redirect_rules"])
         assert result == 0
         # Only one PUT call (for redirect_rules, not cache_rules)
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
@@ -1197,7 +1219,7 @@ class TestPhaseFiltering:
             "  - ref: c1\n"  # missing expression — would fail validation
         )
         with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, "example.com", phase_filter=["redirect_rules"])
+            result = cmd_validate(sample_config, ["example.com"], phase_filter=["redirect_rules"])
         # Only redirect_rules validated, cache_rules skipped
         assert result == 0
 
@@ -1226,7 +1248,7 @@ class TestChecksum:
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
-            cmd_plan(sample_config, "example.com", checksum=True)
+            cmd_plan(sample_config, ["example.com"], checksum=True)
         assert "checksum=" in caplog.text
         # Extract the hash and verify it's a hex string
         for line in caplog.text.splitlines():
@@ -1243,7 +1265,7 @@ class TestChecksum:
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         # First compute the checksum
         with caplog.at_level(logging.INFO, logger="octorules"):
-            cmd_plan(sample_config, "example.com", checksum=True)
+            cmd_plan(sample_config, ["example.com"], checksum=True)
         hash_val = None
         for line in caplog.text.splitlines():
             if "checksum=" in line:
@@ -1251,7 +1273,7 @@ class TestChecksum:
                 break
         assert hash_val is not None
         # Now sync with that checksum
-        result = cmd_sync(sample_config, "example.com", checksum=hash_val)
+        result = cmd_sync(sample_config, ["example.com"], checksum=hash_val)
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
@@ -1261,7 +1283,7 @@ class TestChecksum:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_sync(sample_config, "example.com", checksum="wrong-hash")
+        result = cmd_sync(sample_config, ["example.com"], checksum="wrong-hash")
         assert result == 1
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
 
@@ -1302,7 +1324,7 @@ class TestSafetyForce:
             ],
         }
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(config, "example.com")
+            result = cmd_sync(config, ["example.com"])
         assert result == 1
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
         assert "Safety threshold exceeded" in caplog.text
@@ -1330,7 +1352,7 @@ class TestSafetyForce:
                 for i in range(10)
             ],
         }
-        result = cmd_sync(config, "example.com")
+        result = cmd_sync(config, ["example.com"])
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
@@ -1354,7 +1376,7 @@ class TestSafetyForce:
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
-        result = cmd_sync(config, "example.com", force=True)
+        result = cmd_sync(config, ["example.com"], force=True)
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
@@ -1382,7 +1404,7 @@ class TestSafetyForce:
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
-        result = cmd_sync(config, "example.com")
+        result = cmd_sync(config, ["example.com"])
         assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
@@ -1406,7 +1428,7 @@ class TestSafetyForce:
             ],
         }
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            cmd_sync(config, "example.com")
+            cmd_sync(config, ["example.com"])
         assert "redirect_rules" in caplog.text
 
     @patch("octorules.cli.CloudflareProvider")
@@ -1430,7 +1452,7 @@ class TestSafetyForce:
             ],
         }
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            cmd_sync(config, "example.com")
+            cmd_sync(config, ["example.com"])
         assert "example.com" in caplog.text
         assert "100.0%" in caplog.text
         assert "30.0%" in caplog.text
@@ -1446,8 +1468,8 @@ class TestParallelPlanning:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_plan(sample_config, "example.com")
-        assert result == 2
+        result = cmd_plan(sample_config, ["example.com"])
+        assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
     def test_cmd_plan_parallel(self, mock_provider_cls, tmp_path):
@@ -1471,7 +1493,7 @@ class TestParallelPlanning:
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_plan(config, None)
-        assert result == 2
+        assert result == 0
         # API called for each zone
         assert mock_provider_cls.return_value.get_all_phase_rules.call_count == 2
 
@@ -1585,7 +1607,7 @@ class TestAllowUnmanaged:
                 {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
             ],
         }
-        result = cmd_plan(config, "example.com")
+        result = cmd_plan(config, ["example.com"])
         # r2 should NOT be marked for removal, so no changes
         assert result == 0
 
@@ -1620,7 +1642,7 @@ class TestAllowUnmanaged:
                 },
             ],
         }
-        result = cmd_plan(config, "example.com")
+        result = cmd_plan(config, ["example.com"])
         # cache_rules should NOT be marked for removal
         assert result == 0
 
@@ -1779,7 +1801,7 @@ class TestAuthErrorPropagation:
             message="Invalid API token", response=mock_response, body=None
         )
         with pytest.raises(AuthenticationError):
-            cmd_plan(sample_config, "example.com")
+            cmd_plan(sample_config, ["example.com"])
 
     @patch("octorules.cli.CloudflareProvider")
     def test_plan_permission_error_propagates(self, mock_provider_cls, sample_config):
@@ -1792,7 +1814,7 @@ class TestAuthErrorPropagation:
             message="Missing zone permission", response=mock_response, body=None
         )
         with pytest.raises(PermissionDeniedError):
-            cmd_plan(sample_config, "example.com")
+            cmd_plan(sample_config, ["example.com"])
 
     @patch("octorules.cli.CloudflareProvider")
     def test_sync_auth_error_during_apply_returns_1(self, mock_provider_cls, sample_config, caplog):
@@ -1808,7 +1830,7 @@ class TestAuthErrorPropagation:
             message="Token expired", response=mock_response, body=None
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         assert "Authentication/permission error" in caplog.text
         assert "HTTP 401" in caplog.text
@@ -1838,7 +1860,7 @@ class TestAuthErrorPropagation:
 
         mock_provider_cls.return_value.put_phase_rules.side_effect = put_side_effect
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         assert "Successfully synced before failure" not in caplog.text
 
@@ -1853,7 +1875,7 @@ class TestAuthErrorPropagation:
             message="Invalid API token", response=mock_response, body=None
         )
         with pytest.raises(AuthenticationError):
-            cmd_dump(sample_config, "example.com", None)
+            cmd_dump(sample_config, ["example.com"], None)
 
     def test_main_catches_auth_error(self, tmp_config, caplog):
         """main() should catch AuthenticationError and exit 1 with clear message."""
@@ -1916,12 +1938,12 @@ class TestFailedPhaseFiltering:
             {}, failed_phases=["http_request_dynamic_redirect"]
         )
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            result = cmd_plan(sample_config, "example.com")
+            result = cmd_plan(sample_config, ["example.com"])
         # redirect_rules should have been skipped
         assert "Skipping redirect_rules" in caplog.text
         assert "failed to fetch current state" in caplog.text
-        # cache_rules still planned (has changes), so result should be 2
-        assert result == 2
+        # cache_rules still planned (has changes), but no --exit-code flag
+        assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
     def test_no_failed_phases_plans_normally(self, mock_provider_cls, sample_config):
@@ -1931,8 +1953,8 @@ class TestFailedPhaseFiltering:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = PhaseRulesResult({})
-        result = cmd_plan(sample_config, "example.com")
-        assert result == 2
+        result = cmd_plan(sample_config, ["example.com"])
+        assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
     def test_all_phases_failed_means_no_changes(self, mock_provider_cls, sample_config, caplog):
@@ -1945,7 +1967,7 @@ class TestFailedPhaseFiltering:
             {}, failed_phases=["http_request_dynamic_redirect"]
         )
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            result = cmd_plan(sample_config, "example.com")
+            result = cmd_plan(sample_config, ["example.com"])
         assert "Skipping redirect_rules" in caplog.text
         assert result == 0  # No changes (desired was filtered out)
 
@@ -1955,8 +1977,8 @@ class TestFailedPhaseFiltering:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_plan(sample_config, "example.com")
-        assert result == 2
+        result = cmd_plan(sample_config, ["example.com"])
+        assert result == 0
 
     @patch("octorules.cli.CloudflareProvider")
     def test_failed_phase_not_in_desired_ignored(self, mock_provider_cls, sample_config, caplog):
@@ -1970,9 +1992,9 @@ class TestFailedPhaseFiltering:
             {}, failed_phases=["http_request_cache_settings"]
         )
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            result = cmd_plan(sample_config, "example.com")
+            result = cmd_plan(sample_config, ["example.com"])
         assert "Skipping" not in caplog.text
-        assert result == 2  # redirect_rules still has changes
+        assert result == 0  # redirect_rules still has changes, but no --exit-code flag
 
 
 class TestApiErrorStatusCodes:
@@ -1989,7 +2011,7 @@ class TestApiErrorStatusCodes:
             message="Internal Server Error", response=mock_response, body=None
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_plan(sample_config, "example.com")
+            result = cmd_plan(sample_config, ["example.com"])
         assert result == 1
         assert "HTTP 500" in caplog.text
 
@@ -2007,7 +2029,7 @@ class TestApiErrorStatusCodes:
             message="Rate limited", response=mock_response, body=None
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_sync(sample_config, "example.com")
+            result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         assert "HTTP 429" in caplog.text
 
