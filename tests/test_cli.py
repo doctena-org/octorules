@@ -2045,15 +2045,18 @@ class TestEmitPlanOutputs:
         result = _emit_plan_outputs(sample_config, [zp])
         assert result is True
         out = capsys.readouterr().out
-        assert "example.com" in out
+        assert "No changes detected" in out
 
     def test_file_output(self, sample_config, tmp_path):
         """PlanOutput with path → file written."""
-        from octorules.planner import ZonePlan
+        from octorules.phases import get_phase
+        from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
 
         out_file = tmp_path / "plan.txt"
         sample_config.plan_outputs = {"text": PlanText("text", path=str(out_file))}
-        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        phase = get_phase("redirect_rules")
+        pp = PhasePlan(phase=phase, changes=[RuleChange(ChangeType.ADD, "r1", phase)])
+        zp = ZonePlan(zone_name="example.com", phase_plans=[pp])
         result = _emit_plan_outputs(sample_config, [zp])
         assert result is True
         assert out_file.exists()
@@ -2061,14 +2064,17 @@ class TestEmitPlanOutputs:
 
     def test_multiple_outputs(self, sample_config, tmp_path, capsys):
         """Multiple outputs: one to stdout, one to file."""
-        from octorules.planner import ZonePlan
+        from octorules.phases import get_phase
+        from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
 
         out_file = tmp_path / "plan.json"
         sample_config.plan_outputs = {
             "text": PlanText("text"),
             "json": PlanJson("json", path=str(out_file)),
         }
-        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        phase = get_phase("redirect_rules")
+        pp = PhasePlan(phase=phase, changes=[RuleChange(ChangeType.ADD, "r1", phase)])
+        zp = ZonePlan(zone_name="example.com", phase_plans=[pp])
         result = _emit_plan_outputs(sample_config, [zp])
         assert result is True
         # stdout should have text output

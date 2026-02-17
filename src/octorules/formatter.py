@@ -135,10 +135,15 @@ def _total_changes(zone_plans: list[ZonePlan]) -> int:
 
 
 def format_plan_json(zone_plans: list[ZonePlan]) -> str:
-    """Format the plan as structured JSON."""
+    """Format the plan as structured JSON.
+
+    Only zones with changes are included in the output.
+    """
     total_changes = _total_changes(zone_plans)
     zones = []
     for zp in zone_plans:
+        if not zp.has_changes:
+            continue
         phase_plans = []
         for pp in zp.phase_plans:
             changes = []
@@ -166,7 +171,6 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
                 "zone": zp.zone_name,
                 "phase_plans": phase_plans,
                 "total_changes": zp.total_changes,
-                "has_changes": zp.has_changes,
             }
         )
     result = {
@@ -183,17 +187,19 @@ def _md_escape(text: str) -> str:
 
 
 def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
-    """Format the plan as markdown for PR comments."""
+    """Format the plan as markdown for PR comments.
+
+    Only zones with changes are shown; unchanged zones are omitted to keep
+    the output concise.
+    """
     total_changes = _total_changes(zone_plans)
     lines: list[str] = []
 
     for zp in zone_plans:
+        if not zp.has_changes:
+            continue
         lines.append(f"### Zone: `{zp.zone_name}`")
         lines.append("")
-        if not zp.has_changes:
-            lines.append("No changes.")
-            lines.append("")
-            continue
         lines.append("| Op | Phase | Ref | Details |")
         lines.append("|---|---|---|---|")
         for pp in zp.phase_plans:
@@ -222,103 +228,61 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
 
 
 def format_plan_html(zone_plans: list[ZonePlan]) -> str:
-    """Format the plan as a self-contained HTML document with inline CSS."""
+    """Format the plan as embeddable HTML fragment for PR comments.
+
+    Outputs clean HTML tables (no DOCTYPE/html/head/body/style wrapper) so the
+    output can be embedded directly in GitHub PR comments or other markdown
+    contexts.  Only zones with changes are shown.
+    """
     total_changes = _total_changes(zone_plans)
     e = html_escape
+    lines: list[str] = []
 
-    css = """\
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-           max-width: 960px; margin: 2em auto; padding: 0 1em; color: #24292f; }
-    h1 { border-bottom: 1px solid #d1d9e0; padding-bottom: 0.3em; }
-    h2 { margin-top: 1.5em; }
-    h3 { color: #57606a; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
-    th, td { border: 1px solid #d1d9e0; padding: 6px 12px; text-align: left; }
-    th { background: #f6f8fa; }
-    .summary { background: #f6f8fa; padding: 1em; border-radius: 6px; margin-bottom: 1.5em; }
-    .add { color: #1a7f37; }
-    .remove { color: #cf222e; }
-    .modify { color: #9a6700; }
-    .reorder { color: #0969da; }
-    .diff-old { color: #cf222e; text-decoration: line-through; }
-    .diff-new { color: #1a7f37; }
-    .no-changes { color: #57606a; font-style: italic; }"""
-
-    lines = [
-        "<!DOCTYPE html>",
-        "<html>",
-        "<head>",
-        '<meta charset="utf-8">',
-        "<title>octorules plan</title>",
-        f"<style>{css}</style>",
-        "</head>",
-        "<body>",
-        "<h1>octorules plan</h1>",
-    ]
-
-    # Summary section
-    lines.append('<div class="summary">')
-    if total_changes == 0:
-        lines.append("<p>No changes detected.</p>")
-    else:
-        lines.append(
-            f"<p><strong>{total_changes} change(s)</strong> across {len(zone_plans)} zone(s).</p>"
-        )
-    lines.append("</div>")
-
-    # Per-zone sections
+    # Per-zone sections (only zones with changes)
     for zp in zone_plans:
-        lines.append("<section>")
-        lines.append(f"<h2>{e(zp.zone_name)}</h2>")
-
         if not zp.has_changes:
-            lines.append('<p class="no-changes">No changes.</p>')
-            lines.append("</section>")
             continue
+
+        lines.append(f"<h2>{e(zp.zone_name)}</h2>")
 
         for pp in zp.phase_plans:
             lines.append(f"<h3>{e(pp.phase.friendly_name)} ({e(pp.phase.cf_phase)})</h3>")
             lines.append("<table>")
-            lines.append("<tr><th>Op</th><th>Ref</th><th>Details</th></tr>")
+            lines.append("  <tr>")
+            lines.append("    <th>Op</th>")
+            lines.append("    <th>Ref</th>")
+            lines.append("    <th>Details</th>")
+            lines.append("  </tr>")
 
             for c in pp.changes:
                 symbol = _change_symbol(c.change_type)
-                css_class = c.change_type.value
 
                 if c.change_type == ChangeType.REORDER:
-                    lines.append(
-                        f'<tr class="{css_class}">'
-                        f"<td>{e(symbol)}</td>"
-                        f"<td>{e(c.ref)}</td>"
-                        f"<td>reorder rules</td></tr>"
-                    )
+                    details = "reorder rules"
                 elif c.change_type == ChangeType.MODIFY and c.current and c.desired:
                     diffs = [
-                        f"<code>{e(key)}</code>: "
-                        f'<span class="diff-old">{e(repr(old_val))}</span> → '
-                        f'<span class="diff-new">{e(repr(new_val))}</span>'
+                        f"<code>{e(key)}</code>: {e(repr(old_val))} → {e(repr(new_val))}"
                         for key, old_val, new_val in _compute_field_diffs(c)
                     ]
                     details = "<br>".join(diffs)
-                    lines.append(
-                        f'<tr class="{css_class}">'
-                        f"<td>{e(symbol)}</td>"
-                        f"<td>{e(c.ref)}</td>"
-                        f"<td>{details}</td></tr>"
-                    )
                 else:
-                    lines.append(
-                        f'<tr class="{css_class}">'
-                        f"<td>{e(symbol)}</td>"
-                        f"<td>{e(c.ref)}</td>"
-                        f"<td></td></tr>"
-                    )
+                    details = ""
+
+                lines.append("  <tr>")
+                lines.append(f"    <td>{e(symbol)}</td>")
+                lines.append(f"    <td>{e(c.ref)}</td>")
+                lines.append(f"    <td>{details}</td>")
+                lines.append("  </tr>")
 
             lines.append("</table>")
 
-        lines.append("</section>")
+    # Summary
+    if total_changes == 0:
+        lines.append("<p><em>No changes detected.</em></p>")
+    else:
+        zones_changed = sum(1 for zp in zone_plans if zp.has_changes)
+        lines.append(f"<p>Summary: {total_changes} change(s) across {zones_changed} zone(s).</p>")
 
-    lines.extend(["</body>", "</html>"])
     return "\n".join(lines)
 
 
@@ -330,7 +294,10 @@ _FORMAT_RENDERERS: dict[str, callable] = {
 
 
 def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str = "text") -> None:
-    """Print the full plan for all zones."""
+    """Print the full plan for all zones.
+
+    Only zones with changes are shown; unchanged zones are omitted.
+    """
     if file is None:
         file = sys.stdout
 
@@ -343,6 +310,8 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
     total_changes = _total_changes(zone_plans)
 
     for zp in zone_plans:
+        if not zp.has_changes:
+            continue
         print(format_zone_plan(zp, use_color), file=file)
         print(file=file)
 
