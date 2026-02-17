@@ -87,9 +87,16 @@ class RuleValidationError(Exception):
     """Raised when a rule fails validation."""
 
 
+def _normalize_value(v: object) -> object:
+    """Normalize a value for comparison: strip trailing whitespace from multiline strings."""
+    if isinstance(v, str) and "\n" in v:
+        return "\n".join(line.rstrip() for line in v.split("\n"))
+    return v
+
+
 def normalize_rule(rule: dict) -> dict:
-    """Strip API-only fields for comparison purposes."""
-    return {k: v for k, v in rule.items() if k not in API_ONLY_FIELDS}
+    """Strip API-only fields and normalize values for comparison."""
+    return {k: _normalize_value(v) for k, v in rule.items() if k not in API_ONLY_FIELDS}
 
 
 def validate_rules(rules: list[dict], phase: Phase) -> None:

@@ -59,6 +59,38 @@ class TestCleanRule:
         cleaned = _clean_rule(rule, "redirect")
         assert cleaned["action_parameters"] == {"status_code": 301}
 
+    def test_multiline_expression_uses_block_style(self, tmp_path):
+        """Multiline expressions with trailing spaces must use YAML block style."""
+        expr = (
+            '(http.host eq "dev.doctena.fr" and \n'
+            '        not http.request.uri.path contains "." and \n'
+            '        not starts_with(http.request.uri.path, "/api"))'
+        )
+        rules = {
+            "http_request_transform": [
+                {
+                    "ref": "r1",
+                    "expression": expr,
+                    "action": "rewrite",
+                    "enabled": True,
+                }
+            ],
+        }
+        result = dump_zone_rules("example.com", rules, tmp_path)
+        text = result.read_text()
+        # Must use block style (|-), not double-quoted with \n escapes
+        assert "|-" in text
+        assert "\\n" not in text
+        assert '"dev.doctena.fr"' in text
+        # Trailing whitespace stripped, round-trip preserves meaning
+        data = yaml.safe_load(text)
+        dumped_expr = data["url_rewrite_rules"][0]["expression"]
+        assert "\n" in dumped_expr
+        assert "dev.doctena.fr" in dumped_expr
+        # No trailing spaces on any line
+        for line in dumped_expr.split("\n"):
+            assert line == line.rstrip()
+
     def test_strips_logging(self):
         rule = {
             "ref": "r1",
@@ -498,5 +530,39 @@ class TestRoundTripResilience:
         assert "redirect_rules" in data
         assert "cache_rules" in data
         assert "origin_rules" in data
+        zp = plan_zone("example.com", data, cf_rules)
+        assert not zp.has_changes, f"Unexpected changes: {zp.phase_plans}"
+
+    def test_round_trip_trailing_whitespace_in_expression(self, tmp_path):
+        """Trailing whitespace in CF expressions should not cause a round-trip diff.
+
+        Cloudflare's expression builder adds trailing spaces before newlines.
+        The dumper strips them (PyYAML requires this for block style), so the
+        planner must also normalize when comparing.
+        """
+        from octorules.planner import plan_zone
+
+        expr_with_trailing = (
+            '(http.host eq "dev.doctena.fr" and \n'
+            '        not http.request.uri.path contains "." and \n'
+            '        not starts_with(http.request.uri.path, "/api"))'
+        )
+        cf_rules = {
+            "http_request_transform": [
+                {
+                    "id": "uuid-456",
+                    "ref": "r1",
+                    "expression": expr_with_trailing,
+                    "action": "rewrite",
+                    "enabled": True,
+                }
+            ],
+        }
+        result = dump_zone_rules("example.com", cf_rules, tmp_path)
+        data = yaml.safe_load(result.read_text())
+        # Dumped expression has trailing spaces stripped
+        dumped_expr = data["url_rewrite_rules"][0]["expression"]
+        assert "and \n" not in dumped_expr
+        # Round-trip should show no changes despite the whitespace difference
         zp = plan_zone("example.com", data, cf_rules)
         assert not zp.has_changes, f"Unexpected changes: {zp.phase_plans}"

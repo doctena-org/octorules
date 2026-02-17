@@ -75,10 +75,15 @@ def dump_zone_rules(
     return output_path
 
 
+def _strip_trailing_whitespace(s: str) -> str:
+    """Strip trailing whitespace from each line. PyYAML rejects block style otherwise."""
+    return "\n".join(line.rstrip() for line in s.split("\n"))
+
+
 def _literalize(value: object) -> object:
     """Recursively convert multiline strings to _LiteralStr for block style."""
     if isinstance(value, str) and "\n" in value:
-        return _LiteralStr(value)
+        return _LiteralStr(_strip_trailing_whitespace(value))
     if isinstance(value, dict):
         return {k: _literalize(v) for k, v in value.items()}
     if isinstance(value, list):
