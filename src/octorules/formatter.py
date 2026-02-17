@@ -227,18 +227,27 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
     return "\n".join(lines)
 
 
+def _html_op_name(change_type: ChangeType) -> str:
+    """Human-readable operation name for HTML output."""
+    return {
+        ChangeType.ADD: "Create",
+        ChangeType.REMOVE: "Delete",
+        ChangeType.MODIFY: "Update",
+        ChangeType.REORDER: "Reorder",
+    }[change_type]
+
+
 def format_plan_html(zone_plans: list[ZonePlan]) -> str:
     """Format the plan as embeddable HTML fragment for PR comments.
 
     Outputs clean HTML tables (no DOCTYPE/html/head/body/style wrapper) so the
     output can be embedded directly in GitHub PR comments or other markdown
-    contexts.  Only zones with changes are shown.
+    contexts.  Follows the same structure as octodns PlanHtml.
+    Only zones with changes are shown.
     """
-    total_changes = _total_changes(zone_plans)
     e = html_escape
     lines: list[str] = []
 
-    # Per-zone sections (only zones with changes)
     for zp in zone_plans:
         if not zp.has_changes:
             continue
@@ -246,42 +255,84 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
         lines.append(f"<h2>{e(zp.zone_name)}</h2>")
 
         for pp in zp.phase_plans:
-            lines.append(f"<h3>{e(pp.phase.friendly_name)} ({e(pp.phase.cf_phase)})</h3>")
+            lines.append(f"<h3>{e(pp.phase.friendly_name)}</h3>")
             lines.append("<table>")
             lines.append("  <tr>")
-            lines.append("    <th>Op</th>")
+            lines.append("    <th>Operation</th>")
             lines.append("    <th>Ref</th>")
             lines.append("    <th>Details</th>")
             lines.append("  </tr>")
 
+            creates = removes = modifies = reorders = 0
+
             for c in pp.changes:
-                symbol = _change_symbol(c.change_type)
+                op = _html_op_name(c.change_type)
 
-                if c.change_type == ChangeType.REORDER:
-                    details = "reorder rules"
-                elif c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    diffs = [
-                        f"<code>{e(key)}</code>: {e(repr(old_val))} → {e(repr(new_val))}"
-                        for key, old_val, new_val in _compute_field_diffs(c)
-                    ]
-                    details = "<br>".join(diffs)
-                else:
-                    details = ""
+                if c.change_type == ChangeType.ADD:
+                    creates += 1
+                    lines.append("  <tr>")
+                    lines.append(f"    <td>{e(op)}</td>")
+                    lines.append(f"    <td>{e(c.ref)}</td>")
+                    lines.append("    <td></td>")
+                    lines.append("  </tr>")
+                elif c.change_type == ChangeType.REMOVE:
+                    removes += 1
+                    lines.append("  <tr>")
+                    lines.append(f"    <td>{e(op)}</td>")
+                    lines.append(f"    <td>{e(c.ref)}</td>")
+                    lines.append("    <td></td>")
+                    lines.append("  </tr>")
+                elif c.change_type == ChangeType.REORDER:
+                    reorders += 1
+                    lines.append("  <tr>")
+                    lines.append(f"    <td>{e(op)}</td>")
+                    lines.append("    <td></td>")
+                    lines.append("    <td>reorder rules</td>")
+                    lines.append("  </tr>")
+                elif c.change_type == ChangeType.MODIFY:
+                    modifies += 1
+                    diffs = _compute_field_diffs(c)
+                    for i, (key, old_val, new_val) in enumerate(diffs):
+                        # First diff row carries the operation and ref
+                        if i == 0:
+                            lines.append("  <tr>")
+                            lines.append(f"    <td>{e(op)}</td>")
+                            lines.append(f"    <td>{e(c.ref)}</td>")
+                        else:
+                            lines.append("  <tr>")
+                            lines.append("    <td colspan=2></td>")
+                        lines.append(f"    <td>{e(key)}: {e(str(old_val))}</td>")
+                        lines.append("  </tr>")
+                        # Continuation row with new value
+                        lines.append("  <tr>")
+                        lines.append("    <td colspan=2></td>")
+                        lines.append(f"    <td>{e(key)}: {e(str(new_val))}</td>")
+                        lines.append("  </tr>")
+                    if not diffs:
+                        lines.append("  <tr>")
+                        lines.append(f"    <td>{e(op)}</td>")
+                        lines.append(f"    <td>{e(c.ref)}</td>")
+                        lines.append("    <td></td>")
+                        lines.append("  </tr>")
 
-                lines.append("  <tr>")
-                lines.append(f"    <td>{e(symbol)}</td>")
-                lines.append(f"    <td>{e(c.ref)}</td>")
-                lines.append(f"    <td>{details}</td>")
-                lines.append("  </tr>")
-
+            # Summary row inside the table (matches octodns style)
+            parts = []
+            if creates:
+                parts.append(f"Creates={creates}")
+            if modifies:
+                parts.append(f"Updates={modifies}")
+            if removes:
+                parts.append(f"Deletes={removes}")
+            if reorders:
+                parts.append(f"Reorders={reorders}")
+            summary = ", ".join(parts) if parts else "No changes"
+            lines.append("  <tr>")
+            lines.append(f"    <td colspan=3>Summary: {summary}</td>")
+            lines.append("  </tr>")
             lines.append("</table>")
 
-    # Summary
-    if total_changes == 0:
-        lines.append("<p><em>No changes detected.</em></p>")
-    else:
-        zones_changed = sum(1 for zp in zone_plans if zp.has_changes)
-        lines.append(f"<p>Summary: {total_changes} change(s) across {zones_changed} zone(s).</p>")
+    if not any(zp.has_changes for zp in zone_plans):
+        lines.append("<b>No changes were planned</b>")
 
     return "\n".join(lines)
 
