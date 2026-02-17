@@ -1,0 +1,1185 @@
+"""Tests for the diff engine (planner)."""
+
+from __future__ import annotations
+
+import logging
+
+import pytest
+
+from octorules.config import ZoneConfig
+from octorules.phases import get_phase
+from octorules.planner import (
+    ChangeType,
+    PhasePlan,
+    RuleChange,
+    RuleValidationError,
+    ZonePlan,
+    check_safety,
+    compute_checksum,
+    diff_phase,
+    normalize_rule,
+    plan_zone,
+    prepare_desired_rules,
+    validate_rules,
+    warn_unknown_phase_keys,
+)
+
+REDIRECT_PHASE = get_phase("redirect_rules")
+CACHE_PHASE = get_phase("cache_rules")
+WAF_PHASE = get_phase("waf_custom_rules")
+
+
+class TestNormalizeRule:
+    def test_strips_api_fields(self):
+        rule = {
+            "id": "abc",
+            "version": "1",
+            "last_updated": "2024-01-01",
+            "categories": [],
+            "ref": "my-rule",
+            "logging": {"enabled": True},
+            "expression": "true",
+            "action": "redirect",
+        }
+        normalized = normalize_rule(rule)
+        assert "id" not in normalized
+        assert "version" not in normalized
+        assert "last_updated" not in normalized
+        assert "categories" not in normalized
+        assert "ref" not in normalized
+        assert "logging" not in normalized
+        assert normalized["expression"] == "true"
+        assert normalized["action"] == "redirect"
+
+    def test_preserves_user_fields(self):
+        rule = {"expression": "true", "action": "redirect", "enabled": True}
+        assert normalize_rule(rule) == rule
+
+    def test_empty_rule(self):
+        assert normalize_rule({}) == {}
+
+
+class TestValidateRules:
+    def test_valid_rules(self):
+        rules = [
+            {"ref": "r1", "expression": "true"},
+            {"ref": "r2", "expression": "false"},
+        ]
+        validate_rules(rules, REDIRECT_PHASE)  # Should not raise
+
+    def test_missing_ref(self):
+        rules = [{"expression": "true"}]
+        with pytest.raises(RuleValidationError, match="missing required 'ref' field"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_missing_expression(self):
+        rules = [{"ref": "r1"}]
+        with pytest.raises(RuleValidationError, match="missing required 'expression' field"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_duplicate_ref(self):
+        rules = [
+            {"ref": "r1", "expression": "a"},
+            {"ref": "r1", "expression": "b"},
+        ]
+        with pytest.raises(RuleValidationError, match="Duplicate ref 'r1'"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_empty_rules(self):
+        validate_rules([], REDIRECT_PHASE)  # Should not raise
+
+    def test_error_message_includes_phase(self):
+        rules = [{"expression": "true"}]
+        with pytest.raises(RuleValidationError, match="redirect_rules"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_error_message_includes_index(self):
+        rules = [
+            {"ref": "r1", "expression": "a"},
+            {"expression": "b"},  # index 1, missing ref
+        ]
+        with pytest.raises(RuleValidationError, match="index 1"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_empty_ref_rejected(self):
+        rules = [{"ref": "", "expression": "true"}]
+        with pytest.raises(RuleValidationError, match="invalid 'ref'"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_non_string_ref_rejected(self):
+        rules = [{"ref": 123, "expression": "true"}]
+        with pytest.raises(RuleValidationError, match="invalid 'ref'"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_empty_expression_rejected(self):
+        rules = [{"ref": "r1", "expression": ""}]
+        with pytest.raises(RuleValidationError, match="invalid 'expression'"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+    def test_non_string_expression_rejected(self):
+        rules = [{"ref": "r1", "expression": True}]
+        with pytest.raises(RuleValidationError, match="invalid 'expression'"):
+            validate_rules(rules, REDIRECT_PHASE)
+
+
+class TestWarnUnknownPhaseKeys:
+    def test_no_warnings_for_valid_keys(self, caplog):
+        rules_data = {"redirect_rules": [], "cache_rules": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert caplog.text == ""
+
+    def test_warns_on_unknown_key(self, caplog):
+        rules_data = {"redirect_rules": [], "typo_rules": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert "typo_rules" in caplog.text
+        assert "example.com" in caplog.text
+
+    def test_multiple_unknown_keys_sorted(self, caplog):
+        rules_data = {"zzz_rules": [], "aaa_rules": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "test.com")
+        assert caplog.text.index("aaa_rules") < caplog.text.index("zzz_rules")
+
+    def test_empty_data(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys({}, "example.com")
+        assert caplog.text == ""
+
+    def test_close_typo_suggests(self, caplog):
+        rules_data = {"redirect_rule": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert "Did you mean" in caplog.text
+        assert "redirect_rules" in caplog.text
+
+    def test_no_match_lists_valid(self, caplog):
+        rules_data = {"zzz_totally_wrong": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert "Valid phases:" in caplog.text
+
+    def test_cf_phase_suggests_friendly_name(self, caplog):
+        rules_data = {"http_request_dynamic_redirect": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert "Did you mean" in caplog.text
+        assert "redirect_rules" in caplog.text
+
+
+class TestPrepareDesiredRules:
+    def test_injects_default_action(self):
+        rules = [{"ref": "r1", "expression": "true"}]
+        prepared = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert prepared[0]["action"] == "redirect"
+        assert prepared[0]["enabled"] is True
+
+    def test_preserves_explicit_action(self):
+        rules = [{"ref": "r1", "expression": "true", "action": "custom"}]
+        prepared = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert prepared[0]["action"] == "custom"
+
+    def test_preserves_explicit_enabled_false(self):
+        rules = [{"ref": "r1", "expression": "true", "enabled": False}]
+        prepared = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert prepared[0]["enabled"] is False
+
+    def test_waf_requires_action(self):
+        rules = [{"ref": "r1", "expression": "true"}]
+        with pytest.raises(ValueError, match="must specify an 'action'"):
+            prepare_desired_rules(rules, WAF_PHASE)
+
+    def test_waf_with_action_ok(self):
+        rules = [{"ref": "r1", "expression": "true", "action": "block"}]
+        prepared = prepare_desired_rules(rules, WAF_PHASE)
+        assert prepared[0]["action"] == "block"
+
+    def test_does_not_mutate_input(self):
+        rules = [{"ref": "r1", "expression": "true"}]
+        prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert "action" not in rules[0]
+
+    def test_multiple_rules(self):
+        rules = [
+            {"ref": "r1", "expression": "a"},
+            {"ref": "r2", "expression": "b", "enabled": False},
+        ]
+        prepared = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert len(prepared) == 2
+        assert prepared[0]["enabled"] is True
+        assert prepared[1]["enabled"] is False
+        assert all(r["action"] == "redirect" for r in prepared)
+
+    def test_empty_rules(self):
+        assert prepare_desired_rules([], REDIRECT_PHASE) == []
+
+    def test_rate_limiting_requires_action(self):
+        rl_phase = get_phase("rate_limiting_rules")
+        rules = [{"ref": "r1", "expression": "true"}]
+        with pytest.raises(ValueError, match="must specify an 'action'"):
+            prepare_desired_rules(rules, rl_phase)
+
+
+class TestDiffPhase:
+    def test_no_changes(self):
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {
+                "id": "x",
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert not plan.has_changes
+        assert plan.changes == []
+
+    def test_addition(self):
+        desired = [{"ref": "new-rule", "expression": "true"}]
+        current = []
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert len(plan.changes) == 1
+        assert plan.changes[0].change_type == ChangeType.ADD
+        assert plan.changes[0].ref == "new-rule"
+        assert plan.changes[0].desired is not None
+        assert plan.changes[0].current is None
+
+    def test_removal(self):
+        desired = []
+        current = [{"ref": "old-rule", "expression": "true", "action": "redirect"}]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert len(plan.changes) == 1
+        assert plan.changes[0].change_type == ChangeType.REMOVE
+        assert plan.changes[0].ref == "old-rule"
+        assert plan.changes[0].current is not None
+        assert plan.changes[0].desired is None
+
+    def test_modification(self):
+        desired = [{"ref": "r1", "expression": "new-expr", "action": "redirect", "enabled": True}]
+        current = [{"ref": "r1", "expression": "old-expr", "action": "redirect", "enabled": True}]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        changes = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
+        assert len(changes) == 1
+        assert changes[0].ref == "r1"
+        assert changes[0].current is not None
+        assert changes[0].desired is not None
+
+    def test_enabled_change_is_modification(self):
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": False}]
+        current = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert plan.changes[0].change_type == ChangeType.MODIFY
+
+    def test_description_change_is_modification(self):
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "description": "New desc",
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "description": "Old desc",
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+
+    def test_reorder(self):
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        reorders = [c for c in plan.changes if c.change_type == ChangeType.REORDER]
+        assert len(reorders) == 1
+
+    def test_no_reorder_when_refs_differ(self):
+        """Reorder should only be detected when refs are the same set."""
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r3", "expression": "true"},
+        ]
+        current = [
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        reorders = [c for c in plan.changes if c.change_type == ChangeType.REORDER]
+        assert len(reorders) == 0
+
+    def test_mixed_changes(self):
+        desired = [
+            {"ref": "keep", "expression": "modified", "action": "redirect", "enabled": True},
+            {"ref": "new", "expression": "true"},
+        ]
+        current = [
+            {"ref": "keep", "expression": "original", "action": "redirect", "enabled": True},
+            {"ref": "remove-me", "expression": "true", "action": "redirect"},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        types = {c.change_type for c in plan.changes}
+        assert ChangeType.ADD in types
+        assert ChangeType.REMOVE in types
+        assert ChangeType.MODIFY in types
+
+    def test_api_fields_ignored_in_comparison(self):
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {
+                "id": "abc-123",
+                "version": "5",
+                "last_updated": "2024-01-01T00:00:00Z",
+                "categories": ["security"],
+                "logging": {"enabled": False},
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert not plan.has_changes
+
+    def test_empty_both(self):
+        plan = diff_phase(REDIRECT_PHASE, [], [])
+        assert not plan.has_changes
+        assert plan.changes == []
+
+    def test_action_parameters_change(self):
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {"status_code": 302},
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {"status_code": 301},
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert plan.changes[0].change_type == ChangeType.MODIFY
+
+
+class TestPlanZone:
+    def test_empty_desired_empty_current(self):
+        zone_plan = plan_zone("example.com", {}, {})
+        assert not zone_plan.has_changes
+
+    def test_new_phase_rules(self):
+        desired = {
+            "redirect_rules": [{"ref": "r1", "expression": "true"}],
+        }
+        zone_plan = plan_zone("example.com", desired, {})
+        assert zone_plan.has_changes
+        assert zone_plan.total_changes == 1
+
+    def test_removes_existing_phase(self):
+        current = {
+            "http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect"}
+            ],
+        }
+        zone_plan = plan_zone("example.com", {}, current)
+        assert zone_plan.has_changes
+        assert zone_plan.total_changes == 1
+
+    def test_multiple_phases(self):
+        desired = {
+            "redirect_rules": [{"ref": "r1", "expression": "true"}],
+            "cache_rules": [{"ref": "c1", "expression": "true"}],
+        }
+        zone_plan = plan_zone("example.com", desired, {})
+        assert zone_plan.has_changes
+        assert zone_plan.total_changes == 2
+        assert len(zone_plan.phase_plans) == 2
+
+    def test_unknown_cf_phase_in_current_is_skipped(self):
+        """Phases in current that aren't in our registry should be ignored."""
+        current = {
+            "http_some_unknown_phase": [{"ref": "r1", "expression": "true", "action": "whatever"}],
+        }
+        zone_plan = plan_zone("example.com", {}, current)
+        assert not zone_plan.has_changes
+        assert zone_plan.total_changes == 0
+
+    def test_no_changes_same_rules(self):
+        desired = {
+            "redirect_rules": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+        }
+        current = {
+            "http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+        }
+        zone_plan = plan_zone("example.com", desired, current)
+        assert not zone_plan.has_changes
+
+    def test_has_changes_property(self):
+        zone_plan = plan_zone("example.com", {}, {})
+        assert zone_plan.has_changes is False
+        assert zone_plan.total_changes == 0
+
+
+class TestAllowUnmanaged:
+    """Tests for allow_unmanaged behavior in diff/plan."""
+
+    def test_diff_phase_removes_unmanaged_by_default(self):
+        """By default, rules in current but not desired are REMOVE'd."""
+        desired = [{"ref": "r1", "expression": "true"}]
+        current = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        removes = [c for c in plan.changes if c.change_type == ChangeType.REMOVE]
+        assert len(removes) == 1
+        assert removes[0].ref == "r2"
+
+    def test_diff_phase_keeps_unmanaged(self):
+        """With allow_unmanaged, rules in current but not desired are kept."""
+        desired = [{"ref": "r1", "expression": "true"}]
+        current = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current, allow_unmanaged=True)
+        removes = [c for c in plan.changes if c.change_type == ChangeType.REMOVE]
+        assert len(removes) == 0
+
+    def test_diff_phase_still_adds_and_modifies(self):
+        """allow_unmanaged should not affect ADD or MODIFY."""
+        desired = [
+            {"ref": "r1", "expression": "changed", "action": "redirect", "enabled": True},
+            {"ref": "r3", "expression": "true"},
+        ]
+        current = [
+            {"ref": "r1", "expression": "original", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current, allow_unmanaged=True)
+        types = {c.change_type for c in plan.changes}
+        assert ChangeType.ADD in types
+        assert ChangeType.MODIFY in types
+        assert ChangeType.REMOVE not in types
+
+    def test_plan_zone_skips_full_phase_removal(self):
+        """With allow_unmanaged, phases in current but not desired are not removed."""
+        desired = {}  # no desired rules
+        current = {
+            "http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect"}
+            ],
+        }
+        zp = plan_zone("example.com", desired, current, allow_unmanaged=True)
+        assert not zp.has_changes
+
+    def test_plan_zone_removes_phase_by_default(self):
+        """Without allow_unmanaged, phases in current but not desired are removed."""
+        desired = {}
+        current = {
+            "http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect"}
+            ],
+        }
+        zp = plan_zone("example.com", desired, current, allow_unmanaged=False)
+        assert zp.has_changes
+        assert zp.total_changes == 1
+
+
+class TestBuildPhasePayload:
+    def test_basic_payload(self):
+        rules = [{"ref": "r1", "expression": "true", "description": "Test"}]
+        payload = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert len(payload) == 1
+        assert payload[0]["action"] == "redirect"
+        assert payload[0]["enabled"] is True
+        assert payload[0]["ref"] == "r1"
+
+    def test_empty_payload(self):
+        payload = prepare_desired_rules([], REDIRECT_PHASE)
+        assert payload == []
+
+    def test_preserves_action_parameters(self):
+        rules = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action_parameters": {"status_code": 301},
+            }
+        ]
+        payload = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert payload[0]["action_parameters"] == {"status_code": 301}
+
+
+ORIGIN_PHASE = get_phase("origin_rules")
+
+# Example Origin Rule: routes /api requests on app.example.com to api.example.com
+EXAMPLE_ORIGIN_RULE_YAML = {
+    "ref": "api-redirect-dev",
+    "description": "Route API calls to API backend",
+    "expression": (
+        '(http.host eq "app.example.com" and starts_with(http.request.uri.path, "/api"))'
+    ),
+    "action_parameters": {
+        "host_header": "api.example.com",
+    },
+}
+
+# What Cloudflare returns for the same rule (with API-injected fields)
+EXAMPLE_ORIGIN_RULE_CF = {
+    "id": "a1b2c3d4e5f6",
+    "version": "3",
+    "last_updated": "2025-06-15T10:30:00Z",
+    "ref": "api-redirect-dev",
+    "description": "Route API calls to API backend",
+    "expression": (
+        '(http.host eq "app.example.com" and starts_with(http.request.uri.path, "/api"))'
+    ),
+    "action": "route",
+    "action_parameters": {
+        "host_header": "api.example.com",
+    },
+    "enabled": True,
+    "logging": {"enabled": False},
+}
+
+
+class TestOriginRule:
+    """Tests for Origin Rule planning with host_header routing."""
+
+    def test_plan_no_changes_when_synced(self):
+        """A rule in YAML matching what CF returns should produce no diff."""
+        plan = diff_phase(ORIGIN_PHASE, [EXAMPLE_ORIGIN_RULE_YAML], [EXAMPLE_ORIGIN_RULE_CF])
+        assert not plan.has_changes
+
+    def test_plan_detects_new_rule(self):
+        """Adding this rule to a zone with no origin rules."""
+        plan = diff_phase(ORIGIN_PHASE, [EXAMPLE_ORIGIN_RULE_YAML], [])
+        assert plan.has_changes
+        assert len(plan.changes) == 1
+        assert plan.changes[0].change_type == ChangeType.ADD
+        assert plan.changes[0].ref == "api-redirect-dev"
+
+    def test_plan_detects_host_header_change(self):
+        """Changing the host_header target should be detected as a modification."""
+        modified_yaml = {
+            **EXAMPLE_ORIGIN_RULE_YAML,
+            "action_parameters": {"host_header": "staging-api.example.com"},
+        }
+        plan = diff_phase(ORIGIN_PHASE, [modified_yaml], [EXAMPLE_ORIGIN_RULE_CF])
+        assert plan.has_changes
+        mods = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
+        assert len(mods) == 1
+        assert mods[0].ref == "api-redirect-dev"
+
+    def test_plan_detects_expression_change(self):
+        """Updating the filter expression should be detected."""
+        modified_yaml = {
+            **EXAMPLE_ORIGIN_RULE_YAML,
+            "expression": (
+                '(http.host eq "app.example.com" and starts_with(http.request.uri.path, "/api/v2"))'
+            ),
+        }
+        plan = diff_phase(ORIGIN_PHASE, [modified_yaml], [EXAMPLE_ORIGIN_RULE_CF])
+        assert plan.has_changes
+
+    def test_plan_detects_removal(self):
+        """Removing the rule from YAML should be detected."""
+        plan = diff_phase(ORIGIN_PHASE, [], [EXAMPLE_ORIGIN_RULE_CF])
+        assert plan.has_changes
+        assert plan.changes[0].change_type == ChangeType.REMOVE
+        assert plan.changes[0].ref == "api-redirect-dev"
+
+    def test_default_action_injected(self):
+        """Origin rules should get action=route injected automatically."""
+        prepared = prepare_desired_rules([EXAMPLE_ORIGIN_RULE_YAML], ORIGIN_PHASE)
+        assert prepared[0]["action"] == "route"
+        assert prepared[0]["enabled"] is True
+
+    def test_payload_matches_cf_format(self):
+        """The built payload should match what CF expects."""
+        payload = prepare_desired_rules([EXAMPLE_ORIGIN_RULE_YAML], ORIGIN_PHASE)
+        rule = payload[0]
+        assert rule["action"] == "route"
+        assert rule["ref"] == "api-redirect-dev"
+        assert rule["action_parameters"]["host_header"] == "api.example.com"
+        assert rule["enabled"] is True
+        assert "id" not in rule
+        assert "version" not in rule
+
+    def test_zone_plan_with_origin_rules(self):
+        """Full zone plan with origin rules phase."""
+        desired = {"origin_rules": [EXAMPLE_ORIGIN_RULE_YAML]}
+        current = {}
+        zp = plan_zone("example.com", desired, current)
+        assert zp.has_changes
+        assert zp.total_changes == 1
+        assert zp.phase_plans[0].phase.cf_phase == "http_request_origin"
+
+    def test_zone_plan_no_changes(self):
+        """Full zone plan when CF already has the rule."""
+        desired = {"origin_rules": [EXAMPLE_ORIGIN_RULE_YAML]}
+        current = {"http_request_origin": [EXAMPLE_ORIGIN_RULE_CF]}
+        zp = plan_zone("example.com", desired, current)
+        assert not zp.has_changes
+
+
+class TestComputeChecksum:
+    def _make_zone_plan(self, zone_name, changes):
+        """Helper to create a ZonePlan with changes."""
+        pp = PhasePlan(phase=REDIRECT_PHASE, changes=changes)
+        return ZonePlan(zone_name=zone_name, phase_plans=[pp] if changes else [])
+
+    def test_deterministic(self):
+        """Same plan should always produce the same checksum."""
+        changes = [RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, desired={"expression": "true"})]
+        zp = self._make_zone_plan("example.com", changes)
+        h1 = compute_checksum([zp])
+        h2 = compute_checksum([zp])
+        assert h1 == h2
+        assert len(h1) == 64  # SHA-256 hex digest
+
+    def test_zone_order_irrelevant(self):
+        """Checksum should be the same regardless of zone ordering."""
+        changes_a = [
+            RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, desired={"expression": "true"})
+        ]
+        changes_b = [
+            RuleChange(ChangeType.ADD, "r2", REDIRECT_PHASE, desired={"expression": "false"})
+        ]
+        zp_a = self._make_zone_plan("a.com", changes_a)
+        zp_b = self._make_zone_plan("b.com", changes_b)
+        assert compute_checksum([zp_a, zp_b]) == compute_checksum([zp_b, zp_a])
+
+    def test_change_order_irrelevant(self):
+        """Checksum should be the same regardless of change ordering within a phase."""
+        c1 = RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, desired={"expression": "true"})
+        c2 = RuleChange(ChangeType.ADD, "r2", REDIRECT_PHASE, desired={"expression": "false"})
+        pp1 = PhasePlan(phase=REDIRECT_PHASE, changes=[c1, c2])
+        pp2 = PhasePlan(phase=REDIRECT_PHASE, changes=[c2, c1])
+        zp1 = ZonePlan(zone_name="test.com", phase_plans=[pp1])
+        zp2 = ZonePlan(zone_name="test.com", phase_plans=[pp2])
+        assert compute_checksum([zp1]) == compute_checksum([zp2])
+
+    def test_different_plans_differ(self):
+        """Different plans should produce different checksums."""
+        c1 = [RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, desired={"expression": "true"})]
+        c2 = [RuleChange(ChangeType.ADD, "r2", REDIRECT_PHASE, desired={"expression": "true"})]
+        assert compute_checksum([self._make_zone_plan("test.com", c1)]) != compute_checksum(
+            [self._make_zone_plan("test.com", c2)]
+        )
+
+    def test_api_fields_stripped(self):
+        """API-only fields should be stripped from checksum computation."""
+        c1 = RuleChange(
+            ChangeType.MODIFY,
+            "r1",
+            REDIRECT_PHASE,
+            current={"id": "abc", "expression": "old", "action": "redirect"},
+            desired={"expression": "new", "action": "redirect"},
+        )
+        c2 = RuleChange(
+            ChangeType.MODIFY,
+            "r1",
+            REDIRECT_PHASE,
+            current={"id": "xyz", "version": "5", "expression": "old", "action": "redirect"},
+            desired={"expression": "new", "action": "redirect"},
+        )
+        zp1 = self._make_zone_plan("test.com", [c1])
+        zp2 = self._make_zone_plan("test.com", [c2])
+        assert compute_checksum([zp1]) == compute_checksum([zp2])
+
+
+class TestCheckSafety:
+    """Tests for safety threshold checks (Feature 4)."""
+
+    def _zone_cfg(self, delete_threshold=30.0, update_threshold=30.0, min_existing=3):
+        return ZoneConfig(
+            name="test.com",
+            zone_id="z1",
+            sources=["rules"],
+            delete_threshold=delete_threshold,
+            update_threshold=update_threshold,
+            min_existing=min_existing,
+        )
+
+    def _make_zone_plan(self, changes):
+        pp = PhasePlan(phase=REDIRECT_PHASE, changes=changes)
+        return ZonePlan(zone_name="test.com", phase_plans=[pp] if changes else [])
+
+    def test_under_threshold_no_violation(self):
+        """1 delete out of 10 rules = 10%, under 30% threshold."""
+        changes = [RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert violations == []
+
+    def test_delete_exceeded(self):
+        """4 deletes out of 10 rules = 40%, exceeds 30% threshold."""
+        changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(4)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].kind == "delete"
+        assert violations[0].count == 4
+        assert violations[0].percentage == 40.0
+
+    def test_update_exceeded(self):
+        """4 modifies out of 10 rules = 40%, exceeds 30% threshold."""
+        changes = [RuleChange(ChangeType.MODIFY, f"r{i}", REDIRECT_PHASE) for i in range(4)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].kind == "update"
+
+    def test_min_existing_skips_small_rulesets(self):
+        """With only 2 existing rules and min_existing=3, skip checks."""
+        changes = [RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": "r1"}, {"ref": "r2"}]}
+        violations = check_safety(zp, current, self._zone_cfg(min_existing=3))
+        assert violations == []
+
+    def test_mixed_violations(self):
+        """Both delete and update thresholds exceeded."""
+        changes = [
+            RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE),
+            RuleChange(ChangeType.REMOVE, "r2", REDIRECT_PHASE),
+            RuleChange(ChangeType.MODIFY, "r3", REDIRECT_PHASE),
+            RuleChange(ChangeType.MODIFY, "r4", REDIRECT_PHASE),
+        ]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 2
+        kinds = {v.kind for v in violations}
+        assert kinds == {"delete", "update"}
+
+    def test_add_only_no_violation(self):
+        """Adding rules never triggers safety checks."""
+        changes = [RuleChange(ChangeType.ADD, f"new{i}", REDIRECT_PHASE) for i in range(5)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert violations == []
+
+    def test_exactly_at_threshold_ok(self):
+        """Exactly at threshold (30% = 3 out of 10) should be OK (strict >)."""
+        changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(3)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert violations == []
+
+    def test_delete_violation_has_phases(self):
+        """Delete violation should include the affected phase names."""
+        changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(4)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].phases == ["redirect_rules"]
+
+    def test_update_violation_has_phases(self):
+        """Update violation should include the affected phase names."""
+        changes = [RuleChange(ChangeType.MODIFY, f"r{i}", REDIRECT_PHASE) for i in range(4)]
+        zp = self._make_zone_plan(changes)
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].phases == ["redirect_rules"]
+
+    def test_multiple_phases_in_violation(self):
+        """Violation spanning multiple phases should list all phase names."""
+        c1 = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(2)]
+        c2 = [RuleChange(ChangeType.REMOVE, f"c{i}", CACHE_PHASE) for i in range(2)]
+        pp1 = PhasePlan(phase=REDIRECT_PHASE, changes=c1)
+        pp2 = PhasePlan(phase=CACHE_PHASE, changes=c2)
+        zp = ZonePlan(zone_name="test.com", phase_plans=[pp1, pp2])
+        current = {
+            "http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)],
+            "http_request_cache_settings": [{"ref": f"c{i}"} for i in range(5)],
+        }
+        violations = check_safety(zp, current, self._zone_cfg())
+        delete_v = [v for v in violations if v.kind == "delete"][0]
+        assert "redirect_rules" in delete_v.phases
+        assert "cache_rules" in delete_v.phases
+
+    def test_multiple_phases_summed(self):
+        """Changes across multiple phases should be summed against total existing."""
+        c1 = [RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)]
+        c2 = [RuleChange(ChangeType.REMOVE, "c1", CACHE_PHASE)]
+        pp1 = PhasePlan(phase=REDIRECT_PHASE, changes=c1)
+        pp2 = PhasePlan(phase=CACHE_PHASE, changes=c2)
+        zp = ZonePlan(zone_name="test.com", phase_plans=[pp1, pp2])
+        # 2 deletes out of 5 total existing = 40%
+        current = {
+            "http_request_dynamic_redirect": [{"ref": "r1"}, {"ref": "r2"}],
+            "http_request_cache_settings": [{"ref": "c1"}, {"ref": "c2"}, {"ref": "c3"}],
+        }
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].kind == "delete"
+        assert violations[0].count == 2
+        assert violations[0].existing == 5
+
+
+class TestCFApiResilience:
+    """Tests for resilience against Cloudflare API changes.
+
+    These tests verify correct behavior when the CF API returns unexpected
+    fields, missing fields, changed field types, or new phases.
+    """
+
+    # --- New/unknown fields from CF API ---
+
+    def test_new_api_field_causes_false_positive_modify(self):
+        """If CF adds a new field not in API_ONLY_FIELDS, it triggers MODIFY.
+
+        This documents the current behavior: unknown new fields from CF are
+        NOT stripped and will cause a false-positive MODIFY when compared
+        against the desired rules that lack the field. This is the expected
+        safe default — the user sees a diff rather than silently ignoring it.
+        """
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                # Hypothetical new field CF starts returning
+                "risk_score": 0.5,
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        # The extra field causes a diff because normalize_rule only strips known API_ONLY_FIELDS
+        assert plan.has_changes
+        mods = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
+        assert len(mods) == 1
+        assert mods[0].ref == "r1"
+
+    def test_multiple_new_api_fields(self):
+        """Multiple unknown fields all trigger a single MODIFY change."""
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "risk_score": 0.5,
+                "deployment_id": "dep-123",
+                "source": "dashboard",
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert len([c for c in plan.changes if c.change_type == ChangeType.MODIFY]) == 1
+
+    # --- Missing optional fields ---
+
+    def test_description_added_is_modification(self):
+        """Adding a description to desired when CF has none should be a MODIFY."""
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "description": "My redirect",
+            }
+        ]
+        current = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert plan.changes[0].change_type == ChangeType.MODIFY
+
+    def test_action_parameters_null_vs_missing(self):
+        """CF returning action_parameters: null vs desired not having it is a MODIFY."""
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": None,
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        # None != missing key — this is a modification
+        assert plan.has_changes
+
+    def test_action_parameters_empty_dict_vs_missing(self):
+        """CF returning empty action_parameters vs desired not having it is a MODIFY."""
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {},
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+
+    # --- Field type changes ---
+
+    def test_enabled_as_int_vs_bool(self):
+        """If CF returns enabled as int (1) vs desired bool (True), Python treats 1==True."""
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": 1}]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        # In Python, True == 1, so no change detected (this is intentional)
+        assert not plan.has_changes
+
+    def test_enabled_as_string_vs_bool(self):
+        """If CF returns enabled as string 'true' vs bool True, it's a MODIFY."""
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": "true"}]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        # String "true" != bool True
+        assert plan.has_changes
+
+    # --- action_parameters nested changes ---
+
+    def test_nested_action_parameters_change(self):
+        """Deep changes in action_parameters are detected."""
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {
+                    "from_value": {"target_url": {"value": "https://new.example.com"}},
+                },
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {
+                    "from_value": {"target_url": {"value": "https://old.example.com"}},
+                },
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert plan.changes[0].change_type == ChangeType.MODIFY
+
+    def test_action_parameters_new_nested_key(self):
+        """CF adding a new nested key in action_parameters is detected."""
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {"status_code": 301},
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "action_parameters": {"status_code": 301, "preserve_query_string": True},
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+
+    # --- Rules without ref ---
+
+    def test_current_rule_without_ref_skipped_in_diff(self):
+        """CF rules without ref are silently skipped by _rules_by_ref()."""
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"expression": "some-managed-rule", "action": "block"},  # No ref
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        # The no-ref rule is invisible to the diff engine — no REMOVE for it
+        removes = [c for c in plan.changes if c.change_type == ChangeType.REMOVE]
+        assert len(removes) == 0
+
+    def test_reorder_detection_ignores_refless_rules(self):
+        """Reorder detection only considers rules with ref fields."""
+        desired = [
+            {"ref": "r1", "expression": "a", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "b", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r1", "expression": "a", "action": "redirect", "enabled": True},
+            {"expression": "managed", "action": "block"},  # No ref, ignored
+            {"ref": "r2", "expression": "b", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        reorders = [c for c in plan.changes if c.change_type == ChangeType.REORDER]
+        assert len(reorders) == 0
+
+    # --- Unknown phases in current ---
+
+    def test_unknown_cf_phase_mixed_with_known(self):
+        """Unknown phases don't interfere with known phase processing."""
+        desired = {
+            "redirect_rules": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+        }
+        current = {
+            "http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+            "http_request_unknown_new_phase": [{"ref": "x1", "expression": "true", "action": "x"}],
+        }
+        zp = plan_zone("example.com", desired, current)
+        assert not zp.has_changes
+
+    # --- Checksum stability with API changes ---
+
+    def test_checksum_stable_despite_different_api_field_values(self):
+        """Checksum uses normalized rules, so different API field values don't matter."""
+        c1 = RuleChange(
+            ChangeType.MODIFY,
+            "r1",
+            REDIRECT_PHASE,
+            current={
+                "id": "old-id",
+                "version": "1",
+                "last_updated": "2025-01-01",
+                "expression": "old",
+                "action": "redirect",
+            },
+            desired={"expression": "new", "action": "redirect"},
+        )
+        c2 = RuleChange(
+            ChangeType.MODIFY,
+            "r1",
+            REDIRECT_PHASE,
+            current={
+                "id": "different-id",
+                "version": "99",
+                "last_updated": "2026-02-01",
+                "categories": ["test"],
+                "logging": {"enabled": True},
+                "expression": "old",
+                "action": "redirect",
+            },
+            desired={"expression": "new", "action": "redirect"},
+        )
+        pp1 = PhasePlan(phase=REDIRECT_PHASE, changes=[c1])
+        pp2 = PhasePlan(phase=REDIRECT_PHASE, changes=[c2])
+        zp1 = ZonePlan(zone_name="test.com", phase_plans=[pp1])
+        zp2 = ZonePlan(zone_name="test.com", phase_plans=[pp2])
+        assert compute_checksum([zp1]) == compute_checksum([zp2])
+
+    # --- Normalize rule caching ---
+
+    def test_rule_change_caches_normalized_current(self):
+        """normalized_current() is cached after first call."""
+        rc = RuleChange(
+            ChangeType.MODIFY,
+            "r1",
+            REDIRECT_PHASE,
+            current={"id": "x", "expression": "true", "action": "redirect"},
+        )
+        first = rc.normalized_current
+        second = rc.normalized_current
+        assert first is second  # Same object, not just equal
+
+    def test_rule_change_caches_normalized_desired(self):
+        """normalized_desired() is cached after first call."""
+        rc = RuleChange(
+            ChangeType.ADD,
+            "r1",
+            REDIRECT_PHASE,
+            desired={"expression": "true", "action": "redirect"},
+        )
+        first = rc.normalized_desired
+        second = rc.normalized_desired
+        assert first is second
+
+    def test_rule_change_none_current_returns_none(self):
+        """normalized_current() returns None when current is None."""
+        rc = RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, current=None)
+        assert rc.normalized_current is None
+
+    def test_rule_change_none_desired_returns_none(self):
+        """normalized_desired() returns None when desired is None."""
+        rc = RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE, desired=None)
+        assert rc.normalized_desired is None
+
+    # --- Safety checks with unusual API data ---
+
+    def test_safety_check_with_refless_rules_in_current(self):
+        """Safety counts include ref-less rules since they're in the current list."""
+        changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(4)]
+        pp = PhasePlan(phase=REDIRECT_PHASE, changes=changes)
+        zp = ZonePlan(zone_name="test.com", phase_plans=[pp])
+        # 10 rules total, including ref-less ones
+        current = {
+            "http_request_dynamic_redirect": [
+                *[{"ref": f"r{i}"} for i in range(8)],
+                {"expression": "managed-1"},  # No ref
+                {"expression": "managed-2"},  # No ref
+            ]
+        }
+        violations = check_safety(
+            zp,
+            current,
+            ZoneConfig(
+                name="test.com",
+                zone_id="z1",
+                sources=["rules"],
+                delete_threshold=30.0,
+                update_threshold=30.0,
+                min_existing=3,
+            ),
+        )
+        assert len(violations) == 1
+        assert violations[0].existing == 10
+        assert violations[0].percentage == 40.0  # 4 out of 10

@@ -1,0 +1,19 @@
+redirect_rules:
+  - ref: blog-redirect
+    description: "Redirect /blog to blog subdomain"
+    expression: 'starts_with(http.request.uri.path, "/blog/")'
+    action_parameters:
+      from_value:
+        target_url:
+          expression: 'concat("https://blog.example.com", http.request.uri.path)'
+        status_code: 301
+
+cache_rules:
+  - ref: cache-static-assets
+    description: "Cache static assets for 24h"
+    expression: 'http.request.uri.path.extension in {"jpg" "png" "css" "js" "woff2"}'
+    action_parameters:
+      cache: true
+      edge_ttl:
+        mode: override_origin
+        default: 86400
