@@ -1,0 +1,111 @@
+"""Tests for plan_output module."""
+
+from __future__ import annotations
+
+import io
+
+import pytest
+
+from octorules.plan_output import (
+    PLAN_OUTPUT_CLASSES,
+    PlanHtml,
+    PlanJson,
+    PlanMarkdown,
+    PlanOutput,
+    PlanText,
+)
+from octorules.planner import ZonePlan
+
+
+class TestPlanOutputBase:
+    def test_base_class_raises(self):
+        output = PlanOutput("test")
+        with pytest.raises(NotImplementedError):
+            output.run([])
+
+    def test_path_attribute(self):
+        output = PlanOutput("test", path="/tmp/out.txt")
+        assert output.path == "/tmp/out.txt"
+        assert output.name == "test"
+
+    def test_path_default_none(self):
+        output = PlanOutput("test")
+        assert output.path is None
+
+
+class TestPlanText:
+    def test_writes_stdout(self, capsys):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        PlanText("text").run([zp])
+        out = capsys.readouterr().out
+        assert "example.com" in out
+        assert "no changes" in out.lower() or "No changes" in out
+
+    def test_writes_to_fh(self):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        buf = io.StringIO()
+        PlanText("text").run([zp], fh=buf)
+        out = buf.getvalue()
+        assert "example.com" in out
+
+
+class TestPlanJson:
+    def test_json_output(self, capsys):
+        import json
+
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        PlanJson("json").run([zp])
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert "zones" in data
+        assert data["zones"][0]["zone"] == "example.com"
+
+    def test_json_to_fh(self):
+        import json
+
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        buf = io.StringIO()
+        PlanJson("json").run([zp], fh=buf)
+        data = json.loads(buf.getvalue())
+        assert "zones" in data
+
+
+class TestPlanMarkdown:
+    def test_markdown_output(self, capsys):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        PlanMarkdown("md").run([zp])
+        out = capsys.readouterr().out
+        assert "### Zone:" in out or "No changes" in out
+
+    def test_markdown_to_fh(self):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        buf = io.StringIO()
+        PlanMarkdown("md").run([zp], fh=buf)
+        assert "example.com" in buf.getvalue()
+
+
+class TestPlanHtml:
+    def test_html_output(self, capsys):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        PlanHtml("html").run([zp])
+        out = capsys.readouterr().out
+        assert "<html>" in out
+        assert "example.com" in out
+
+    def test_html_to_fh(self):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        buf = io.StringIO()
+        PlanHtml("html").run([zp], fh=buf)
+        out = buf.getvalue()
+        assert "<html>" in out
+
+
+class TestRegistry:
+    def test_registry_contains_all_classes(self):
+        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanText"] is PlanText
+        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanMarkdown"] is PlanMarkdown
+        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanJson"] is PlanJson
+        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanHtml"] is PlanHtml
+
+    def test_registry_has_four_entries(self):
+        assert len(PLAN_OUTPUT_CLASSES) == 4

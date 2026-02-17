@@ -1,0 +1,754 @@
+"""CLI entry point: plan, sync, dump, validate, versions."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import IO
+
+from cloudflare import (
+    APIConnectionError,
+    APIError,
+    AuthenticationError,
+    PermissionDeniedError,
+)
+
+from octorules import __version__
+from octorules.config import Config, ConfigError, resolve_zone_ids
+from octorules.dumper import dump_zone_rules
+from octorules.formatter import build_report_data, print_report
+from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME, get_phase, unknown_phase_message
+from octorules.plan_output import PlanText
+from octorules.planner import (
+    RuleValidationError,
+    ZonePlan,
+    check_safety,
+    compute_checksum,
+    plan_zone,
+    prepare_desired_rules,
+    warn_unknown_phase_keys,
+)
+from octorules.provider import CloudflareProvider
+
+log = logging.getLogger("octorules")
+
+
+def _init_provider(config: Config) -> CloudflareProvider:
+    """Create a CloudflareProvider from config and resolve missing zone IDs."""
+    provider = CloudflareProvider(
+        config.token, max_retries=config.max_retries, timeout=config.timeout
+    )
+    resolve_zone_ids(config, provider.resolve_zone_id)
+    return provider
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="octorules",
+        description="Manage Cloudflare Rules as IaC",
+    )
+    parser.add_argument("--version", action="version", version=f"octorules {__version__}")
+    parser.add_argument(
+        "--config",
+        default="config.yaml",
+        help="Path to config file (default: config.yaml)",
+    )
+    parser.add_argument(
+        "--zone",
+        help="Process only this zone (default: all zones)",
+    )
+
+    parser.add_argument(
+        "--phase",
+        action="append",
+        dest="phases",
+        help=(
+            "Only process specified phase(s); can be repeated"
+            " (e.g. --phase redirect_rules --phase cache_rules)."
+            " Also limits API calls to matching phases."
+        ),
+    )
+
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Only show errors",
+    )
+
+    sub = parser.add_subparsers(dest="command")
+
+    plan_parser = sub.add_parser("plan", help="Show planned changes (dry-run)")
+    plan_parser.add_argument(
+        "--checksum",
+        action="store_true",
+        help="Print a SHA-256 checksum of the plan",
+    )
+
+    sync_parser = sub.add_parser("sync", help="Apply changes to Cloudflare")
+    sync_parser.add_argument(
+        "--doit",
+        action="store_true",
+        required=True,
+        help="Confirm that changes should be applied",
+    )
+    sync_parser.add_argument(
+        "--checksum",
+        metavar="HASH",
+        help="Verify plan checksum before applying",
+    )
+    sync_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass safety threshold checks",
+    )
+
+    validate_parser = sub.add_parser("validate", help="Validate config and rules files (offline)")
+    validate_parser.add_argument(
+        "--output",
+        dest="validate_output",
+        help="Write validation results to a file",
+    )
+
+    dump_parser = sub.add_parser("dump", help="Export existing Cloudflare rules to YAML")
+    dump_parser.add_argument(
+        "--output-dir",
+        help="Output directory for dumped rules (default: rules_dir from config)",
+    )
+
+    compare_parser = sub.add_parser(
+        "compare", help="Compare local rules against live Cloudflare state"
+    )
+    compare_parser.add_argument(
+        "--checksum",
+        action="store_true",
+        help="Print a SHA-256 checksum of the comparison plan",
+    )
+
+    report_parser = sub.add_parser("report", help="Drift report: deployed vs YAML source of truth")
+    report_parser.add_argument(
+        "--output-format",
+        choices=["csv", "json"],
+        default="csv",
+        dest="report_format",
+        help="Report output format (default: csv)",
+    )
+
+    sub.add_parser("versions", help="Show versions of octorules and dependencies")
+
+    # Provide defaults for subcommand-specific attributes so getattr is never needed
+    parser.set_defaults(
+        checksum=False,
+        force=False,
+        validate_output=None,
+        output_dir=None,
+        report_format="csv",
+    )
+
+    return parser
+
+
+def _get_zones(config: Config, zone_filter: str | None) -> list[str]:
+    """Return the list of zone names to process. Raises ConfigError if filter is invalid."""
+    if zone_filter:
+        if zone_filter not in config.zones:
+            raise ConfigError(f"Zone {zone_filter!r} not found in config")
+        return [zone_filter]
+    return list(config.zones.keys())
+
+
+def _validate_phases(phases: list[str] | None) -> list[str] | None:
+    """Validate phase names against known phases. Raises ConfigError if invalid."""
+    if not phases:
+        return None
+    for p in phases:
+        if p not in PHASE_BY_NAME:
+            raise ConfigError(unknown_phase_message(p))
+    return phases
+
+
+def _filter_desired_by_phase(
+    desired: dict[str, list[dict]], phases: list[str] | None
+) -> dict[str, list[dict]]:
+    """Filter desired rules dict to only include specified phases."""
+    if phases is None:
+        return desired
+    return {k: v for k, v in desired.items() if k in phases}
+
+
+def _filter_current_by_phase(
+    current: dict[str, list[dict]], phases: list[str] | None
+) -> dict[str, list[dict]]:
+    """Filter current rules dict to only include phases matching the friendly names."""
+    if phases is None:
+        return current
+    allowed_cf_phases = {PHASE_BY_NAME[p].cf_phase for p in phases if p in PHASE_BY_NAME}
+    return {k: v for k, v in current.items() if k in allowed_cf_phases}
+
+
+def _write_output_file(path: str, write_fn: Callable[[IO[str]], None]) -> bool:
+    """Write output to a file. Returns True on success, False on error."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            write_fn(f)
+        return True
+    except OSError as e:
+        log.error("Failed to write output file %s: %s", path, e)
+        return False
+
+
+def _emit_plan_outputs(config: Config, zone_plans: list[ZonePlan]) -> bool:
+    """Run all configured plan_outputs, or default PlanText to stdout.
+
+    Returns True on success, False if any file write failed.
+    """
+    outputs = config.plan_outputs
+    if not outputs:
+        PlanText("_default").run(zone_plans)
+        return True
+    ok = True
+    for output in outputs.values():
+        if output.path:
+            if not _write_output_file(output.path, lambda f, out=output: out.run(zone_plans, fh=f)):
+                ok = False
+        else:
+            output.run(zone_plans)
+    return ok
+
+
+def _phase_filter_to_cf_phases(phase_filter: list[str] | None) -> list[str] | None:
+    """Convert friendly phase names to CF phase identifiers for API filtering."""
+    if phase_filter is None:
+        return None
+    return [PHASE_BY_NAME[p].cf_phase for p in phase_filter if p in PHASE_BY_NAME]
+
+
+def _format_api_error(e: APIError | APIConnectionError) -> str:
+    """Format an API error, including the HTTP status code when available."""
+    if hasattr(e, "status_code"):
+        return f"[HTTP {e.status_code}] {e}"
+    return str(e)
+
+
+def _map_ordered(fn, items: list, max_workers: int) -> list:
+    """Run fn(item) for each item, returning results in input order.
+
+    Uses ThreadPoolExecutor when max_workers > 1, otherwise runs sequentially.
+    Exceptions from callables propagate directly; callers should ensure fn
+    handles expected errors internally (e.g. returning sentinel values).
+    """
+    if max_workers <= 1:
+        return [fn(item) for item in items]
+    results: dict[int, object] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(fn, item): i for i, item in enumerate(items)}
+        for future in as_completed(futures):
+            idx = futures[future]
+            results[idx] = future.result()  # propagates exceptions from fn
+    return [results[i] for i in range(len(items))]
+
+
+def _plan_single_zone(
+    config: Config,
+    provider: CloudflareProvider,
+    zone_name: str,
+    phase_filter: list[str] | None,
+) -> tuple[str, ZonePlan, dict, dict]:
+    """Plan a single zone. Returns (zone_name, zone_plan, desired, current)."""
+    zone_cfg = config.zones[zone_name]
+    desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
+    cf_phases = _phase_filter_to_cf_phases(phase_filter)
+    current = provider.get_all_phase_rules(zone_cfg.zone_id, cf_phases=cf_phases)
+
+    # Exclude phases that failed to fetch — planning against missing data
+    # would incorrectly treat all existing rules as deletions.
+    failed_phases = getattr(current, "failed_phases", [])
+    if failed_phases:
+        failed_friendly = {
+            PHASE_BY_CF[cf].friendly_name for cf in failed_phases if cf in PHASE_BY_CF
+        }
+        skipped = failed_friendly & set(desired.keys())
+        for name in sorted(skipped):
+            log.warning("Skipping %s for %s: failed to fetch current state", name, zone_name)
+        if skipped:
+            desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+
+    zp = plan_zone(zone_name, desired, current, allow_unmanaged=zone_cfg.allow_unmanaged)
+    return (zone_name, zp, desired, current)
+
+
+def _plan_single_zone_safe(
+    config: Config,
+    provider: CloudflareProvider,
+    zone_name: str,
+    phase_filter: list[str] | None,
+) -> tuple[str, ZonePlan, dict, dict] | None:
+    """Plan a single zone, returning None on transient API errors.
+
+    AuthenticationError and PermissionDeniedError propagate immediately
+    (these are permanent and indicate a bad token or missing permissions).
+    """
+    try:
+        return _plan_single_zone(config, provider, zone_name, phase_filter)
+    except (AuthenticationError, PermissionDeniedError):
+        raise
+    except (APIError, APIConnectionError) as e:
+        log.error("Failed to plan %s: %s", zone_name, _format_api_error(e))
+        return None
+
+
+def _plan_zones(
+    config: Config,
+    provider: CloudflareProvider,
+    zone_names: list[str],
+    phase_filter: list[str] | None,
+) -> tuple[list[ZonePlan], dict[str, dict], dict[str, dict], list[str]]:
+    """Plan all zones, optionally in parallel.
+
+    Returns (zone_plans, desired_by_zone, current_by_zone, failed_zones).
+    """
+    zone_plans: list[ZonePlan] = []
+    desired_by_zone: dict[str, dict] = {}
+    current_by_zone: dict[str, dict] = {}
+    failed_zones: list[str] = []
+
+    results = _map_ordered(
+        lambda zn: _plan_single_zone_safe(config, provider, zn, phase_filter),
+        zone_names,
+        config.max_workers,
+    )
+
+    for zone_name, result in zip(zone_names, results):
+        if result is None:
+            failed_zones.append(zone_name)
+        else:
+            name, zp, desired, current = result
+            zone_plans.append(zp)
+            desired_by_zone[name] = desired
+            current_by_zone[name] = current
+
+    return zone_plans, desired_by_zone, current_by_zone, failed_zones
+
+
+def _cmd_plan_or_compare(
+    config: Config,
+    zone_filter: str | None,
+    phase_filter: list[str] | None = None,
+    checksum: bool = False,
+    *,
+    changes_exit_code: int = 2,
+) -> int:
+    """Shared implementation for plan and compare commands."""
+    provider = _init_provider(config)
+    zone_names = _get_zones(config, zone_filter)
+    zone_plans, _, _, failed = _plan_zones(config, provider, zone_names, phase_filter)
+
+    if not _emit_plan_outputs(config, zone_plans):
+        return 1
+
+    if checksum:
+        log.info("checksum=%s", compute_checksum(zone_plans))
+
+    if failed:
+        return 1
+    has_changes = any(zp.has_changes for zp in zone_plans)
+    return changes_exit_code if has_changes else 0
+
+
+def cmd_plan(
+    config: Config,
+    zone_filter: str | None,
+    phase_filter: list[str] | None = None,
+    checksum: bool = False,
+) -> int:
+    """Run the plan command. Returns 0 (no changes), 1 (error), or 2 (changes detected)."""
+    return _cmd_plan_or_compare(
+        config,
+        zone_filter,
+        phase_filter,
+        checksum,
+        changes_exit_code=2,
+    )
+
+
+def cmd_compare(
+    config: Config,
+    zone_filter: str | None,
+    phase_filter: list[str] | None = None,
+    checksum: bool = False,
+) -> int:
+    """Run the compare command. Returns 0 if identical, 1 if differences."""
+    return _cmd_plan_or_compare(
+        config,
+        zone_filter,
+        phase_filter,
+        checksum,
+        changes_exit_code=1,
+    )
+
+
+def cmd_report(
+    config: Config,
+    zone_filter: str | None,
+    phase_filter: list[str] | None = None,
+    report_format: str = "csv",
+) -> int:
+    """Run the report command. Returns 0 normally, 1 if any zone failed."""
+    provider = _init_provider(config)
+    zone_names = _get_zones(config, zone_filter)
+    zone_plans, desired_by_zone, current_by_zone, failed = _plan_zones(
+        config, provider, zone_names, phase_filter
+    )
+
+    report_data = build_report_data(zone_plans, desired_by_zone, current_by_zone)
+    print_report(report_data, fmt=report_format)
+
+    return 1 if failed else 0
+
+
+def _check_safety_violations(
+    zone_plans: list[ZonePlan],
+    current_by_zone: dict[str, dict],
+    config: Config,
+) -> list:
+    """Check all zone plans against safety thresholds.
+
+    Returns list of SafetyViolation objects (empty if safe).
+    Skips zones with no changes or always_dry_run enabled.
+    """
+    violations = []
+    for zp in zone_plans:
+        if not zp.has_changes:
+            continue
+        zone_cfg = config.zones[zp.zone_name]
+        if zone_cfg.always_dry_run:
+            continue
+        violations.extend(check_safety(zp, current_by_zone[zp.zone_name], zone_cfg))
+    return violations
+
+
+def _log_safety_violations(violations: list) -> None:
+    """Log safety threshold violations."""
+    log.error("Safety threshold exceeded! Use --force to override.")
+    for v in violations:
+        phases_str = ", ".join(v.phases) if v.phases else "unknown"
+        log.error(
+            "  %s: %d %s(s) out of %d existing rules (%.1f%% > %.1f%% threshold) in %s",
+            v.zone_name,
+            v.count,
+            v.kind,
+            v.existing,
+            v.percentage,
+            v.threshold,
+            phases_str,
+        )
+
+
+def _apply_zone_changes(
+    actionable: list[ZonePlan],
+    desired_by_zone: dict[str, dict],
+    config: Config,
+    provider: CloudflareProvider,
+) -> int:
+    """Apply planned changes to Cloudflare. Returns exit code."""
+    total = len(actionable)
+    log.info("Applying changes to %d zone(s)...", total)
+
+    synced_phases: list[str] = []
+    for i, zp in enumerate(actionable, 1):
+        zone_cfg = config.zones[zp.zone_name]
+
+        if zone_cfg.always_dry_run:
+            log.warning("[%d/%d] Skipping %s (always_dry_run is enabled)", i, total, zp.zone_name)
+            continue
+
+        log.info("[%d/%d] Syncing %s", i, total, zp.zone_name)
+        desired = desired_by_zone[zp.zone_name]
+
+        for pp in zp.phase_plans:
+            phase = pp.phase
+            friendly_name = phase.friendly_name
+            n_changes = len(pp.changes)
+            log.info("  %s: applying %d change(s)", friendly_name, n_changes)
+            phase_rules = desired.get(friendly_name, [])
+            payload = prepare_desired_rules(phase_rules, phase)
+            log.debug("  PUT %s zone=%s rules=%d", phase.cf_phase, zone_cfg.zone_id, len(payload))
+            try:
+                provider.put_phase_rules(zone_cfg.zone_id, phase.cf_phase, payload)
+            except (AuthenticationError, PermissionDeniedError) as e:
+                log.error(
+                    "Authentication/permission error syncing %s for %s: %s",
+                    friendly_name,
+                    zp.zone_name,
+                    _format_api_error(e),
+                )
+                return 1
+            except (APIError, APIConnectionError) as e:
+                log.error(
+                    "API error syncing %s for %s: %s",
+                    friendly_name,
+                    zp.zone_name,
+                    _format_api_error(e),
+                )
+                if synced_phases:
+                    log.error("Successfully synced before failure: %s", ", ".join(synced_phases))
+                return 1
+            synced_phases.append(f"{zp.zone_name}/{friendly_name}")
+            log.info("  %s: done", friendly_name)
+
+    log.info("Done.")
+    return 0
+
+
+def cmd_sync(
+    config: Config,
+    zone_filter: str | None,
+    phase_filter: list[str] | None = None,
+    checksum: str | None = None,
+    force: bool = False,
+) -> int:
+    """Run the sync command. Returns exit code."""
+    provider = _init_provider(config)
+    zone_names = _get_zones(config, zone_filter)
+    zone_plans, desired_by_zone, current_by_zone, failed = _plan_zones(
+        config, provider, zone_names, phase_filter
+    )
+
+    if failed:
+        log.error("Aborting sync: failed to plan %d zone(s)", len(failed))
+        return 1
+
+    if not _emit_plan_outputs(config, zone_plans):
+        return 1
+
+    has_changes = any(zp.has_changes for zp in zone_plans)
+    if not has_changes:
+        return 0
+
+    if checksum:
+        actual = compute_checksum(zone_plans)
+        if actual != checksum:
+            log.error("Checksum mismatch: expected %s, got %s", checksum, actual)
+            return 1
+
+    if not force:
+        violations = _check_safety_violations(zone_plans, current_by_zone, config)
+        if violations:
+            _log_safety_violations(violations)
+            return 1
+
+    actionable = [zp for zp in zone_plans if zp.has_changes]
+    return _apply_zone_changes(actionable, desired_by_zone, config, provider)
+
+
+def cmd_validate(
+    config: Config,
+    zone_filter: str | None,
+    phase_filter: list[str] | None = None,
+    output_file: str | None = None,
+) -> int:
+    """Validate config and rules files offline (no API calls). Returns exit code."""
+    zone_names = _get_zones(config, zone_filter)
+    errors: list[str] = []
+    validated_count = 0
+    lines: list[str] = []
+
+    for zone_name in zone_names:
+        desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
+        if not desired:
+            msg = f"  {zone_name}: no rules file (skipped)"
+            log.info("%s", msg)
+            lines.append(msg)
+            continue
+
+        warn_unknown_phase_keys(desired, zone_name)
+
+        for friendly_name, rules in desired.items():
+            try:
+                phase = get_phase(friendly_name)
+            except KeyError:
+                continue  # already warned by warn_unknown_phase_keys
+            try:
+                prepare_desired_rules(rules, phase)
+                msg = f"  {zone_name}/{friendly_name}: OK ({len(rules)} rule(s))"
+                log.info("%s", msg)
+                lines.append(msg)
+                validated_count += 1
+            except (RuleValidationError, ValueError) as e:
+                msg = f"  {zone_name}/{friendly_name}: {e}"
+                errors.append(msg)
+
+    if errors:
+        log.error("Validation errors:")
+        for err in errors:
+            log.error("%s", err)
+            lines.append(f"ERROR: {err}")
+    elif validated_count == 0:
+        log.warning("No rules found to validate")
+        lines.append("No rules found to validate")
+    else:
+        log.info("All rules valid.")
+        lines.append("All rules valid.")
+
+    if output_file:
+        if not _write_output_file(output_file, lambda f: f.write("\n".join(lines) + "\n")):
+            return 1
+
+    if errors:
+        return 1
+    return 0
+
+
+def cmd_dump(config: Config, zone_filter: str | None, output_dir: str | None) -> int:
+    """Run the dump command. Returns exit code."""
+    provider = _init_provider(config)
+    zone_names = _get_zones(config, zone_filter)
+    out_dir = Path(output_dir) if output_dir else config.rules_dir
+
+    def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
+        zone_cfg = config.zones[zone_name]
+        try:
+            rules = provider.get_all_phase_rules(zone_cfg.zone_id)
+        except (AuthenticationError, PermissionDeniedError):
+            raise
+        except (APIError, APIConnectionError) as e:
+            return zone_name, None, _format_api_error(e)
+        result = dump_zone_rules(zone_name, rules, out_dir)
+        return zone_name, result, None
+
+    results = _map_ordered(_fetch_and_dump, zone_names, config.max_workers)
+
+    had_errors = False
+    for zone_name, result, error in results:
+        if error:
+            log.error("Failed to dump %s: %s", zone_name, error)
+            had_errors = True
+        elif result:
+            log.info("Dumped %s → %s", zone_name, result)
+        else:
+            log.info("No rules found for %s", zone_name)
+
+    return 1 if had_errors else 0
+
+
+def cmd_versions() -> int:
+    """Print versions of octorules and key dependencies. Returns exit code."""
+    import platform
+
+    print(f"octorules     {__version__}")
+    try:
+        import cloudflare
+
+        print(f"cloudflare    {cloudflare.__version__}")
+    except (ImportError, AttributeError):
+        print("cloudflare    (not installed)")
+    try:
+        import yaml
+
+        print(f"pyyaml        {yaml.__version__}")
+    except (ImportError, AttributeError):
+        print("pyyaml        (not installed)")
+    print(f"python        {platform.python_version()}")
+    return 0
+
+
+def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
+    """Configure the octorules logger."""
+    if debug:
+        level = logging.DEBUG
+    elif quiet:
+        level = logging.WARNING
+    else:
+        level = logging.INFO
+    logger = logging.getLogger("octorules")
+    logger.setLevel(level)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
+    else:
+        for handler in logger.handlers:
+            handler.setLevel(level)
+
+
+def main(argv: list[str] | None = None) -> None:
+    """Main entry point."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if not args.command:
+        parser.print_help()
+        sys.exit(1)
+
+    _setup_logging(debug=args.debug, quiet=args.quiet)
+
+    # versions doesn't need config
+    if args.command == "versions":
+        sys.exit(cmd_versions())
+
+    try:
+        config = Config.from_file(args.config)
+        phase_filter = _validate_phases(args.phases)
+
+        if args.command == "plan":
+            sys.exit(
+                cmd_plan(
+                    config,
+                    args.zone,
+                    phase_filter=phase_filter,
+                    checksum=args.checksum,
+                )
+            )
+        elif args.command == "sync":
+            sys.exit(
+                cmd_sync(
+                    config,
+                    args.zone,
+                    phase_filter=phase_filter,
+                    checksum=args.checksum,
+                    force=args.force,
+                )
+            )
+        elif args.command == "compare":
+            sys.exit(
+                cmd_compare(
+                    config,
+                    args.zone,
+                    phase_filter=phase_filter,
+                    checksum=args.checksum,
+                )
+            )
+        elif args.command == "report":
+            sys.exit(
+                cmd_report(
+                    config,
+                    args.zone,
+                    phase_filter=phase_filter,
+                    report_format=args.report_format,
+                )
+            )
+        elif args.command == "validate":
+            sys.exit(
+                cmd_validate(
+                    config,
+                    args.zone,
+                    phase_filter=phase_filter,
+                    output_file=args.validate_output,
+                )
+            )
+        elif args.command == "dump":
+            sys.exit(cmd_dump(config, args.zone, args.output_dir))
+    except ConfigError as e:
+        log.error("Config error: %s", e)
+        sys.exit(1)
+    except (AuthenticationError, PermissionDeniedError) as e:
+        log.error("Cloudflare authentication failed: %s", _format_api_error(e))
+        sys.exit(1)

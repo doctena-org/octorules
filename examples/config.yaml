@@ -1,0 +1,16 @@
+providers:
+  cloudflare:
+    token: env/CLOUDFLARE_API_TOKEN
+  rules:
+    directory: ./rules
+
+manager:
+  max_workers: 1
+  plan_outputs:
+    text:
+      class: octorules.plan_output.PlanText
+
+zones:
+  example.com:
+    sources:
+      - rules

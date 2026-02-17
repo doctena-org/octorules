@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octorules"
+version = "0.3.0"
+description = "Manage Cloudflare Rules as IaC"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+readme = "README.md"
+authors = [
+    { name = "Martin Simon" },
+    { name = "Doctena S.A." },
+]
+keywords = ["cloudflare", "rules", "iac", "infrastructure-as-code", "octodns"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "cloudflare>=3.0.0,<5.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.4.0",
+    "build",
+]
+
+[project.urls]
+Homepage = "https://github.com/doctena-org/octorules"
+Repository = "https://github.com/doctena-org/octorules"
+Issues = "https://github.com/doctena-org/octorules/issues"
+
+[project.scripts]
+octorules = "octorules.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
