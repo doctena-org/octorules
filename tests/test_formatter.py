@@ -171,7 +171,7 @@ class TestPrintPlan:
         output = buf.getvalue()
         assert "Total: 1 change(s)" in output
 
-    def test_multiple_zones(self):
+    def test_multiple_zones_skips_unchanged(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
@@ -182,7 +182,7 @@ class TestPrintPlan:
         print_plan([zp1, zp2], file=buf)
         output = buf.getvalue()
         assert "a.com" in output
-        assert "b.com" in output
+        assert "b.com" not in output
         assert "1 change(s) across 2 zone(s)" in output
 
     def test_multiple_zones_no_changes(self):
@@ -201,7 +201,11 @@ class TestPrintPlan:
         assert "zones" in data
 
     def test_print_plan_markdown_routing(self):
-        zp = ZonePlan("example.com")
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
         buf = io.StringIO()
         print_plan([zp], file=buf, fmt="markdown")
         output = buf.getvalue()
@@ -221,8 +225,7 @@ class TestFormatPlanJson:
         data = json.loads(result)
         assert data["total_changes"] == 0
         assert data["has_changes"] is False
-        assert len(data["zones"]) == 1
-        assert data["zones"][0]["zone"] == "example.com"
+        assert len(data["zones"]) == 0
 
     def test_with_changes(self):
         pp = PhasePlan(
@@ -290,10 +293,10 @@ class TestFormatPlanJson:
 
 
 class TestFormatPlanMarkdown:
-    def test_empty_plan(self):
+    def test_empty_plan_skips_unchanged(self):
         result = format_plan_markdown([ZonePlan("example.com")])
-        assert "### Zone: `example.com`" in result
-        assert "No changes." in result
+        assert "example.com" not in result
+        assert "**No changes detected.**" in result
 
     def test_with_changes(self):
         pp = PhasePlan(
@@ -334,7 +337,7 @@ class TestFormatPlanMarkdown:
         result = format_plan_markdown([zp])
         assert "reorder" in result
 
-    def test_multiple_zones(self):
+    def test_multiple_zones_skips_unchanged(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
@@ -343,7 +346,7 @@ class TestFormatPlanMarkdown:
         zp2 = ZonePlan("b.com")
         result = format_plan_markdown([zp1, zp2])
         assert "### Zone: `a.com`" in result
-        assert "### Zone: `b.com`" in result
+        assert "b.com" not in result
         assert "1 change(s) across 2 zone(s)" in result
 
     def test_summary_no_changes(self):
@@ -352,27 +355,19 @@ class TestFormatPlanMarkdown:
 
 
 class TestFormatPlanHtml:
-    def test_empty_plan(self):
+    def test_empty_plan_skips_unchanged(self):
         result = format_plan_html([ZonePlan("example.com")])
-        assert "<!DOCTYPE html>" in result
+        assert "example.com" not in result
         assert "No changes" in result
 
-    def test_valid_html_structure(self):
+    def test_embeddable_fragment(self):
+        """Output is an embeddable HTML fragment, not a full document."""
         result = format_plan_html([ZonePlan("example.com")])
-        assert "<!DOCTYPE html>" in result
-        assert "<html>" in result
-        assert "<head>" in result
-        assert "<body>" in result
-        assert "</body>" in result
-        assert "</html>" in result
-
-    def test_inline_css_present(self):
-        result = format_plan_html([ZonePlan("example.com")])
-        assert "<style>" in result
-        assert ".add" in result
-        assert ".remove" in result
-        assert ".modify" in result
-        assert ".reorder" in result
+        assert "<!DOCTYPE" not in result
+        assert "<html>" not in result
+        assert "<head>" not in result
+        assert "<body>" not in result
+        assert "<style>" not in result
 
     def test_with_changes(self):
         pp = PhasePlan(
@@ -401,8 +396,6 @@ class TestFormatPlanHtml:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        assert "diff-old" in result
-        assert "diff-new" in result
         assert "expression" in result
 
     def test_reorder_shows_message(self):
@@ -414,7 +407,7 @@ class TestFormatPlanHtml:
         result = format_plan_html([zp])
         assert "reorder" in result
 
-    def test_multiple_zones(self):
+    def test_multiple_zones_skips_unchanged(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
@@ -423,7 +416,7 @@ class TestFormatPlanHtml:
         zp2 = ZonePlan("b.com")
         result = format_plan_html([zp1, zp2])
         assert "a.com" in result
-        assert "b.com" in result
+        assert "b.com" not in result
 
     def test_xss_safety(self):
         """Script tags in zone names and refs must be escaped."""
@@ -436,18 +429,18 @@ class TestFormatPlanHtml:
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
 
-    def test_summary_section(self):
+    def test_summary_after_tables(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        assert "summary" in result
-        # Summary appears before zone sections
-        summary_pos = result.index("summary")
-        section_pos = result.index("<section>")
-        assert summary_pos < section_pos
+        assert "Summary:" in result
+        # Summary appears after zone tables
+        table_pos = result.index("</table>")
+        summary_pos = result.index("Summary:")
+        assert summary_pos > table_pos
 
     def test_no_external_dependencies(self):
         result = format_plan_html([ZonePlan("example.com")])
@@ -455,11 +448,15 @@ class TestFormatPlanHtml:
         assert "<script" not in result
 
     def test_print_plan_html_routing(self):
-        zp = ZonePlan("example.com")
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
         buf = io.StringIO()
         print_plan([zp], file=buf, fmt="html")
         output = buf.getvalue()
-        assert "<!DOCTYPE html>" in output
+        assert "<table>" in output
         assert "example.com" in output
 
 
