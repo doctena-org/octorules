@@ -12,6 +12,18 @@ from octorules.phases import CF_API_FIELDS, PHASE_BY_CF
 log = logging.getLogger("octorules")
 
 
+class _LiteralStr(str):
+    """Marker subclass for strings that should use YAML literal block style."""
+
+
+def _literal_representer(dumper: yaml.Dumper, data: _LiteralStr) -> yaml.ScalarNode:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+
+
+_Dumper = type("_Dumper", (yaml.SafeDumper,), {})
+_Dumper.add_representer(_LiteralStr, _literal_representer)
+
+
 def dump_zone_rules(
     zone_name: str,
     rules_by_cf_phase: dict[str, list[dict]],
@@ -44,12 +56,30 @@ def dump_zone_rules(
 
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(output, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+            yaml.dump(
+                output,
+                f,
+                Dumper=_Dumper,
+                default_flow_style=False,
+                sort_keys=False,
+                allow_unicode=True,
+            )
     except OSError as e:
         log.error("Failed to write dump file %s: %s", output_path, e)
         return None
 
     return output_path
+
+
+def _literalize(value: object) -> object:
+    """Recursively convert multiline strings to _LiteralStr for block style."""
+    if isinstance(value, str) and "\n" in value:
+        return _LiteralStr(value)
+    if isinstance(value, dict):
+        return {k: _literalize(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_literalize(item) for item in value]
+    return value
 
 
 def _clean_rule(rule: dict, default_action: str | None) -> dict:
@@ -61,5 +91,10 @@ def _clean_rule(rule: dict, default_action: str | None) -> dict:
         # Skip action if it matches the phase default
         if k == "action" and default_action and v == default_action:
             continue
-        cleaned[k] = v
-    return cleaned
+        cleaned[k] = _literalize(v)
+    ordered = {}
+    for key in ("ref", "description"):
+        if key in cleaned:
+            ordered[key] = cleaned.pop(key)
+    ordered.update(cleaned)
+    return ordered
