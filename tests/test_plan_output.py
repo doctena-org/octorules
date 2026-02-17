@@ -6,6 +6,7 @@ import io
 
 import pytest
 
+from octorules.phases import get_phase
 from octorules.plan_output import (
     PLAN_OUTPUT_CLASSES,
     PlanHtml,
@@ -14,7 +15,17 @@ from octorules.plan_output import (
     PlanOutput,
     PlanText,
 )
-from octorules.planner import ZonePlan
+from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
+
+REDIRECT_PHASE = get_phase("redirect_rules")
+
+
+def _zone_with_changes():
+    pp = PhasePlan(
+        phase=REDIRECT_PHASE,
+        changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+    )
+    return ZonePlan(zone_name="example.com", phase_plans=[pp])
 
 
 class TestPlanOutputBase:
@@ -34,15 +45,20 @@ class TestPlanOutputBase:
 
 
 class TestPlanText:
-    def test_writes_stdout(self, capsys):
+    def test_writes_stdout_no_changes(self, capsys):
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
         PlanText("text").run([zp])
         out = capsys.readouterr().out
+        assert "No changes detected" in out
+
+    def test_writes_stdout_with_changes(self, capsys):
+        zp = _zone_with_changes()
+        PlanText("text").run([zp])
+        out = capsys.readouterr().out
         assert "example.com" in out
-        assert "no changes" in out.lower() or "No changes" in out
 
     def test_writes_to_fh(self):
-        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        zp = _zone_with_changes()
         buf = io.StringIO()
         PlanText("text").run([zp], fh=buf)
         out = buf.getvalue()
@@ -50,7 +66,7 @@ class TestPlanText:
 
 
 class TestPlanJson:
-    def test_json_output(self, capsys):
+    def test_json_output_no_changes(self, capsys):
         import json
 
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
@@ -58,6 +74,16 @@ class TestPlanJson:
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "zones" in data
+        assert len(data["zones"]) == 0
+        assert data["has_changes"] is False
+
+    def test_json_output_with_changes(self, capsys):
+        import json
+
+        zp = _zone_with_changes()
+        PlanJson("json").run([zp])
+        out = capsys.readouterr().out
+        data = json.loads(out)
         assert data["zones"][0]["zone"] == "example.com"
 
     def test_json_to_fh(self):
@@ -71,33 +97,47 @@ class TestPlanJson:
 
 
 class TestPlanMarkdown:
-    def test_markdown_output(self, capsys):
+    def test_markdown_output_no_changes(self, capsys):
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
         PlanMarkdown("md").run([zp])
         out = capsys.readouterr().out
-        assert "### Zone:" in out or "No changes" in out
+        assert "No changes" in out
+
+    def test_markdown_output_with_changes(self, capsys):
+        zp = _zone_with_changes()
+        PlanMarkdown("md").run([zp])
+        out = capsys.readouterr().out
+        assert "### Zone:" in out
+        assert "example.com" in out
 
     def test_markdown_to_fh(self):
-        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        zp = _zone_with_changes()
         buf = io.StringIO()
         PlanMarkdown("md").run([zp], fh=buf)
         assert "example.com" in buf.getvalue()
 
 
 class TestPlanHtml:
-    def test_html_output(self, capsys):
+    def test_html_output_no_changes(self, capsys):
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
         PlanHtml("html").run([zp])
         out = capsys.readouterr().out
-        assert "<html>" in out
+        assert "No changes" in out
+        assert "<html>" not in out
+
+    def test_html_output_with_changes(self, capsys):
+        zp = _zone_with_changes()
+        PlanHtml("html").run([zp])
+        out = capsys.readouterr().out
+        assert "<table>" in out
         assert "example.com" in out
 
     def test_html_to_fh(self):
-        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        zp = _zone_with_changes()
         buf = io.StringIO()
         PlanHtml("html").run([zp], fh=buf)
         out = buf.getvalue()
-        assert "<html>" in out
+        assert "<table>" in out
 
 
 class TestRegistry:
