@@ -355,10 +355,10 @@ class TestFormatPlanMarkdown:
 
 
 class TestFormatPlanHtml:
-    def test_empty_plan_skips_unchanged(self):
+    def test_empty_plan_no_changes(self):
         result = format_plan_html([ZonePlan("example.com")])
         assert "example.com" not in result
-        assert "No changes" in result
+        assert "No changes were planned" in result
 
     def test_embeddable_fragment(self):
         """Output is an embeddable HTML fragment, not a full document."""
@@ -369,7 +369,7 @@ class TestFormatPlanHtml:
         assert "<body>" not in result
         assert "<style>" not in result
 
-    def test_with_changes(self):
+    def test_create_uses_full_name(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
@@ -379,9 +379,18 @@ class TestFormatPlanHtml:
         assert "example.com" in result
         assert "redirect_rules" in result
         assert "r1" in result
-        assert "+" in result
+        assert "Create" in result
 
-    def test_modify_shows_field_diffs(self):
+    def test_delete_uses_full_name(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "Delete" in result
+
+    def test_modify_shows_old_and_new_on_separate_rows(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[
@@ -389,14 +398,18 @@ class TestFormatPlanHtml:
                     ChangeType.MODIFY,
                     "r1",
                     REDIRECT_PHASE,
-                    current={"expression": "old", "action": "redirect"},
-                    desired={"expression": "new", "action": "redirect"},
+                    current={"expression": "old-expr", "action": "redirect"},
+                    desired={"expression": "new-expr", "action": "redirect"},
                 )
             ],
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        assert "expression" in result
+        assert "Update" in result
+        assert "expression: old-expr" in result
+        assert "expression: new-expr" in result
+        # Old value appears before new value
+        assert result.index("old-expr") < result.index("new-expr")
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(
@@ -405,7 +418,8 @@ class TestFormatPlanHtml:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        assert "reorder" in result
+        assert "Reorder" in result
+        assert "reorder rules" in result
 
     def test_multiple_zones_skips_unchanged(self):
         pp = PhasePlan(
@@ -429,18 +443,27 @@ class TestFormatPlanHtml:
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
 
-    def test_summary_after_tables(self):
+    def test_summary_inside_table(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        assert "Summary:" in result
-        # Summary appears after zone tables
-        table_pos = result.index("</table>")
+        assert "Summary: Creates=1" in result
+        # Summary row is inside the table (before </table>)
         summary_pos = result.index("Summary:")
-        assert summary_pos > table_pos
+        table_end_pos = result.index("</table>")
+        assert summary_pos < table_end_pos
+
+    def test_operation_column_header(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "<th>Operation</th>" in result
 
     def test_no_external_dependencies(self):
         result = format_plan_html([ZonePlan("example.com")])
