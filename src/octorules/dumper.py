@@ -31,7 +31,8 @@ def dump_zone_rules(
 ) -> Path | None:
     """Write a zone's rules to a YAML file.
 
-    Returns the output path, or None if there are no rules to dump.
+    Returns the output path, or None on write failure.
+    Zones with no rules produce a minimal ``---`` file.
     """
     output: dict[str, list[dict]] = {}
 
@@ -43,9 +44,6 @@ def dump_zone_rules(
         if cleaned_rules:
             output[phase.friendly_name] = cleaned_rules
 
-    if not output:
-        return None
-
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -56,14 +54,20 @@ def dump_zone_rules(
 
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            yaml.dump(
-                output,
-                f,
-                Dumper=_Dumper,
-                default_flow_style=False,
-                sort_keys=False,
-                allow_unicode=True,
-            )
+            if output:
+                yaml.dump(
+                    output,
+                    f,
+                    Dumper=_Dumper,
+                    default_flow_style=False,
+                    sort_keys=False,
+                    allow_unicode=True,
+                    width=2147483647,
+                    explicit_start=True,
+                )
+            else:
+                f.write("---\n")
+                log.info("No rules found for %s, created empty file", zone_name)
     except OSError as e:
         log.error("Failed to write dump file %s: %s", output_path, e)
         return None

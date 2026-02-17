@@ -229,7 +229,8 @@ class TestCloudflareProvider:
         provider = CloudflareProvider("token", client=mock_cf_client)
         with caplog.at_level(logging.DEBUG, logger="octorules"):
             provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
-        assert "GET rulesets/phases/http_request_dynamic_redirect zone=zone-123" in caplog.text
+        assert "GET rulesets/phases/http_request_dynamic_redirect zone=" in caplog.text
+        assert "zone-123" in caplog.text
 
     def test_get_all_phase_rules_partial_failure(self, mock_cf_client, caplog):
         """Non-404 error on one phase should log warning and continue."""
@@ -298,7 +299,8 @@ class TestCloudflareProvider:
         with caplog.at_level(logging.DEBUG, logger="octorules"):
             provider.put_phase_rules("zone-123", "http_request_dynamic_redirect", rules)
         assert "PUT rulesets/phases/http_request_dynamic_redirect" in caplog.text
-        assert "zone=zone-123 rules=2" in caplog.text
+        assert "zone-123" in caplog.text
+        assert "rules=2" in caplog.text
 
     def test_put_phase_rules_count_mismatch_warns(self, mock_cf_client, caplog):
         """PUT response with different rule count should log a warning."""

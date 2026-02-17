@@ -19,6 +19,13 @@ from octorules.phases import ALL_CF_PHASES
 log = logging.getLogger("octorules")
 
 
+def _fmt_zone(zone_name: str, zone_id: str) -> str:
+    """Format zone for log messages: 'domain.tld (ID=zone_id)' or just zone_id."""
+    if zone_name:
+        return f"{zone_name} (ID={zone_id})"
+    return zone_id
+
+
 class PhaseRulesResult(dict):
     """Dict mapping cf_phase → rules, with tracking of phases that failed to fetch.
 
@@ -65,9 +72,9 @@ class CloudflareProvider:
             raise ConfigError(f"Multiple zones found for {zone_name!r}")
         return matches[0].id
 
-    def get_phase_rules(self, zone_id: str, cf_phase: str) -> list[dict]:
+    def get_phase_rules(self, zone_id: str, cf_phase: str, *, zone_name: str = "") -> list[dict]:
         """Fetch rules for a single phase. Returns empty list if no ruleset exists."""
-        log.debug("GET rulesets/phases/%s zone=%s", cf_phase, zone_id)
+        log.debug("GET rulesets/phases/%s zone=%s", cf_phase, _fmt_zone(zone_name, zone_id))
         try:
             ruleset = self._client.rulesets.phases.get(
                 cf_phase,
@@ -78,12 +85,15 @@ class CloudflareProvider:
         except NotFoundError:
             return []
 
-    def put_phase_rules(self, zone_id: str, cf_phase: str, rules: list[dict]) -> int:
+    def put_phase_rules(
+        self, zone_id: str, cf_phase: str, rules: list[dict], *, zone_name: str = ""
+    ) -> int:
         """Atomically replace all rules in a phase.
 
         Returns the number of rules in the response (for verification).
         """
-        log.debug("PUT rulesets/phases/%s zone=%s rules=%d", cf_phase, zone_id, len(rules))
+        zl = _fmt_zone(zone_name, zone_id)
+        log.debug("PUT rulesets/phases/%s zone=%s rules=%d", cf_phase, zl, len(rules))
         result = self._client.rulesets.phases.update(
             cf_phase,
             zone_id=zone_id,
@@ -95,14 +105,14 @@ class CloudflareProvider:
             log.warning(
                 "PUT %s zone=%s: sent %d rule(s) but response contains %d",
                 cf_phase,
-                zone_id,
+                zl,
                 len(rules),
                 response_count,
             )
         return response_count
 
     def get_all_phase_rules(
-        self, zone_id: str, *, cf_phases: list[str] | None = None
+        self, zone_id: str, *, zone_name: str = "", cf_phases: list[str] | None = None
     ) -> PhaseRulesResult:
         """Fetch rules for supported phases. Returns cf_phase → rules mapping.
 
@@ -112,20 +122,22 @@ class CloudflareProvider:
 
         Args:
             zone_id: The Cloudflare zone ID.
+            zone_name: The zone domain name (for human-readable log messages).
             cf_phases: Optional list of CF phase identifiers to fetch.
                        Defaults to all supported phases.
         """
         phases_to_fetch = cf_phases if cf_phases is not None else ALL_CF_PHASES
-        log.debug("Fetching %d phase(s) for zone=%s", len(phases_to_fetch), zone_id)
+        zl = _fmt_zone(zone_name, zone_id)
+        log.debug("Fetching %d phase(s) for zone=%s", len(phases_to_fetch), zl)
         rules: dict[str, list[dict]] = {}
         failed: list[str] = []
         for cf_phase in phases_to_fetch:
             try:
-                phase_rules = self.get_phase_rules(zone_id, cf_phase)
+                phase_rules = self.get_phase_rules(zone_id, cf_phase, zone_name=zone_name)
             except (AuthenticationError, PermissionDeniedError):
                 raise
             except (APIError, APIConnectionError) as e:
-                log.warning("Failed to fetch phase %s for zone=%s: %s", cf_phase, zone_id, e)
+                log.warning("Failed to fetch phase %s for zone=%s: %s", cf_phase, zl, e)
                 failed.append(cf_phase)
                 continue
             if phase_rules:

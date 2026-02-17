@@ -59,7 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--zone",
-        help="Process only this zone (default: all zones)",
+        action="append",
+        dest="zones",
+        help="Process only specified zone(s); can be repeated (default: all zones)",
     )
 
     parser.add_argument(
@@ -91,6 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--checksum",
         action="store_true",
         help="Print a SHA-256 checksum of the plan",
+    )
+    plan_parser.add_argument(
+        "--exit-code",
+        action="store_true",
+        help="Exit with 2 when changes are detected (useful for CI)",
     )
 
     sync_parser = sub.add_parser("sync", help="Apply changes to Cloudflare")
@@ -156,12 +163,13 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _get_zones(config: Config, zone_filter: str | None) -> list[str]:
+def _get_zones(config: Config, zone_filter: list[str] | None) -> list[str]:
     """Return the list of zone names to process. Raises ConfigError if filter is invalid."""
     if zone_filter:
-        if zone_filter not in config.zones:
-            raise ConfigError(f"Zone {zone_filter!r} not found in config")
-        return [zone_filter]
+        for zone in zone_filter:
+            if zone not in config.zones:
+                raise ConfigError(f"Zone {zone!r} not found in config")
+        return zone_filter
     return list(config.zones.keys())
 
 
@@ -266,7 +274,9 @@ def _plan_single_zone(
     zone_cfg = config.zones[zone_name]
     desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
     cf_phases = _phase_filter_to_cf_phases(phase_filter)
-    current = provider.get_all_phase_rules(zone_cfg.zone_id, cf_phases=cf_phases)
+    current = provider.get_all_phase_rules(
+        zone_cfg.zone_id, zone_name=zone_name, cf_phases=cf_phases
+    )
 
     # Exclude phases that failed to fetch — planning against missing data
     # would incorrectly treat all existing rules as deletions.
@@ -340,7 +350,7 @@ def _plan_zones(
 
 def _cmd_plan_or_compare(
     config: Config,
-    zone_filter: str | None,
+    zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     checksum: bool = False,
     *,
@@ -365,23 +375,24 @@ def _cmd_plan_or_compare(
 
 def cmd_plan(
     config: Config,
-    zone_filter: str | None,
+    zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     checksum: bool = False,
+    exit_code: bool = False,
 ) -> int:
-    """Run the plan command. Returns 0 (no changes), 1 (error), or 2 (changes detected)."""
+    """Run the plan command. Returns 0 by default, or 2 with --exit-code."""
     return _cmd_plan_or_compare(
         config,
         zone_filter,
         phase_filter,
         checksum,
-        changes_exit_code=2,
+        changes_exit_code=2 if exit_code else 0,
     )
 
 
 def cmd_compare(
     config: Config,
-    zone_filter: str | None,
+    zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     checksum: bool = False,
 ) -> int:
@@ -397,7 +408,7 @@ def cmd_compare(
 
 def cmd_report(
     config: Config,
-    zone_filter: str | None,
+    zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     report_format: str = "csv",
 ) -> int:
@@ -480,9 +491,16 @@ def _apply_zone_changes(
             log.info("  %s: applying %d change(s)", friendly_name, n_changes)
             phase_rules = desired.get(friendly_name, [])
             payload = prepare_desired_rules(phase_rules, phase)
-            log.debug("  PUT %s zone=%s rules=%d", phase.cf_phase, zone_cfg.zone_id, len(payload))
+            log.debug(
+                "  PUT %s zone=%s rules=%d",
+                phase.cf_phase,
+                f"{zp.zone_name} (ID={zone_cfg.zone_id})",
+                len(payload),
+            )
             try:
-                provider.put_phase_rules(zone_cfg.zone_id, phase.cf_phase, payload)
+                provider.put_phase_rules(
+                    zone_cfg.zone_id, phase.cf_phase, payload, zone_name=zp.zone_name
+                )
             except (AuthenticationError, PermissionDeniedError) as e:
                 log.error(
                     "Authentication/permission error syncing %s for %s: %s",
@@ -510,7 +528,7 @@ def _apply_zone_changes(
 
 def cmd_sync(
     config: Config,
-    zone_filter: str | None,
+    zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     checksum: str | None = None,
     force: bool = False,
@@ -551,7 +569,7 @@ def cmd_sync(
 
 def cmd_validate(
     config: Config,
-    zone_filter: str | None,
+    zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     output_file: str | None = None,
 ) -> int:
@@ -607,7 +625,7 @@ def cmd_validate(
     return 0
 
 
-def cmd_dump(config: Config, zone_filter: str | None, output_dir: str | None) -> int:
+def cmd_dump(config: Config, zone_filter: list[str] | None, output_dir: str | None) -> int:
     """Run the dump command. Returns exit code."""
     provider = _init_provider(config)
     zone_names = _get_zones(config, zone_filter)
@@ -616,7 +634,7 @@ def cmd_dump(config: Config, zone_filter: str | None, output_dir: str | None) ->
     def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
         zone_cfg = config.zones[zone_name]
         try:
-            rules = provider.get_all_phase_rules(zone_cfg.zone_id)
+            rules = provider.get_all_phase_rules(zone_cfg.zone_id, zone_name=zone_name)
         except (AuthenticationError, PermissionDeniedError):
             raise
         except (APIError, APIConnectionError) as e:
@@ -633,8 +651,6 @@ def cmd_dump(config: Config, zone_filter: str | None, output_dir: str | None) ->
             had_errors = True
         elif result:
             log.info("Dumped %s → %s", zone_name, result)
-        else:
-            log.info("No rules found for %s", zone_name)
 
     return 1 if had_errors else 0
 
@@ -702,16 +718,17 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(
                 cmd_plan(
                     config,
-                    args.zone,
+                    args.zones,
                     phase_filter=phase_filter,
                     checksum=args.checksum,
+                    exit_code=args.exit_code,
                 )
             )
         elif args.command == "sync":
             sys.exit(
                 cmd_sync(
                     config,
-                    args.zone,
+                    args.zones,
                     phase_filter=phase_filter,
                     checksum=args.checksum,
                     force=args.force,
@@ -721,7 +738,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(
                 cmd_compare(
                     config,
-                    args.zone,
+                    args.zones,
                     phase_filter=phase_filter,
                     checksum=args.checksum,
                 )
@@ -730,7 +747,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(
                 cmd_report(
                     config,
-                    args.zone,
+                    args.zones,
                     phase_filter=phase_filter,
                     report_format=args.report_format,
                 )
@@ -739,13 +756,13 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(
                 cmd_validate(
                     config,
-                    args.zone,
+                    args.zones,
                     phase_filter=phase_filter,
                     output_file=args.validate_output,
                 )
             )
         elif args.command == "dump":
-            sys.exit(cmd_dump(config, args.zone, args.output_dir))
+            sys.exit(cmd_dump(config, args.zones, args.output_dir))
     except ConfigError as e:
         log.error("Config error: %s", e)
         sys.exit(1)
