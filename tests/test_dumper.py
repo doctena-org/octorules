@@ -25,6 +25,20 @@ class TestCleanRule:
         assert "action" not in cleaned  # matches default
         assert cleaned["expression"] == "true"
 
+    def test_ref_and_description_come_first(self):
+        rule = {
+            "action": "block",
+            "action_parameters": {"status_code": 403},
+            "expression": "true",
+            "enabled": True,
+            "ref": "my-rule",
+            "description": "Block bad traffic",
+        }
+        cleaned = _clean_rule(rule, None)
+        keys = list(cleaned.keys())
+        assert keys[0] == "ref"
+        assert keys[1] == "description"
+
     def test_keeps_non_default_action(self):
         rule = {"ref": "r1", "expression": "true", "action": "block"}
         cleaned = _clean_rule(rule, "redirect")
