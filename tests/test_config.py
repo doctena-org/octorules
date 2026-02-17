@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from octorules.config import Config, ConfigError, ZoneConfig, resolve_value, resolve_zone_ids
+from octorules.config import (
+    Config,
+    ConfigError,
+    ZoneConfig,
+    resolve_value,
+    resolve_zone_ids,
+    slugify,
+)
 from octorules.plan_output import PlanHtml, PlanJson, PlanText
 
 
@@ -800,3 +807,59 @@ class TestPlanOutputs:
         )
         with pytest.raises(ConfigError, match="'manager.plan_outputs' must be a mapping"):
             Config.from_file(config_file)
+
+
+class TestSlugify:
+    def test_simple_name(self):
+        assert slugify("Acme Corp") == "acme-corp"
+
+    def test_special_characters(self):
+        assert slugify("Doctena S.A.") == "doctena-s-a"
+
+    def test_already_slugified(self):
+        assert slugify("my-account") == "my-account"
+
+    def test_mixed_case_and_numbers(self):
+        assert slugify("My Account 123") == "my-account-123"
+
+    def test_leading_trailing_special(self):
+        assert slugify("--hello--") == "hello"
+
+    def test_empty_string(self):
+        assert slugify("") == ""
+
+    def test_only_special_chars(self):
+        assert slugify("...") == ""
+
+
+class TestLoadAccountRules:
+    def test_load_existing_file(self, tmp_config):
+        rules_dir = tmp_config.parent / "rules"
+        rules_file = rules_dir / "acme-corp.yaml"
+        rules_file.write_text(
+            "waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n    action: block\n"
+        )
+        config = Config.from_file(tmp_config)
+        rules = config.load_account_rules("Acme Corp")
+        assert "waf_custom_rules" in rules
+        assert rules["waf_custom_rules"][0]["ref"] == "w1"
+
+    def test_missing_file_returns_empty(self, tmp_config):
+        config = Config.from_file(tmp_config)
+        assert config.load_account_rules("Nonexistent Account") == {}
+
+    def test_missing_file_logs_debug(self, tmp_config, caplog):
+        import logging
+
+        config = Config.from_file(tmp_config)
+        with caplog.at_level(logging.DEBUG, logger="octorules"):
+            config.load_account_rules("Nonexistent Account")
+        assert "No rules file for account Nonexistent Account" in caplog.text
+
+    def test_non_dict_yaml_raises(self, tmp_config):
+        rules_dir = tmp_config.parent / "rules"
+        rules_file = rules_dir / "bad-account.yaml"
+        rules_file.write_text("- just\n- a\n- list\n")
+        config = Config.from_file(tmp_config)
+        with pytest.raises(ConfigError, match="not a YAML mapping"):
+            config.load_account_rules("Bad Account")

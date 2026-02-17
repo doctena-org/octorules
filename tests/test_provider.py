@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from octorules.provider import CloudflareProvider, _rule_to_dict
+from octorules.provider import CloudflareProvider, Scope, _rule_to_dict
 
 
 class MockRuleset:
@@ -45,6 +45,44 @@ class MockRuleIterableOnly:
         return iter(self._data.items())
 
 
+# Helper to create a zone scope for tests
+def _zs(zone_id: str = "zone-123", label: str = "") -> Scope:
+    return Scope(zone_id=zone_id, label=label)
+
+
+class TestScope:
+    """Tests for the Scope dataclass."""
+
+    def test_zone_api_kwargs(self):
+        scope = Scope(zone_id="z123")
+        assert scope.api_kwargs == {"zone_id": "z123"}
+
+    def test_account_api_kwargs(self):
+        scope = Scope(account_id="a456")
+        assert scope.api_kwargs == {"account_id": "a456"}
+
+    def test_account_takes_priority(self):
+        scope = Scope(zone_id="z123", account_id="a456")
+        assert scope.api_kwargs == {"account_id": "a456"}
+
+    def test_no_id_raises(self):
+        scope = Scope()
+        with pytest.raises(ValueError, match="either zone_id or account_id"):
+            scope.api_kwargs
+
+    def test_is_account_true(self):
+        scope = Scope(account_id="a456")
+        assert scope.is_account is True
+
+    def test_is_account_false(self):
+        scope = Scope(zone_id="z123")
+        assert scope.is_account is False
+
+    def test_label(self):
+        scope = Scope(zone_id="z123", label="example.com")
+        assert scope.label == "example.com"
+
+
 class TestRuleToDict:
     def test_dict_passthrough(self):
         rule = {"ref": "r1", "expression": "true"}
@@ -72,12 +110,26 @@ class TestCloudflareProvider:
             rules=[{"ref": "r1", "expression": "true", "action": "redirect"}]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert len(rules) == 1
         assert rules[0]["ref"] == "r1"
         mock_cf_client.rulesets.phases.get.assert_called_once_with(
             "http_request_dynamic_redirect",
             zone_id="zone-123",
+        )
+
+    def test_get_phase_rules_account_scope(self, mock_cf_client):
+        """Account scope should pass account_id to SDK."""
+        mock_cf_client.rulesets.phases.get.return_value = MockRuleset(
+            rules=[{"ref": "r1", "expression": "true", "action": "block"}]
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123", label="My Account")
+        rules = provider.get_phase_rules(scope, "http_request_firewall_custom")
+        assert len(rules) == 1
+        mock_cf_client.rulesets.phases.get.assert_called_once_with(
+            "http_request_firewall_custom",
+            account_id="acct-123",
         )
 
     def test_get_phase_rules_not_found(self, mock_cf_client):
@@ -91,13 +143,13 @@ class TestCloudflareProvider:
             body=None,
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules == []
 
     def test_get_phase_rules_empty_ruleset(self, mock_cf_client):
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=None)
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules == []
 
     def test_get_phase_rules_multiple(self, mock_cf_client):
@@ -108,7 +160,7 @@ class TestCloudflareProvider:
             ]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert len(rules) == 2
         assert rules[0]["ref"] == "r1"
         assert rules[1]["ref"] == "r2"
@@ -118,7 +170,7 @@ class TestCloudflareProvider:
             rules=[MockRule({"ref": "r1", "expression": "true", "action": "redirect"})]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert len(rules) == 1
         assert rules[0]["ref"] == "r1"
 
@@ -126,7 +178,7 @@ class TestCloudflareProvider:
         rules = [{"ref": "r1", "expression": "true", "action": "redirect"}]
         mock_cf_client.rulesets.phases.update.return_value = MockRuleset(rules=list(rules))
         provider = CloudflareProvider("token", client=mock_cf_client)
-        count = provider.put_phase_rules("zone-123", "http_request_dynamic_redirect", rules)
+        count = provider.put_phase_rules(_zs(), "http_request_dynamic_redirect", rules)
         assert count == 1
         mock_cf_client.rulesets.phases.update.assert_called_once_with(
             "http_request_dynamic_redirect",
@@ -134,10 +186,24 @@ class TestCloudflareProvider:
             rules=rules,
         )
 
+    def test_put_phase_rules_account_scope(self, mock_cf_client):
+        """Account scope should pass account_id to SDK."""
+        rules = [{"ref": "r1", "expression": "true", "action": "block"}]
+        mock_cf_client.rulesets.phases.update.return_value = MockRuleset(rules=list(rules))
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123", label="My Account")
+        count = provider.put_phase_rules(scope, "http_request_firewall_custom", rules)
+        assert count == 1
+        mock_cf_client.rulesets.phases.update.assert_called_once_with(
+            "http_request_firewall_custom",
+            account_id="acct-123",
+            rules=rules,
+        )
+
     def test_put_phase_rules_empty(self, mock_cf_client):
         mock_cf_client.rulesets.phases.update.return_value = MockRuleset(rules=[])
         provider = CloudflareProvider("token", client=mock_cf_client)
-        count = provider.put_phase_rules("zone-123", "http_request_dynamic_redirect", [])
+        count = provider.put_phase_rules(_zs(), "http_request_dynamic_redirect", [])
         assert count == 0
         mock_cf_client.rulesets.phases.update.assert_called_once_with(
             "http_request_dynamic_redirect",
@@ -146,7 +212,7 @@ class TestCloudflareProvider:
         )
 
     def test_get_all_phase_rules(self, mock_cf_client):
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             if cf_phase == "http_request_dynamic_redirect":
                 return MockRuleset(
                     rules=[{"ref": "r1", "expression": "true", "action": "redirect"}]
@@ -159,12 +225,12 @@ class TestCloudflareProvider:
 
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         assert "http_request_dynamic_redirect" in result
         assert len(result) == 1
 
     def test_get_all_phase_rules_multiple(self, mock_cf_client):
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             if cf_phase == "http_request_dynamic_redirect":
                 return MockRuleset(
                     rules=[{"ref": "r1", "expression": "true", "action": "redirect"}]
@@ -181,7 +247,7 @@ class TestCloudflareProvider:
 
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         assert "http_request_dynamic_redirect" in result
         assert "http_request_cache_settings" in result
         assert len(result) == 2
@@ -195,7 +261,7 @@ class TestCloudflareProvider:
             message="Not Found", response=mock_response, body=None
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         assert result == {}
 
     @patch("octorules.provider.cloudflare.Cloudflare")
@@ -228,8 +294,8 @@ class TestCloudflareProvider:
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
         with caplog.at_level(logging.DEBUG, logger="octorules"):
-            provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
-        assert "GET rulesets/phases/http_request_dynamic_redirect zone=" in caplog.text
+            provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
+        assert "GET rulesets/phases/http_request_dynamic_redirect" in caplog.text
         assert "zone-123" in caplog.text
 
     def test_get_all_phase_rules_partial_failure(self, mock_cf_client, caplog):
@@ -238,7 +304,7 @@ class TestCloudflareProvider:
 
         call_count = 0
 
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             nonlocal call_count
             call_count += 1
             if cf_phase == "http_request_dynamic_redirect":
@@ -256,14 +322,14 @@ class TestCloudflareProvider:
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            result = provider.get_all_phase_rules("zone-123")
+            result = provider.get_all_phase_rules(_zs())
         # redirect phase succeeded, cache phase failed, rest were 404
         assert "http_request_dynamic_redirect" in result
         assert "http_request_cache_settings" not in result
         assert "Failed to fetch phase" in caplog.text
         assert "http_request_cache_settings" in caplog.text
-        # All 11 phases should have been attempted
-        assert call_count == 11
+        # All 12 phases should have been attempted
+        assert call_count == 12
 
     def test_get_all_phase_rules_filtered(self, mock_cf_client):
         """When cf_phases is given, only those phases should be fetched."""
@@ -271,9 +337,7 @@ class TestCloudflareProvider:
             rules=[{"ref": "r1", "expression": "true", "action": "redirect"}]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules(
-            "zone-123", cf_phases=["http_request_dynamic_redirect"]
-        )
+        result = provider.get_all_phase_rules(_zs(), cf_phases=["http_request_dynamic_redirect"])
         assert "http_request_dynamic_redirect" in result
         # Should only have been called once (for the single filtered phase)
         mock_cf_client.rulesets.phases.get.assert_called_once()
@@ -288,16 +352,16 @@ class TestCloudflareProvider:
             message="Not Found", response=mock_response, body=None
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        provider.get_all_phase_rules("zone-123", cf_phases=None)
-        # Should have been called for all 11 phases
-        assert mock_cf_client.rulesets.phases.get.call_count == 11
+        provider.get_all_phase_rules(_zs(), cf_phases=None)
+        # Should have been called for all 12 phases
+        assert mock_cf_client.rulesets.phases.get.call_count == 12
 
     def test_put_phase_rules_logs_debug(self, mock_cf_client, caplog):
         rules = [{"ref": "r1"}, {"ref": "r2"}]
         mock_cf_client.rulesets.phases.update.return_value = MockRuleset(rules=list(rules))
         provider = CloudflareProvider("token", client=mock_cf_client)
         with caplog.at_level(logging.DEBUG, logger="octorules"):
-            provider.put_phase_rules("zone-123", "http_request_dynamic_redirect", rules)
+            provider.put_phase_rules(_zs(), "http_request_dynamic_redirect", rules)
         assert "PUT rulesets/phases/http_request_dynamic_redirect" in caplog.text
         assert "zone-123" in caplog.text
         assert "rules=2" in caplog.text
@@ -310,7 +374,7 @@ class TestCloudflareProvider:
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            count = provider.put_phase_rules("zone-123", "http_request_dynamic_redirect", rules)
+            count = provider.put_phase_rules(_zs(), "http_request_dynamic_redirect", rules)
         assert count == 1
         assert "sent 2 rule(s) but response contains 1" in caplog.text
 
@@ -320,7 +384,7 @@ class TestCloudflareProvider:
         mock_cf_client.rulesets.phases.update.return_value = MockRuleset(rules=None)
         provider = CloudflareProvider("token", client=mock_cf_client)
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            count = provider.put_phase_rules("zone-123", "http_request_dynamic_redirect", rules)
+            count = provider.put_phase_rules(_zs(), "http_request_dynamic_redirect", rules)
         assert count == 0
         assert "sent 1 rule(s) but response contains 0" in caplog.text
 
@@ -334,10 +398,9 @@ class TestCloudflareProvider:
             message="Invalid API token", response=mock_response, body=None
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        import pytest
 
         with pytest.raises(AuthenticationError):
-            provider.get_all_phase_rules("zone-123")
+            provider.get_all_phase_rules(_zs())
 
     def test_get_all_phase_rules_permission_error_propagates(self, mock_cf_client):
         """PermissionDeniedError should propagate immediately, not be caught."""
@@ -349,16 +412,15 @@ class TestCloudflareProvider:
             message="Missing zone permission", response=mock_response, body=None
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        import pytest
 
         with pytest.raises(PermissionDeniedError):
-            provider.get_all_phase_rules("zone-123")
+            provider.get_all_phase_rules(_zs())
 
     def test_get_all_phase_rules_failed_phases_tracked(self, mock_cf_client):
         """Transient errors should be tracked in result.failed_phases."""
         from cloudflare import APIError, NotFoundError
 
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             if cf_phase == "http_request_dynamic_redirect":
                 return MockRuleset(
                     rules=[{"ref": "r1", "expression": "true", "action": "redirect"}]
@@ -371,7 +433,7 @@ class TestCloudflareProvider:
 
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         assert "http_request_dynamic_redirect" in result
         assert "http_request_cache_settings" not in result
         assert "http_request_cache_settings" in result.failed_phases
@@ -386,7 +448,7 @@ class TestCloudflareProvider:
             message="Not Found", response=mock_response, body=None
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         assert result.failed_phases == []
 
 
@@ -407,7 +469,7 @@ class TestCFApiResilience:
             ]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules[0]["risk_score"] == 0.75
         assert rules[0]["deployment_id"] == "dep-123"
 
@@ -415,7 +477,7 @@ class TestCFApiResilience:
         """CF returning empty rules list (not None) should give empty list."""
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[])
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules == []
 
     def test_model_dump_with_extra_fields(self, mock_cf_client):
@@ -431,7 +493,7 @@ class TestCFApiResilience:
         )
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[rule])
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules[0]["new_cf_field"] == "surprise"
         assert "risk_score" not in rules[0]  # Excluded by exclude_none
 
@@ -451,7 +513,7 @@ class TestCFApiResilience:
         )
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[rule])
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         ap = rules[0]["action_parameters"]
         assert ap["from_value"]["target_url"]["value"] == "https://example.com"
         assert ap["status_code"] == 301
@@ -469,7 +531,7 @@ class TestCFApiResilience:
         )
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[rule])
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules[0]["new_field"] == "value"
 
     def test_iterable_fallback_preserves_fields(self, mock_cf_client):
@@ -484,7 +546,7 @@ class TestCFApiResilience:
         )
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[rule])
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert rules[0]["unexpected"] == 42
 
     def test_mixed_rule_types_in_single_phase(self, mock_cf_client):
@@ -497,7 +559,7 @@ class TestCFApiResilience:
             ]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert len(rules) == 3
         assert all(isinstance(r, dict) for r in rules)
         assert [r["ref"] for r in rules] == ["r1", "r2", "r3"]
@@ -511,7 +573,7 @@ class TestCFApiResilience:
             ]
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
-        rules = provider.get_phase_rules("zone-123", "http_request_dynamic_redirect")
+        rules = provider.get_phase_rules(_zs(), "http_request_dynamic_redirect")
         assert len(rules) == 2
         assert "ref" not in rules[1]
 
@@ -521,7 +583,7 @@ class TestCFApiResilience:
 
         call_args = []
 
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             call_args.append(cf_phase)
             mock_response = MagicMock()
             mock_response.status_code = 404
@@ -529,7 +591,7 @@ class TestCFApiResilience:
 
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
-        provider.get_all_phase_rules("zone-123")
+        provider.get_all_phase_rules(_zs())
         # Should only call registered phases, not any hypothetical new ones
         from octorules.phases import ALL_CF_PHASES
 
@@ -539,7 +601,7 @@ class TestCFApiResilience:
         """A network error on one phase should not prevent fetching other phases."""
         from cloudflare import APIConnectionError, NotFoundError
 
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             if cf_phase == "http_request_dynamic_redirect":
                 raise APIConnectionError(request=MagicMock())
             if cf_phase == "http_request_cache_settings":
@@ -552,7 +614,7 @@ class TestCFApiResilience:
 
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         assert "http_request_dynamic_redirect" not in result
         assert "http_request_cache_settings" in result
 
@@ -560,7 +622,7 @@ class TestCFApiResilience:
         """A 500 error on one phase should not prevent fetching other phases."""
         from cloudflare import APIError, NotFoundError
 
-        def mock_get(cf_phase, zone_id):
+        def mock_get(cf_phase, **kwargs):
             if cf_phase == "http_request_dynamic_redirect":
                 raise APIError("Server Error", request=MagicMock(), body=None)
             if cf_phase == "http_request_cache_settings":
@@ -573,7 +635,7 @@ class TestCFApiResilience:
 
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules("zone-123")
+        result = provider.get_all_phase_rules(_zs())
         # Redirect failed, but cache succeeded
         assert "http_request_dynamic_redirect" not in result
         assert "http_request_cache_settings" in result
@@ -636,3 +698,46 @@ class TestResolveZoneId:
         provider = CloudflareProvider("token", client=mock_cf_client)
         with pytest.raises(APIError):
             provider.resolve_zone_id("example.com")
+
+    def test_stashes_account_info(self, mock_cf_client):
+        """resolve_zone_id should stash account info from the zone response."""
+        zone = MagicMock()
+        zone.name = "example.com"
+        zone.id = "aabbccdd" * 4
+        zone.account.id = "acct-123"
+        zone.account.name = "Doctena S.A."
+        mock_cf_client.zones.list.return_value = [zone]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("example.com")
+        assert provider.account_id == "acct-123"
+        assert provider.account_name == "Doctena S.A."
+
+    def test_stashes_account_only_once(self, mock_cf_client):
+        """Only the first resolution should stash account info."""
+        zone1 = MagicMock()
+        zone1.name = "a.com"
+        zone1.id = "id-a"
+        zone1.account.id = "acct-first"
+        zone1.account.name = "First Account"
+        zone2 = MagicMock()
+        zone2.name = "b.com"
+        zone2.id = "id-b"
+        zone2.account.id = "acct-second"
+        zone2.account.name = "Second Account"
+        mock_cf_client.zones.list.side_effect = [[zone1], [zone2]]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("a.com")
+        provider.resolve_zone_id("b.com")
+        assert provider.account_id == "acct-first"
+        assert provider.account_name == "First Account"
+
+    def test_no_account_attribute(self, mock_cf_client):
+        """Zone without account attribute should not crash."""
+        zone = MagicMock(spec=["name", "id"])
+        zone.name = "example.com"
+        zone.id = "aabbccdd" * 4
+        mock_cf_client.zones.list.return_value = [zone]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("example.com")
+        assert provider.account_id is None
+        assert provider.account_name is None

@@ -66,7 +66,7 @@ def dump_zone_rules(
                     explicit_start=True,
                 )
             else:
-                f.write("---\n")
+                f.write("--- {}\n")
                 log.info("No rules found for %s, created empty file", zone_name)
     except OSError as e:
         log.error("Failed to write dump file %s: %s", output_path, e)

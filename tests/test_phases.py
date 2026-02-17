@@ -16,8 +16,8 @@ from octorules.phases import (
 
 
 class TestPhaseRegistry:
-    def test_eleven_phases(self):
-        assert len(PHASES) == 11
+    def test_twelve_phases(self):
+        assert len(PHASES) == 12
 
     def test_all_friendly_names_unique(self):
         assert len(ALL_FRIENDLY_NAMES) == len(set(ALL_FRIENDLY_NAMES))

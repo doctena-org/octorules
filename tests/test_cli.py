@@ -27,6 +27,7 @@ from octorules.cli import (
 )
 from octorules.config import Config, ConfigError, ZoneConfig
 from octorules.plan_output import PlanJson, PlanText
+from octorules.provider import Scope
 
 
 @pytest.fixture
@@ -160,6 +161,26 @@ class TestBuildParser:
         args = parser.parse_args(["validate"])
         assert args.validate_output is None
 
+    def test_scope_default(self):
+        parser = build_parser()
+        args = parser.parse_args(["plan"])
+        assert args.scope == "all"
+
+    def test_scope_zones(self):
+        parser = build_parser()
+        args = parser.parse_args(["--scope", "zones", "plan"])
+        assert args.scope == "zones"
+
+    def test_scope_account(self):
+        parser = build_parser()
+        args = parser.parse_args(["--scope", "account", "plan"])
+        assert args.scope == "account"
+
+    def test_scope_invalid(self):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--scope", "invalid", "plan"])
+
 
 class TestGetZones:
     def test_all_zones(self, sample_config):
@@ -213,8 +234,7 @@ class TestCmdPlan:
         cmd_plan(sample_config, ["example.com"])
         # Should only call get_all_phase_rules once (for the filtered zone)
         mock_provider_cls.return_value.get_all_phase_rules.assert_called_once_with(
-            "zone-abc",
-            zone_name="example.com",
+            Scope(zone_id="zone-abc", label="example.com"),
             cf_phases=None,
         )
 
@@ -250,7 +270,7 @@ class TestCmdSync:
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
         call_args = mock_provider_cls.return_value.put_phase_rules.call_args
-        assert call_args[0][0] == "zone-abc"
+        assert call_args[0][0] == Scope(zone_id="zone-abc", label="example.com")
         assert call_args[0][1] == "http_request_dynamic_redirect"
         # Verify the payload has the injected action
         payload = call_args[0][2]
@@ -435,7 +455,8 @@ class TestCmdSync:
         with caplog.at_level(logging.DEBUG, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
-        assert "PUT http_request_dynamic_redirect zone=example.com (ID=zone-abc)" in caplog.text
+        assert "PUT http_request_dynamic_redirect" in caplog.text
+        assert "zone_id=zone-abc" in caplog.text
         assert "rules=1" in caplog.text
 
     @patch("octorules.cli.CloudflareProvider")
@@ -462,7 +483,7 @@ class TestCmdDump:
         assert result == 0
         assert "Dumped example.com" in caplog.text
         dumped = sample_config.rules_dir / "example.com.yaml"
-        assert dumped.read_text() == "---\n"
+        assert dumped.read_text() == "--- {}\n"
 
     @patch("octorules.cli.CloudflareProvider")
     def test_dump_writes_file(self, mock_provider_cls, sample_config, caplog):
@@ -505,8 +526,8 @@ class TestCmdDump:
             },
         )
 
-        def mock_get_all(zone_id, **kwargs):
-            if zone_id == "zone-fail":
+        def mock_get_all(scope, **kwargs):
+            if scope.zone_id == "zone-fail":
                 raise APIError("Forbidden", request=MagicMock(), body=None)
             return {
                 "http_request_dynamic_redirect": [
@@ -676,8 +697,7 @@ class TestCmdCompare:
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_compare(sample_config, ["example.com"])
         mock_provider_cls.return_value.get_all_phase_rules.assert_called_once_with(
-            "zone-abc",
-            zone_name="example.com",
+            Scope(zone_id="zone-abc", label="example.com"),
             cf_phases=None,
         )
 
@@ -779,8 +799,7 @@ class TestCmdReport:
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_report(sample_config, ["example.com"], report_format="csv")
         mock_provider_cls.return_value.get_all_phase_rules.assert_called_once_with(
-            "zone-abc",
-            zone_name="example.com",
+            Scope(zone_id="zone-abc", label="example.com"),
             cf_phases=None,
         )
 
@@ -1055,7 +1074,7 @@ class TestAlwaysDryRun:
         # Only live.com should have been applied
         calls = mock_provider_cls.return_value.put_phase_rules.call_args_list
         assert len(calls) == 1
-        assert calls[0][0][0] == "zone-live"
+        assert calls[0][0][0] == Scope(zone_id="zone-live", label="live.com")
         assert "dry.com" in caplog.text
         assert "always_dry_run" in caplog.text
 
@@ -1207,6 +1226,7 @@ class TestPhaseFiltering:
         # Only one PUT call (for redirect_rules, not cache_rules)
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
         call_args = mock_provider_cls.return_value.put_phase_rules.call_args
+        assert call_args[0][0] == Scope(zone_id="zone-abc", label="example.com")
         assert call_args[0][1] == "http_request_dynamic_redirect"
 
     def test_cmd_validate_with_phase_filter(self, sample_config, caplog):
@@ -1670,8 +1690,8 @@ class TestPlanErrorIsolation:
             },
         )
 
-        def mock_get_all(zone_id, **kwargs):
-            if zone_id == "zone-fail":
+        def mock_get_all(scope, **kwargs):
+            if scope.zone_id == "zone-fail":
                 raise APIError("Forbidden", request=MagicMock(), body=None)
             return {}
 
@@ -1701,8 +1721,8 @@ class TestPlanErrorIsolation:
             },
         )
 
-        def mock_get_all(zone_id, **kwargs):
-            if zone_id == "zone-fail":
+        def mock_get_all(scope, **kwargs):
+            if scope.zone_id == "zone-fail":
                 raise APIError("Forbidden", request=MagicMock(), body=None)
             return {}
 
@@ -1731,8 +1751,8 @@ class TestPlanErrorIsolation:
             },
         )
 
-        def mock_get_all(zone_id, **kwargs):
-            if zone_id == "zone-fail":
+        def mock_get_all(scope, **kwargs):
+            if scope.zone_id == "zone-fail":
                 raise APIError("Forbidden", request=MagicMock(), body=None)
             return {}
 

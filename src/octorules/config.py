@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -66,6 +67,11 @@ def resolve_value(value: str) -> str:
             raise ConfigError(f"Environment variable {env_var!r} is not set (from {value!r})")
         return result
     return value
+
+
+def slugify(name: str) -> str:
+    """Convert a name to a filesystem-safe slug."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 def _validate_safety(
@@ -303,6 +309,18 @@ class Config:
             raise ConfigError(
                 f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
             )
+        return data
+
+    def load_account_rules(self, account_name: str) -> dict:
+        """Load the rules YAML file for an account (by slugified name)."""
+        slug = slugify(account_name)
+        rules_file = self.rules_dir / f"{slug}.yaml"
+        if not rules_file.exists():
+            log.debug("No rules file for account %s (expected %s)", account_name, rules_file)
+            return {}
+        data = _yaml_load(rules_file)
+        if not isinstance(data, dict):
+            raise ConfigError(f"Account rules file {rules_file} is not a YAML mapping")
         return data
 
 

@@ -145,7 +145,7 @@ class TestDumpZoneRules:
     def test_dump_empty_rules(self, tmp_path):
         result = dump_zone_rules("example.com", {}, tmp_path)
         assert result is not None
-        assert result.read_text() == "---\n"
+        assert result.read_text() == "--- {}\n"
 
     def test_dump_unknown_phase_skipped(self, tmp_path):
         rules = {
@@ -153,7 +153,7 @@ class TestDumpZoneRules:
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         assert result is not None
-        assert result.read_text() == "---\n"
+        assert result.read_text() == "--- {}\n"
 
     def test_dump_creates_output_dir(self, tmp_path):
         output_dir = tmp_path / "sub" / "dir"
@@ -332,7 +332,7 @@ class TestCFApiResilience:
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         assert result is not None
-        assert result.read_text() == "---\n"
+        assert result.read_text() == "--- {}\n"
 
     def test_action_parameters_with_nested_new_fields(self, tmp_path):
         """New nested fields in action_parameters are preserved."""
