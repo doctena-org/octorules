@@ -18,7 +18,7 @@ from cloudflare import (
 )
 
 from octorules import __version__
-from octorules.config import Config, ConfigError, resolve_zone_ids
+from octorules.config import Config, ConfigError, ZoneConfig, resolve_zone_ids, slugify
 from octorules.dumper import dump_zone_rules
 from octorules.formatter import build_report_data, print_report
 from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME, get_phase, unknown_phase_message
@@ -32,7 +32,7 @@ from octorules.planner import (
     prepare_desired_rules,
     warn_unknown_phase_keys,
 )
-from octorules.provider import CloudflareProvider
+from octorules.provider import CloudflareProvider, Scope
 
 log = logging.getLogger("octorules")
 
@@ -73,6 +73,13 @@ def build_parser() -> argparse.ArgumentParser:
             " (e.g. --phase redirect_rules --phase cache_rules)."
             " Also limits API calls to matching phases."
         ),
+    )
+
+    parser.add_argument(
+        "--scope",
+        choices=["all", "zones", "account"],
+        default="all",
+        help="Process zones only, account only, or both (default: all)",
     )
 
     parser.add_argument(
@@ -158,6 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
         validate_output=None,
         output_dir=None,
         report_format="csv",
+        scope="all",
     )
 
     return parser
@@ -272,11 +280,10 @@ def _plan_single_zone(
 ) -> tuple[str, ZonePlan, dict, dict]:
     """Plan a single zone. Returns (zone_name, zone_plan, desired, current)."""
     zone_cfg = config.zones[zone_name]
+    scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
     desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
     cf_phases = _phase_filter_to_cf_phases(phase_filter)
-    current = provider.get_all_phase_rules(
-        zone_cfg.zone_id, zone_name=zone_name, cf_phases=cf_phases
-    )
+    current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
 
     # Exclude phases that failed to fetch — planning against missing data
     # would incorrectly treat all existing rules as deletions.
@@ -348,6 +355,57 @@ def _plan_zones(
     return zone_plans, desired_by_zone, current_by_zone, failed_zones
 
 
+def _plan_account(
+    config: Config,
+    provider: CloudflareProvider,
+    phase_filter: list[str] | None,
+) -> tuple[ZonePlan | None, dict, dict]:
+    """Plan account-level rulesets. Returns (zone_plan, desired, current) or (None, {}, {})."""
+    acct_id = provider.account_id
+    acct_name = provider.account_name
+    if not isinstance(acct_id, str) or not isinstance(acct_name, str):
+        log.debug("No account info available, skipping account planning")
+        return None, {}, {}
+
+    account_label = slugify(acct_name)
+    scope = Scope(account_id=provider.account_id, label=provider.account_name)
+    desired = _filter_desired_by_phase(
+        config.load_account_rules(provider.account_name), phase_filter
+    )
+
+    cf_phases = _phase_filter_to_cf_phases(phase_filter)
+    try:
+        current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
+    except (AuthenticationError, PermissionDeniedError):
+        raise
+    except (APIError, APIConnectionError) as e:
+        log.error("Failed to plan account %s: %s", provider.account_name, _format_api_error(e))
+        return None, {}, {}
+
+    if not desired and not current:
+        log.debug("No account rules to manage for %s", provider.account_name)
+        return None, {}, {}
+
+    # Exclude failed phases
+    failed_phases = getattr(current, "failed_phases", [])
+    if failed_phases:
+        failed_friendly = {
+            PHASE_BY_CF[cf].friendly_name for cf in failed_phases if cf in PHASE_BY_CF
+        }
+        skipped = failed_friendly & set(desired.keys())
+        for name in sorted(skipped):
+            log.warning(
+                "Skipping %s for account %s: failed to fetch current state",
+                name,
+                provider.account_name,
+            )
+        if skipped:
+            desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+
+    zp = plan_zone(account_label, desired, current, allow_unmanaged=True)
+    return zp, desired, current
+
+
 def _cmd_plan_or_compare(
     config: Config,
     zone_filter: list[str] | None,
@@ -355,11 +413,23 @@ def _cmd_plan_or_compare(
     checksum: bool = False,
     *,
     changes_exit_code: int = 2,
+    scope_filter: str = "all",
 ) -> int:
     """Shared implementation for plan and compare commands."""
     provider = _init_provider(config)
-    zone_names = _get_zones(config, zone_filter)
-    zone_plans, _, _, failed = _plan_zones(config, provider, zone_names, phase_filter)
+    failed: list[str] = []
+
+    zone_plans: list[ZonePlan] = []
+    if scope_filter in ("all", "zones"):
+        zone_names = _get_zones(config, zone_filter)
+        zp_list, _, _, zone_failed = _plan_zones(config, provider, zone_names, phase_filter)
+        zone_plans.extend(zp_list)
+        failed.extend(zone_failed)
+
+    if scope_filter in ("all", "account"):
+        acct_plan, _, _ = _plan_account(config, provider, phase_filter)
+        if acct_plan is not None:
+            zone_plans.append(acct_plan)
 
     if not _emit_plan_outputs(config, zone_plans):
         return 1
@@ -379,6 +449,7 @@ def cmd_plan(
     phase_filter: list[str] | None = None,
     checksum: bool = False,
     exit_code: bool = False,
+    scope_filter: str = "all",
 ) -> int:
     """Run the plan command. Returns 0 by default, or 2 with --exit-code."""
     return _cmd_plan_or_compare(
@@ -387,6 +458,7 @@ def cmd_plan(
         phase_filter,
         checksum,
         changes_exit_code=2 if exit_code else 0,
+        scope_filter=scope_filter,
     )
 
 
@@ -395,6 +467,7 @@ def cmd_compare(
     zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     checksum: bool = False,
+    scope_filter: str = "all",
 ) -> int:
     """Run the compare command. Returns 0 if identical, 1 if differences."""
     return _cmd_plan_or_compare(
@@ -403,6 +476,7 @@ def cmd_compare(
         phase_filter,
         checksum,
         changes_exit_code=1,
+        scope_filter=scope_filter,
     )
 
 
@@ -411,13 +485,32 @@ def cmd_report(
     zone_filter: list[str] | None,
     phase_filter: list[str] | None = None,
     report_format: str = "csv",
+    scope_filter: str = "all",
 ) -> int:
     """Run the report command. Returns 0 normally, 1 if any zone failed."""
     provider = _init_provider(config)
-    zone_names = _get_zones(config, zone_filter)
-    zone_plans, desired_by_zone, current_by_zone, failed = _plan_zones(
-        config, provider, zone_names, phase_filter
-    )
+    failed: list[str] = []
+
+    zone_plans: list[ZonePlan] = []
+    desired_by_zone: dict[str, dict] = {}
+    current_by_zone: dict[str, dict] = {}
+
+    if scope_filter in ("all", "zones"):
+        zone_names = _get_zones(config, zone_filter)
+        zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
+            config, provider, zone_names, phase_filter
+        )
+        zone_plans.extend(zp_list)
+        desired_by_zone.update(d_by_z)
+        current_by_zone.update(c_by_z)
+        failed.extend(zone_failed)
+
+    if scope_filter in ("all", "account"):
+        acct_plan, acct_desired, acct_current = _plan_account(config, provider, phase_filter)
+        if acct_plan is not None:
+            zone_plans.append(acct_plan)
+            desired_by_zone[acct_plan.zone_name] = acct_desired
+            current_by_zone[acct_plan.zone_name] = acct_current
 
     report_data = build_report_data(zone_plans, desired_by_zone, current_by_zone)
     print_report(report_data, fmt=report_format)
@@ -425,10 +518,16 @@ def cmd_report(
     return 1 if failed else 0
 
 
+def _make_account_zone_config(config: Config) -> ZoneConfig:
+    """Build a synthetic ZoneConfig with provider-level defaults for account scope."""
+    return ZoneConfig(name="__account__")
+
+
 def _check_safety_violations(
     zone_plans: list[ZonePlan],
     current_by_zone: dict[str, dict],
     config: Config,
+    account_label: str | None = None,
 ) -> list:
     """Check all zone plans against safety thresholds.
 
@@ -439,8 +538,13 @@ def _check_safety_violations(
     for zp in zone_plans:
         if not zp.has_changes:
             continue
-        zone_cfg = config.zones[zp.zone_name]
-        if zone_cfg.always_dry_run:
+        if zp.zone_name in config.zones:
+            zone_cfg = config.zones[zp.zone_name]
+            if zone_cfg.always_dry_run:
+                continue
+        elif account_label and zp.zone_name == account_label:
+            zone_cfg = _make_account_zone_config(config)
+        else:
             continue
         violations.extend(check_safety(zp, current_by_zone[zp.zone_name], zone_cfg))
     return violations
@@ -468,6 +572,7 @@ def _apply_zone_changes(
     desired_by_zone: dict[str, dict],
     config: Config,
     provider: CloudflareProvider,
+    scope_map: dict[str, Scope] | None = None,
 ) -> int:
     """Apply planned changes to Cloudflare. Returns exit code."""
     total = len(actionable)
@@ -475,7 +580,16 @@ def _apply_zone_changes(
 
     synced_phases: list[str] = []
     for i, zp in enumerate(actionable, 1):
-        zone_cfg = config.zones[zp.zone_name]
+        # Look up scope and zone_cfg
+        if zp.zone_name in config.zones:
+            zone_cfg = config.zones[zp.zone_name]
+            scope = Scope(zone_id=zone_cfg.zone_id, label=zp.zone_name)
+        elif scope_map and zp.zone_name in scope_map:
+            zone_cfg = _make_account_zone_config(config)
+            scope = scope_map[zp.zone_name]
+        else:
+            log.warning("[%d/%d] Skipping %s (no config found)", i, total, zp.zone_name)
+            continue
 
         if zone_cfg.always_dry_run:
             log.warning("[%d/%d] Skipping %s (always_dry_run is enabled)", i, total, zp.zone_name)
@@ -491,16 +605,18 @@ def _apply_zone_changes(
             log.info("  %s: applying %d change(s)", friendly_name, n_changes)
             phase_rules = desired.get(friendly_name, [])
             payload = prepare_desired_rules(phase_rules, phase)
+            kw = scope.api_kwargs
+            scope_key = next(iter(kw))
             log.debug(
-                "  PUT %s zone=%s rules=%d",
+                "  PUT %s %s (%s=%s) rules=%d",
                 phase.cf_phase,
-                f"{zp.zone_name} (ID={zone_cfg.zone_id})",
+                zp.zone_name,
+                scope_key,
+                kw[scope_key],
                 len(payload),
             )
             try:
-                provider.put_phase_rules(
-                    zone_cfg.zone_id, phase.cf_phase, payload, zone_name=zp.zone_name
-                )
+                provider.put_phase_rules(scope, phase.cf_phase, payload)
             except (AuthenticationError, PermissionDeniedError) as e:
                 log.error(
                     "Authentication/permission error syncing %s for %s: %s",
@@ -532,13 +648,38 @@ def cmd_sync(
     phase_filter: list[str] | None = None,
     checksum: str | None = None,
     force: bool = False,
+    scope_filter: str = "all",
 ) -> int:
     """Run the sync command. Returns exit code."""
     provider = _init_provider(config)
-    zone_names = _get_zones(config, zone_filter)
-    zone_plans, desired_by_zone, current_by_zone, failed = _plan_zones(
-        config, provider, zone_names, phase_filter
-    )
+    failed: list[str] = []
+
+    zone_plans: list[ZonePlan] = []
+    desired_by_zone: dict[str, dict] = {}
+    current_by_zone: dict[str, dict] = {}
+    scope_map: dict[str, Scope] = {}
+    account_label: str | None = None
+
+    if scope_filter in ("all", "zones"):
+        zone_names = _get_zones(config, zone_filter)
+        zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
+            config, provider, zone_names, phase_filter
+        )
+        zone_plans.extend(zp_list)
+        desired_by_zone.update(d_by_z)
+        current_by_zone.update(c_by_z)
+        failed.extend(zone_failed)
+
+    if scope_filter in ("all", "account"):
+        acct_plan, acct_desired, acct_current = _plan_account(config, provider, phase_filter)
+        if acct_plan is not None:
+            zone_plans.append(acct_plan)
+            desired_by_zone[acct_plan.zone_name] = acct_desired
+            current_by_zone[acct_plan.zone_name] = acct_current
+            account_label = acct_plan.zone_name
+            scope_map[acct_plan.zone_name] = Scope(
+                account_id=provider.account_id, label=provider.account_name
+            )
 
     if failed:
         log.error("Aborting sync: failed to plan %d zone(s)", len(failed))
@@ -558,13 +699,15 @@ def cmd_sync(
             return 1
 
     if not force:
-        violations = _check_safety_violations(zone_plans, current_by_zone, config)
+        violations = _check_safety_violations(
+            zone_plans, current_by_zone, config, account_label=account_label
+        )
         if violations:
             _log_safety_violations(violations)
             return 1
 
     actionable = [zp for zp in zone_plans if zp.has_changes]
-    return _apply_zone_changes(actionable, desired_by_zone, config, provider)
+    return _apply_zone_changes(actionable, desired_by_zone, config, provider, scope_map=scope_map)
 
 
 def cmd_validate(
@@ -625,32 +768,59 @@ def cmd_validate(
     return 0
 
 
-def cmd_dump(config: Config, zone_filter: list[str] | None, output_dir: str | None) -> int:
+def cmd_dump(
+    config: Config,
+    zone_filter: list[str] | None,
+    output_dir: str | None,
+    scope_filter: str = "all",
+) -> int:
     """Run the dump command. Returns exit code."""
     provider = _init_provider(config)
-    zone_names = _get_zones(config, zone_filter)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
+    had_errors = False
 
-    def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
-        zone_cfg = config.zones[zone_name]
+    if scope_filter in ("all", "zones"):
+        zone_names = _get_zones(config, zone_filter)
+
+        def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
+            zone_cfg = config.zones[zone_name]
+            scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
+            try:
+                rules = provider.get_all_phase_rules(scope)
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                return zone_name, None, _format_api_error(e)
+            result = dump_zone_rules(zone_name, rules, out_dir)
+            return zone_name, result, None
+
+        results = _map_ordered(_fetch_and_dump, zone_names, config.max_workers)
+
+        for zone_name, result, error in results:
+            if error:
+                log.error("Failed to dump %s: %s", zone_name, error)
+                had_errors = True
+            elif result:
+                log.info("Dumped %s → %s", zone_name, result)
+
+    if (
+        scope_filter in ("all", "account")
+        and isinstance(provider.account_id, str)
+        and isinstance(provider.account_name, str)
+    ):
+        account_label = slugify(provider.account_name)
+        scope = Scope(account_id=provider.account_id, label=provider.account_name)
         try:
-            rules = provider.get_all_phase_rules(zone_cfg.zone_id, zone_name=zone_name)
+            rules = provider.get_all_phase_rules(scope)
         except (AuthenticationError, PermissionDeniedError):
             raise
         except (APIError, APIConnectionError) as e:
-            return zone_name, None, _format_api_error(e)
-        result = dump_zone_rules(zone_name, rules, out_dir)
-        return zone_name, result, None
-
-    results = _map_ordered(_fetch_and_dump, zone_names, config.max_workers)
-
-    had_errors = False
-    for zone_name, result, error in results:
-        if error:
-            log.error("Failed to dump %s: %s", zone_name, error)
+            log.error("Failed to dump account %s: %s", provider.account_name, _format_api_error(e))
             had_errors = True
-        elif result:
-            log.info("Dumped %s → %s", zone_name, result)
+        else:
+            result = dump_zone_rules(account_label, rules, out_dir)
+            if result:
+                log.info("Dumped account %s → %s", provider.account_name, result)
 
     return 1 if had_errors else 0
 
@@ -722,6 +892,7 @@ def main(argv: list[str] | None = None) -> None:
                     phase_filter=phase_filter,
                     checksum=args.checksum,
                     exit_code=args.exit_code,
+                    scope_filter=args.scope,
                 )
             )
         elif args.command == "sync":
@@ -732,6 +903,7 @@ def main(argv: list[str] | None = None) -> None:
                     phase_filter=phase_filter,
                     checksum=args.checksum,
                     force=args.force,
+                    scope_filter=args.scope,
                 )
             )
         elif args.command == "compare":
@@ -741,6 +913,7 @@ def main(argv: list[str] | None = None) -> None:
                     args.zones,
                     phase_filter=phase_filter,
                     checksum=args.checksum,
+                    scope_filter=args.scope,
                 )
             )
         elif args.command == "report":
@@ -750,6 +923,7 @@ def main(argv: list[str] | None = None) -> None:
                     args.zones,
                     phase_filter=phase_filter,
                     report_format=args.report_format,
+                    scope_filter=args.scope,
                 )
             )
         elif args.command == "validate":
@@ -762,7 +936,7 @@ def main(argv: list[str] | None = None) -> None:
                 )
             )
         elif args.command == "dump":
-            sys.exit(cmd_dump(config, args.zones, args.output_dir))
+            sys.exit(cmd_dump(config, args.zones, args.output_dir, scope_filter=args.scope))
     except ConfigError as e:
         log.error("Config error: %s", e)
         sys.exit(1)

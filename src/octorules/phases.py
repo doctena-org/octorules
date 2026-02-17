@@ -24,6 +24,7 @@ PHASES: list[Phase] = [
     Phase("compression_rules", "http_response_compression", "compress_response"),
     Phase("custom_error_rules", "http_custom_errors", "serve_error"),
     Phase("waf_custom_rules", "http_request_firewall_custom", None),
+    Phase("waf_managed_exceptions", "http_request_firewall_managed", None),
     Phase("rate_limiting_rules", "http_ratelimit", None),
 ]
 

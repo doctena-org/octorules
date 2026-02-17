@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import cloudflare
 from cloudflare import (
@@ -19,11 +20,34 @@ from octorules.phases import ALL_CF_PHASES
 log = logging.getLogger("octorules")
 
 
-def _fmt_zone(zone_name: str, zone_id: str) -> str:
-    """Format zone for log messages: 'domain.tld (ID=zone_id)' or just zone_id."""
-    if zone_name:
-        return f"{zone_name} (ID={zone_id})"
-    return zone_id
+@dataclass
+class Scope:
+    zone_id: str | None = None
+    account_id: str | None = None
+    label: str = ""
+
+    @property
+    def api_kwargs(self) -> dict[str, str]:
+        if self.account_id:
+            return {"account_id": self.account_id}
+        if self.zone_id:
+            return {"zone_id": self.zone_id}
+        raise ValueError("Scope must have either zone_id or account_id")
+
+    @property
+    def is_account(self) -> bool:
+        return self.account_id is not None
+
+
+def _fmt_scope(scope: Scope) -> str:
+    """Format scope for log messages."""
+    if scope.label:
+        kw = scope.api_kwargs
+        key = next(iter(kw))
+        return f"{scope.label} ({key}={kw[key]})"
+    kw = scope.api_kwargs
+    key = next(iter(kw))
+    return f"{key}={kw[key]}"
 
 
 class PhaseRulesResult(dict):
@@ -58,11 +82,22 @@ class CloudflareProvider:
             if timeout is not None:
                 kwargs["timeout"] = timeout
             self._client = cloudflare.Cloudflare(**kwargs)
+        self._account_id: str | None = None
+        self._account_name: str | None = None
+
+    @property
+    def account_id(self) -> str | None:
+        return self._account_id
+
+    @property
+    def account_name(self) -> str | None:
+        return self._account_name
 
     def resolve_zone_id(self, zone_name: str) -> str:
         """Resolve a zone name to its Cloudflare zone ID.
 
         Raises ConfigError if zero or more than one zone matches.
+        Also stashes account info from the first successful resolution.
         """
         result = self._client.zones.list(name=zone_name)
         matches = [z for z in result if z.name == zone_name]
@@ -70,49 +105,51 @@ class CloudflareProvider:
             raise ConfigError(f"No zone found for {zone_name!r}")
         if len(matches) > 1:
             raise ConfigError(f"Multiple zones found for {zone_name!r}")
-        return matches[0].id
+        zone = matches[0]
+        if getattr(zone, "account", None) and not self._account_id:
+            self._account_id = zone.account.id
+            self._account_name = zone.account.name
+        return zone.id
 
-    def get_phase_rules(self, zone_id: str, cf_phase: str, *, zone_name: str = "") -> list[dict]:
+    def get_phase_rules(self, scope: Scope, cf_phase: str) -> list[dict]:
         """Fetch rules for a single phase. Returns empty list if no ruleset exists."""
-        log.debug("GET rulesets/phases/%s zone=%s", cf_phase, _fmt_zone(zone_name, zone_id))
+        log.debug("GET rulesets/phases/%s %s", cf_phase, _fmt_scope(scope))
         try:
             ruleset = self._client.rulesets.phases.get(
                 cf_phase,
-                zone_id=zone_id,
+                **scope.api_kwargs,
             )
             rules = ruleset.rules or []
             return [_rule_to_dict(r) for r in rules]
         except NotFoundError:
             return []
 
-    def put_phase_rules(
-        self, zone_id: str, cf_phase: str, rules: list[dict], *, zone_name: str = ""
-    ) -> int:
+    def put_phase_rules(self, scope: Scope, cf_phase: str, rules: list[dict]) -> int:
         """Atomically replace all rules in a phase.
 
         Returns the number of rules in the response (for verification).
         """
-        zl = _fmt_zone(zone_name, zone_id)
-        log.debug("PUT rulesets/phases/%s zone=%s rules=%d", cf_phase, zl, len(rules))
+        sl = _fmt_scope(scope)
+        log.debug("PUT rulesets/phases/%s %s rules=%d", cf_phase, sl, len(rules))
         result = self._client.rulesets.phases.update(
             cf_phase,
-            zone_id=zone_id,
+            **scope.api_kwargs,
             rules=rules,
         )
         response_rules = result.rules or []
         response_count = len(response_rules)
         if response_count != len(rules):
             log.warning(
-                "PUT %s zone=%s: sent %d rule(s) but response contains %d",
+                "PUT %s %s: sent %d rule(s) but response contains %d",
                 cf_phase,
-                zl,
+                sl,
                 len(rules),
                 response_count,
             )
         return response_count
 
     def get_all_phase_rules(
-        self, zone_id: str, *, zone_name: str = "", cf_phases: list[str] | None = None
+        self, scope: Scope, *, cf_phases: list[str] | None = None
     ) -> PhaseRulesResult:
         """Fetch rules for supported phases. Returns cf_phase → rules mapping.
 
@@ -121,23 +158,22 @@ class CloudflareProvider:
         connection) are logged and the phase is recorded in ``result.failed_phases``.
 
         Args:
-            zone_id: The Cloudflare zone ID.
-            zone_name: The zone domain name (for human-readable log messages).
+            scope: The Scope (zone or account) to fetch rules for.
             cf_phases: Optional list of CF phase identifiers to fetch.
                        Defaults to all supported phases.
         """
         phases_to_fetch = cf_phases if cf_phases is not None else ALL_CF_PHASES
-        zl = _fmt_zone(zone_name, zone_id)
-        log.debug("Fetching %d phase(s) for zone=%s", len(phases_to_fetch), zl)
+        sl = _fmt_scope(scope)
+        log.debug("Fetching %d phase(s) for %s", len(phases_to_fetch), sl)
         rules: dict[str, list[dict]] = {}
         failed: list[str] = []
         for cf_phase in phases_to_fetch:
             try:
-                phase_rules = self.get_phase_rules(zone_id, cf_phase, zone_name=zone_name)
+                phase_rules = self.get_phase_rules(scope, cf_phase)
             except (AuthenticationError, PermissionDeniedError):
                 raise
             except (APIError, APIConnectionError) as e:
-                log.warning("Failed to fetch phase %s for zone=%s: %s", cf_phase, zl, e)
+                log.warning("Failed to fetch phase %s for %s: %s", cf_phase, sl, e)
                 failed.append(cf_phase)
                 continue
             if phase_rules:
