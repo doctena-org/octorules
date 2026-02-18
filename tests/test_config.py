@@ -405,6 +405,144 @@ class TestIncludeDirective:
         rules = config.load_zone_rules("example.com")
         assert rules["redirect_rules"][0]["ref"] == "common-r1"
 
+    def test_include_path_traversal_blocked(self, tmp_path):
+        """!include with path traversal (../) should raise ConfigError."""
+        (tmp_path / "secret.yaml").write_text("key: stolen\n")
+        sub_dir = tmp_path / "sub"
+        sub_dir.mkdir()
+        config_file = sub_dir / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: tok\nzones: {}\nextra: !include ../secret.yaml\n"
+        )
+        with pytest.raises(ConfigError, match="escapes base directory"):
+            Config.from_file(config_file)
+
+    def test_include_absolute_path_blocked(self, tmp_path):
+        """!include with absolute path outside base should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: tok\nzones: {}\nextra: !include /etc/passwd\n"
+        )
+        with pytest.raises(ConfigError, match="escapes base directory"):
+            Config.from_file(config_file)
+
+    def test_include_subdirectory_allowed(self, tmp_path):
+        """!include within a subdirectory should still work."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "data.yaml").write_text("value: ok\n")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: tok\nzones: {}\nextra: !include sub/data.yaml\n"
+        )
+        from octorules.config import _yaml_load
+
+        data = _yaml_load(config_file)
+        assert data["extra"]["value"] == "ok"
+
+
+class TestPathTraversal:
+    """Tests for path traversal protection in file loading."""
+
+    def test_zone_name_traversal_blocked(self, tmp_path):
+        """Zone name with ../ should raise ConfigError."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        with pytest.raises(ConfigError, match="resolves outside rules directory"):
+            config.load_zone_rules("../../etc/passwd")
+
+    def test_account_name_sanitized_by_slugify(self, tmp_path):
+        """Account name with traversal chars is sanitized by slugify."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        # slugify("../../etc/passwd") → "etc-passwd", which is safe
+        # Should not raise — just returns empty (no file found)
+        result = config.load_account_rules("../../etc/passwd")
+        assert result == {}
+
+
+class TestYamlLoaderEquivalence:
+    """Verify that our direct SafeLoader usage matches yaml.load() behavior."""
+
+    def test_plain_yaml_matches_yaml_load(self, tmp_path):
+        """Direct loader API produces same result as yaml.load for plain YAML."""
+        import yaml
+
+        from octorules.config import _make_include_loader, _yaml_load
+
+        content = "key: value\nlist:\n  - 1\n  - two\nnested:\n  a: true\n  b: null\n"
+        yaml_file = tmp_path / "test.yaml"
+        yaml_file.write_text(content)
+
+        loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
+        with open(yaml_file, encoding="utf-8") as f:
+            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+        actual = _yaml_load(yaml_file)
+        assert actual == expected
+
+    def test_include_matches_yaml_load(self, tmp_path):
+        """Direct loader API produces same result as yaml.load for !include."""
+        import yaml
+
+        from octorules.config import _make_include_loader, _yaml_load
+
+        (tmp_path / "fragment.yaml").write_text("- item1\n- item2\n")
+        yaml_file = tmp_path / "main.yaml"
+        yaml_file.write_text("data: !include fragment.yaml\nother: 42\n")
+
+        loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
+        with open(yaml_file, encoding="utf-8") as f:
+            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+        actual = _yaml_load(yaml_file)
+        assert actual == expected
+        assert actual["data"] == ["item1", "item2"]
+
+    def test_empty_file_matches_yaml_load(self, tmp_path):
+        """Empty YAML file returns None, same as yaml.load."""
+        import yaml
+
+        from octorules.config import _make_include_loader, _yaml_load
+
+        yaml_file = tmp_path / "empty.yaml"
+        yaml_file.write_text("")
+
+        loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
+        with open(yaml_file, encoding="utf-8") as f:
+            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+        actual = _yaml_load(yaml_file)
+        assert actual == expected
+        assert actual is None
+
+    def test_complex_types_match_yaml_load(self, tmp_path):
+        """Scalars, anchors, and multiline strings match yaml.load output."""
+        import yaml
+
+        from octorules.config import _make_include_loader, _yaml_load
+
+        content = (
+            "string: hello\n"
+            "integer: 42\n"
+            "float: 3.14\n"
+            "boolean: true\n"
+            "null_val: null\n"
+            "multiline: |\n"
+            "  line1\n"
+            "  line2\n"
+            "anchor: &ref\n"
+            "  x: 1\n"
+            "alias: *ref\n"
+        )
+        yaml_file = tmp_path / "complex.yaml"
+        yaml_file.write_text(content)
+
+        loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
+        with open(yaml_file, encoding="utf-8") as f:
+            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+        actual = _yaml_load(yaml_file)
+        assert actual == expected
+
 
 class TestMaxWorkers:
     """Tests for manager.max_workers config parsing."""
@@ -413,7 +551,7 @@ class TestMaxWorkers:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
         config = Config.from_file(config_file)
-        assert config.max_workers == 1
+        assert config.max_workers == 4
 
     def test_parse_max_workers(self, tmp_path):
         config_file = tmp_path / "config.yaml"
@@ -671,7 +809,7 @@ class TestManagerSection:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg() + "manager:\n")
         config = Config.from_file(config_file)
-        assert config.max_workers == 1
+        assert config.max_workers == 4
 
 
 class TestResolveZoneIds:
@@ -714,6 +852,81 @@ class TestResolveZoneIds:
         resolve_zone_ids(config, lambda name: called.append(name) or "new-value")
         assert config.zones["x.com"].zone_id == "existing"
         assert called == []
+
+    def test_parallel_resolves_all_zones(self):
+        """With max_workers > 1, all zones should still be resolved correctly."""
+        config = Config(
+            token="tok",
+            rules_dir="/tmp/rules",
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "b.com": ZoneConfig(name="b.com"),
+                "c.com": ZoneConfig(name="c.com"),
+            },
+        )
+        resolve_zone_ids(config, lambda name: f"id-for-{name}", max_workers=3)
+        assert config.zones["a.com"].zone_id == "id-for-a.com"
+        assert config.zones["b.com"].zone_id == "id-for-b.com"
+        assert config.zones["c.com"].zone_id == "id-for-c.com"
+
+    def test_parallel_propagates_errors(self):
+        """Parallel resolution should propagate errors from resolve_fn."""
+        config = Config(
+            token="tok",
+            rules_dir="/tmp/rules",
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "bad.com": ZoneConfig(name="bad.com"),
+            },
+        )
+
+        def fail_on_bad(name):
+            if name == "bad.com":
+                raise ConfigError(f"No zone found for {name!r}")
+            return f"id-for-{name}"
+
+        with pytest.raises(ConfigError, match="No zone found"):
+            resolve_zone_ids(config, fail_on_bad, max_workers=2)
+
+    def test_sequential_when_max_workers_1(self):
+        """With max_workers=1, should resolve sequentially (no thread pool)."""
+        import threading
+
+        threads_seen = set()
+
+        def track_thread(name):
+            threads_seen.add(threading.current_thread().name)
+            return f"id-for-{name}"
+
+        config = Config(
+            token="tok",
+            rules_dir="/tmp/rules",
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "b.com": ZoneConfig(name="b.com"),
+            },
+        )
+        resolve_zone_ids(config, track_thread, max_workers=1)
+        # All calls should be on the main thread (current thread)
+        assert len(threads_seen) == 1
+        assert threading.current_thread().name in threads_seen
+
+    def test_uses_config_max_workers_by_default(self):
+        """When max_workers is not passed, should use config.max_workers."""
+        config = Config(
+            token="tok",
+            rules_dir="/tmp/rules",
+            max_workers=4,
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "b.com": ZoneConfig(name="b.com"),
+                "c.com": ZoneConfig(name="c.com"),
+            },
+        )
+        resolve_zone_ids(config, lambda name: f"id-for-{name}")
+        assert config.zones["a.com"].zone_id == "id-for-a.com"
+        assert config.zones["b.com"].zone_id == "id-for-b.com"
+        assert config.zones["c.com"].zone_id == "id-for-c.com"
 
 
 class TestPlanOutputs:

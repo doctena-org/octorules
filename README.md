@@ -34,6 +34,20 @@ zones:
 
 The `env/` prefix resolves values from environment variables at runtime — keep secrets out of YAML.
 
+YAML files support `!include` directives to split large configs:
+
+```yaml
+zones:
+  example.com: !include zones/example.yaml
+```
+
+```yaml
+# rules/example.com.yaml
+redirect_rules: !include shared/redirects.yaml
+```
+
+Includes resolve relative to the file containing the directive. Nested includes and circular include detection are supported. Includes are confined to the directory tree of the parent file.
+
 ### Defining rules
 
 Create a rules file for each zone:
@@ -93,9 +107,12 @@ octorules dump --config config.yaml
 | `compression_rules` | `http_response_compression` | `compress_response` |
 | `custom_error_rules` | `http_custom_errors` | `serve_error` |
 | `waf_custom_rules` | `http_request_firewall_custom` | *(must specify)* |
+| `waf_managed_exceptions` | `http_request_firewall_managed` | *(must specify)* |
 | `rate_limiting_rules` | `http_ratelimit` | *(must specify)* |
 
-Phases with a default action don't need `action` in the YAML — it's injected automatically. For `waf_custom_rules` and `rate_limiting_rules`, you must specify `action` explicitly (e.g., `block`, `challenge`, `log`).
+Phases with a default action don't need `action` in the YAML — it's injected automatically. For `waf_custom_rules`, `waf_managed_exceptions`, and `rate_limiting_rules`, you must specify `action` explicitly (e.g., `block`, `challenge`, `log`).
+
+Only `custom_error_rules`, `waf_custom_rules`, `waf_managed_exceptions`, and `rate_limiting_rules` are supported at account level — zone-only phases are automatically skipped for account scopes.
 
 ## CLI reference
 
@@ -181,7 +198,7 @@ providers:
     directory: ./rules               # Path to rules directory
 
 manager:
-  max_workers: 4                     # Parallel zone planning (default: 1)
+  max_workers: 4                     # Parallel zone processing (default: 4)
   plan_outputs:                      # Config-driven plan output (replaces --format/--output)
     text:
       class: octorules.plan_output.PlanText
@@ -205,12 +222,20 @@ zones:
 2. **Sync** — Executes the plan by doing an atomic PUT per phase (full replacement of the phase ruleset). Fail-fast on errors.
 3. **Dump** — Fetches all rules from Cloudflare and writes them to YAML files, stripping API-only fields (`id`, `version`, `last_updated`, etc.).
 
+Performance:
+- **Parallel phase fetching** — phases within each scope are fetched concurrently (up to 4 workers).
+- **Parallel zone processing** — multiple zones are planned/synced concurrently (configurable via `max_workers`, default: 4).
+- **Parallel zone ID resolution** — zone name lookups run concurrently.
+- **Concurrent account planning** — account-level rules are planned in parallel with zone rules.
+- **Account phase filtering** — only account-compatible phases are fetched for account scopes, eliminating wasted API calls.
+
 Safety features:
 - **`--doit` flag** — sync requires explicit confirmation.
 - **Delete thresholds** — blocks mass deletions above a configurable percentage.
 - **Checksum verification** — `plan --checksum` produces a hash; `sync --checksum HASH` verifies the plan hasn't changed.
 - **Auth error propagation** — authentication and permission errors fail immediately instead of being silently swallowed.
 - **Failed phase filtering** — phases that can't be fetched are excluded from planning to prevent accidental mass deletions.
+- **Path traversal protection** — `!include` directives and file operations are confined to their expected directories.
 
 ## CI/CD integration
 
@@ -262,13 +287,13 @@ ruff format --check src/ tests/
 
 ### Releasing a new version
 
-1. Update the version in `pyproject.toml`.
+1. Update the version in `pyproject.toml` (single source of truth).
 2. Commit and push to `main`.
 3. Tag the release and push the tag:
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 Pushing a `v*` tag triggers the [publish workflow](.github/workflows/publish.yaml), which builds the package, publishes it to [PyPI](https://pypi.org/project/octorules/), and creates a GitHub Release.

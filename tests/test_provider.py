@@ -451,6 +451,98 @@ class TestCloudflareProvider:
         result = provider.get_all_phase_rules(_zs())
         assert result.failed_phases == []
 
+    def test_get_all_phase_rules_account_scope_filters_phases(self, mock_cf_client):
+        """Account scope should only fetch account-compatible phases."""
+        from cloudflare import NotFoundError
+
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123", label="My Account")
+        provider.get_all_phase_rules(scope)
+        from octorules.phases import ACCOUNT_CF_PHASES
+
+        assert set(call_args) == set(ACCOUNT_CF_PHASES)
+        assert len(call_args) == 4
+
+    def test_get_all_phase_rules_account_scope_with_filter(self, mock_cf_client):
+        """Account scope with cf_phases filter should intersect with account phases."""
+        from cloudflare import NotFoundError
+
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        # Request both account-level and zone-only phases; zone-only should be filtered out
+        provider.get_all_phase_rules(
+            scope,
+            cf_phases=["http_request_firewall_custom", "http_request_dynamic_redirect"],
+        )
+        assert call_args == ["http_request_firewall_custom"]
+
+    def test_get_all_phase_rules_zone_scope_not_filtered(self, mock_cf_client):
+        """Zone scope should fetch all phases, not just account-compatible ones."""
+        from cloudflare import NotFoundError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 404
+        mock_cf_client.rulesets.phases.get.side_effect = NotFoundError(
+            message="Not Found", response=mock_response, body=None
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.get_all_phase_rules(_zs())
+        assert mock_cf_client.rulesets.phases.get.call_count == 12
+
+    def test_get_all_phase_rules_parallel_results_correct(self, mock_cf_client):
+        """Parallel fetching should produce the same results as sequential."""
+
+        def mock_get(cf_phase, **kwargs):
+            if cf_phase == "http_request_dynamic_redirect":
+                return MockRuleset(
+                    rules=[{"ref": "r1", "expression": "true", "action": "redirect"}]
+                )
+            if cf_phase == "http_request_cache_settings":
+                return MockRuleset(
+                    rules=[{"ref": "c1", "expression": "true", "action": "set_cache_settings"}]
+                )
+            from cloudflare import NotFoundError
+
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        result = provider.get_all_phase_rules(_zs())
+        assert "http_request_dynamic_redirect" in result
+        assert "http_request_cache_settings" in result
+        assert len(result) == 2
+        assert result["http_request_dynamic_redirect"][0]["ref"] == "r1"
+        assert result["http_request_cache_settings"][0]["ref"] == "c1"
+
+    def test_get_all_phase_rules_account_empty_filter_returns_empty(self, mock_cf_client):
+        """Account scope with only zone-level phases in filter should return empty."""
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        result = provider.get_all_phase_rules(scope, cf_phases=["http_request_dynamic_redirect"])
+        assert result == {}
+        assert result.failed_phases == []
+        mock_cf_client.rulesets.phases.get.assert_not_called()
+
 
 class TestCFApiResilience:
     """Tests for provider resilience against Cloudflare SDK/API changes."""

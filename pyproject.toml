@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.6.0"
+version = "0.7.0"
 description = "Manage Cloudflare Rules as IaC"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -28,8 +28,8 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "cloudflare>=3.0.0,<5.0.0",
-    "pyyaml>=6.0",
+    "cloudflare~=4.3",
+    "pyyaml~=6.0",
 ]
 
 [project.optional-dependencies]
