@@ -4,20 +4,23 @@ from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cloudflare
+import httpx
 from cloudflare import (
     APIConnectionError,
     APIError,
     AuthenticationError,
+    DefaultHttpxClient,
     NotFoundError,
     PermissionDeniedError,
 )
 
 from octorules.config import ConfigError
-from octorules.phases import ACCOUNT_CF_PHASES, ALL_CF_PHASES
+from octorules.phases import ACCOUNT_CF_PHASES, ALL_CF_PHASES, ZONE_CF_PHASES
 
+_ZONE_PHASE_SET: frozenset[str] = frozenset(ZONE_CF_PHASES)
 _ACCOUNT_PHASE_SET: frozenset[str] = frozenset(ACCOUNT_CF_PHASES)
 
 log = logging.getLogger("octorules")
@@ -28,14 +31,20 @@ class Scope:
     zone_id: str | None = None
     account_id: str | None = None
     label: str = ""
+    _api_kwargs: dict[str, str] | None = field(default=None, repr=False, compare=False)
 
     @property
     def api_kwargs(self) -> dict[str, str]:
+        if self._api_kwargs is not None:
+            return self._api_kwargs
         if self.account_id:
-            return {"account_id": self.account_id}
-        if self.zone_id:
-            return {"zone_id": self.zone_id}
-        raise ValueError("Scope must have either zone_id or account_id")
+            kw = {"account_id": self.account_id}
+        elif self.zone_id:
+            kw = {"zone_id": self.zone_id}
+        else:
+            raise ValueError("Scope must have either zone_id or account_id")
+        self._api_kwargs = kw
+        return kw
 
     @property
     def is_account(self) -> bool:
@@ -76,6 +85,7 @@ class CloudflareProvider:
         *,
         max_retries: int = 2,
         timeout: float | None = None,
+        max_workers: int = 1,
         client: cloudflare.Cloudflare | None = None,
     ):
         if client is not None:
@@ -84,7 +94,17 @@ class CloudflareProvider:
             kwargs: dict = {"api_token": token, "max_retries": max_retries}
             if timeout is not None:
                 kwargs["timeout"] = timeout
+            # Scale connection pool to match concurrency
+            if max_workers > 1:
+                pool_size = max_workers * len(ALL_CF_PHASES)
+                kwargs["http_client"] = DefaultHttpxClient(
+                    limits=httpx.Limits(
+                        max_connections=max(100, pool_size),
+                        max_keepalive_connections=max(20, max_workers * 4),
+                    ),
+                )
             self._client = cloudflare.Cloudflare(**kwargs)
+        self._max_workers = max_workers
         self._account_id: str | None = None
         self._account_name: str | None = None
 
@@ -170,6 +190,8 @@ class CloudflareProvider:
         phases_to_fetch = cf_phases if cf_phases is not None else ALL_CF_PHASES
         if scope.is_account:
             phases_to_fetch = [p for p in phases_to_fetch if p in _ACCOUNT_PHASE_SET]
+        else:
+            phases_to_fetch = [p for p in phases_to_fetch if p in _ZONE_PHASE_SET]
         sl = _fmt_scope(scope)
         log.debug("Fetching %d phase(s) for %s", len(phases_to_fetch), sl)
         rules: dict[str, list[dict]] = {}
@@ -178,7 +200,8 @@ class CloudflareProvider:
         if not phases_to_fetch:
             return PhaseRulesResult(rules, failed_phases=failed)
 
-        with ThreadPoolExecutor(max_workers=min(4, len(phases_to_fetch))) as executor:
+        workers = min(self._max_workers, len(phases_to_fetch))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {executor.submit(self.get_phase_rules, scope, p): p for p in phases_to_fetch}
             for future in as_completed(futures):
                 cf_phase = futures[future]

@@ -248,11 +248,12 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 phase = pp.phase.friendly_name
                 ref = _md_escape(c.ref)
                 if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    diffs = [
-                        f"`{key}`: {old_val!r} → {new_val!r}"
-                        for key, old_val, new_val in _compute_field_diffs(c)
-                    ]
-                    details = _md_escape("; ".join(diffs))
+                    diffs = []
+                    for key, old_val, new_val in _compute_field_diffs(c):
+                        old_esc = _md_escape(repr(old_val))
+                        new_esc = _md_escape(repr(new_val))
+                        diffs.append(f"`{key}`: ~~{old_esc}~~ → **{new_esc}**")
+                    details = "; ".join(diffs)
                 elif c.change_type == ChangeType.REORDER:
                     details = "reorder rules"
                 else:
@@ -330,7 +331,9 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                     lines.append(f"    <td>{e(op)}</td>")
                     lines.append(f"    <td>{e(c.ref)}</td>")
                     if detail_pairs:
-                        parts = [f"{e(key)}: {e(str(val))}" for key, val in detail_pairs]
+                        parts = [
+                            f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs
+                        ]
                         lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
                     else:
                         lines.append("    <td></td>")
@@ -354,12 +357,16 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                         else:
                             lines.append("  <tr>")
                             lines.append("    <td colspan=2></td>")
-                        lines.append(f"    <td>{e(key)}: {e(str(new_val))}</td>")
+                        lines.append(
+                            f"    <td><code>{e(key)}</code>: <ins>{e(str(new_val))}</ins></td>"
+                        )
                         lines.append("  </tr>")
                         # Continuation row with old value
                         lines.append("  <tr>")
                         lines.append("    <td colspan=2></td>")
-                        lines.append(f"    <td>{e(key)}: {e(str(old_val))}</td>")
+                        lines.append(
+                            f"    <td><code>{e(key)}</code>: <del>{e(str(old_val))}</del></td>"
+                        )
                         lines.append("  </tr>")
                     if not diffs:
                         lines.append("  <tr>")

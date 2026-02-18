@@ -167,6 +167,24 @@ class TestWarnUnknownPhaseKeys:
         assert "Did you mean" in caplog.text
         assert "redirect_rules" in caplog.text
 
+    def test_renamed_phase_warns_with_migration_guidance(self, caplog):
+        """Using old name waf_managed_exceptions should produce a deprecation warning."""
+        rules_data = {
+            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}]
+        }
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert "renamed" in caplog.text
+        assert "waf_managed_rules" in caplog.text
+        assert "deprecated" in caplog.text
+
+    def test_renamed_phase_does_not_show_generic_unknown(self, caplog):
+        """Renamed phase should NOT show generic 'Unknown phase' message."""
+        rules_data = {"waf_managed_exceptions": []}
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            warn_unknown_phase_keys(rules_data, "example.com")
+        assert "Unknown phase" not in caplog.text
+
 
 class TestPrepareDesiredRules:
     def test_injects_default_action(self):
@@ -219,6 +237,30 @@ class TestPrepareDesiredRules:
         rules = [{"ref": "r1", "expression": "true"}]
         with pytest.raises(ValueError, match="must specify an 'action'"):
             prepare_desired_rules(rules, rl_phase)
+
+    def test_bot_fight_rules_requires_action(self):
+        bf_phase = get_phase("bot_fight_rules")
+        rules = [{"ref": "r1", "expression": "true"}]
+        with pytest.raises(ValueError, match="must specify an 'action'"):
+            prepare_desired_rules(rules, bf_phase)
+
+    def test_bot_fight_rules_with_action_ok(self):
+        bf_phase = get_phase("bot_fight_rules")
+        rules = [{"ref": "r1", "expression": "true", "action": "block"}]
+        prepared = prepare_desired_rules(rules, bf_phase)
+        assert prepared[0]["action"] == "block"
+
+    def test_sensitive_data_detection_requires_action(self):
+        sd_phase = get_phase("sensitive_data_detection")
+        rules = [{"ref": "r1", "expression": "true"}]
+        with pytest.raises(ValueError, match="must specify an 'action'"):
+            prepare_desired_rules(rules, sd_phase)
+
+    def test_sensitive_data_detection_with_action_ok(self):
+        sd_phase = get_phase("sensitive_data_detection")
+        rules = [{"ref": "r1", "expression": "true", "action": "log"}]
+        prepared = prepare_desired_rules(rules, sd_phase)
+        assert prepared[0]["action"] == "log"
 
 
 class TestDiffPhase:
@@ -450,6 +492,94 @@ class TestPlanZone:
         zone_plan = plan_zone("example.com", {}, {})
         assert zone_plan.has_changes is False
         assert zone_plan.total_changes == 0
+
+
+class TestRenamedPhaseAlias:
+    """Tests for waf_managed_exceptions → waf_managed_rules alias in planning."""
+
+    def test_alias_works_in_plan_zone(self):
+        """Using old name waf_managed_exceptions in desired rules should still work."""
+        desired = {
+            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
+        }
+        current = {}
+        zp = plan_zone("example.com", desired, current)
+        assert zp.has_changes
+        assert zp.total_changes == 1
+        assert zp.phase_plans[0].phase.cf_phase == "http_request_firewall_managed"
+
+    def test_canonical_name_works_in_plan_zone(self):
+        """Using canonical name waf_managed_rules should work normally."""
+        desired = {
+            "waf_managed_rules": [{"ref": "r1", "expression": "true", "action": "block"}],
+        }
+        current = {}
+        zp = plan_zone("example.com", desired, current)
+        assert zp.has_changes
+        assert zp.total_changes == 1
+        assert zp.phase_plans[0].phase.cf_phase == "http_request_firewall_managed"
+
+    def test_alias_diff_against_current(self):
+        """Alias name should correctly diff against current rules from CF."""
+        desired = {
+            "waf_managed_exceptions": [
+                {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
+            ],
+        }
+        current = {
+            "http_request_firewall_managed": [
+                {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
+            ],
+        }
+        zp = plan_zone("example.com", desired, current)
+        assert not zp.has_changes
+
+    def test_alias_with_allow_unmanaged(self):
+        """Alias should work correctly with allow_unmanaged=True."""
+        desired = {
+            "waf_managed_exceptions": [
+                {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
+            ],
+        }
+        current = {
+            "http_request_firewall_managed": [
+                {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
+                {"ref": "r2", "expression": "false", "action": "log", "enabled": True},
+            ],
+        }
+        zp = plan_zone("example.com", desired, current, allow_unmanaged=True)
+        # r2 is unmanaged but allow_unmanaged is True, so no changes
+        assert not zp.has_changes
+
+    def test_alias_does_not_cause_double_processing(self):
+        """Using the alias should not cause the phase to be processed twice."""
+        desired = {
+            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
+        }
+        current = {}
+        zp = plan_zone("example.com", desired, current)
+        # Only one phase plan should be created, not two
+        assert len(zp.phase_plans) == 1
+
+    def test_alias_removal_detection(self):
+        """Alias should not cause spurious removal when current has the phase."""
+        desired = {
+            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
+        }
+        current = {
+            "http_request_firewall_managed": [
+                {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
+                {"ref": "r2", "expression": "false", "action": "log", "enabled": True},
+            ],
+        }
+        zp = plan_zone("example.com", desired, current)
+        # r2 should be removed (not in desired), but only once
+        removes = []
+        for pp in zp.phase_plans:
+            for c in pp.changes:
+                if c.change_type == ChangeType.REMOVE:
+                    removes.append(c.ref)
+        assert removes == ["r2"]
 
 
 class TestAllowUnmanaged:
@@ -1183,3 +1313,56 @@ class TestCFApiResilience:
         assert len(violations) == 1
         assert violations[0].existing == 10
         assert violations[0].percentage == 40.0  # 4 out of 10
+
+
+class TestDiffPhasePreparedRules:
+    """Tests for PhasePlan.prepared_rules populated by diff_phase."""
+
+    def test_prepared_rules_stored_on_phase_plan(self):
+        """diff_phase should store the prepared rules on PhasePlan."""
+        phase = get_phase("redirect_rules")
+        desired = [{"ref": "r1", "expression": "true"}]
+        plan = diff_phase(phase, desired, [])
+        assert plan.prepared_rules is not None
+        assert len(plan.prepared_rules) == 1
+        # Should have defaults injected
+        assert plan.prepared_rules[0]["enabled"] is True
+        assert plan.prepared_rules[0]["action"] == "redirect"
+
+    def test_prepared_rules_available_for_no_changes(self):
+        """Even when there are no changes, prepared_rules should be available."""
+        phase = get_phase("redirect_rules")
+        desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        current = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
+        plan = diff_phase(phase, desired, current)
+        assert plan.prepared_rules is not None
+        assert not plan.has_changes
+
+
+class TestNormalizeRuleCaching:
+    """Tests for pre-populated normalized values on MODIFY changes."""
+
+    def test_modify_change_has_cached_normalized(self):
+        """MODIFY RuleChange should have normalized values pre-populated."""
+        phase = get_phase("redirect_rules")
+        desired = [{"ref": "r1", "expression": "new_expr", "action": "redirect", "enabled": True}]
+        current = [{"ref": "r1", "expression": "old_expr", "action": "redirect", "enabled": True}]
+        plan = diff_phase(phase, desired, current)
+        assert plan.has_changes
+        change = plan.changes[0]
+        assert change.change_type == ChangeType.MODIFY
+        # Check that cached_property is pre-populated (accessing __dict__ directly)
+        assert "normalized_current" in change.__dict__
+        assert "normalized_desired" in change.__dict__
+        assert change.normalized_current["expression"] == "old_expr"
+        assert change.normalized_desired["expression"] == "new_expr"
+
+    def test_add_change_no_pre_populated_normalized(self):
+        """ADD changes should NOT have pre-populated normalized values."""
+        phase = get_phase("redirect_rules")
+        desired = [{"ref": "r1", "expression": "true"}]
+        plan = diff_phase(phase, desired, [])
+        change = plan.changes[0]
+        assert change.change_type == ChangeType.ADD
+        # Not pre-populated — will be computed lazily if accessed
+        assert "normalized_desired" not in change.__dict__

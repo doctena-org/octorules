@@ -193,10 +193,11 @@ class Config:
     token: str
     rules_dir: Path
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
-    max_workers: int = 4
+    max_workers: int = 1
     max_retries: int = 2
     timeout: float | None = None
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
+    _rules_cache: dict[str, dict] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_file(cls, path: str | Path) -> Config:
@@ -288,7 +289,7 @@ class Config:
             manager_section = {}
         if not isinstance(manager_section, dict):
             raise ConfigError("'manager' must be a mapping")
-        max_workers = int(manager_section.get("max_workers", 4))
+        max_workers = int(manager_section.get("max_workers", 1))
         if max_workers < 1:
             raise ConfigError("'manager.max_workers' must be >= 1")
 
@@ -314,11 +315,17 @@ class Config:
         """Load the rules YAML file for a given zone.
 
         Only loads rules if "rules" is in the zone's sources list.
+        Results are cached for the lifetime of this Config instance.
         """
+        cache_key = f"zone:{zone_name}"
+        if cache_key in self._rules_cache:
+            return self._rules_cache[cache_key]
         zone_cfg = self.zones.get(zone_name)
         if zone_cfg and zone_cfg.sources and "rules" not in zone_cfg.sources:
             log.debug("Zone %s does not include 'rules' in sources, skipping rules file", zone_name)
-            return {}
+            empty: dict = {}
+            self._rules_cache[cache_key] = empty
+            return empty
         rules_file = (self.rules_dir / f"{zone_name}.yaml").resolve()
         try:
             rules_file.relative_to(self.rules_dir.resolve())
@@ -326,16 +333,25 @@ class Config:
             raise ConfigError(f"Zone name {zone_name!r} resolves outside rules directory")
         if not rules_file.exists():
             log.debug("No rules file for zone %s (expected %s)", zone_name, rules_file)
-            return {}
+            empty: dict = {}
+            self._rules_cache[cache_key] = empty
+            return empty
         data = _yaml_load(rules_file)
         if not isinstance(data, dict):
             raise ConfigError(
                 f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
             )
+        self._rules_cache[cache_key] = data
         return data
 
     def load_account_rules(self, account_name: str) -> dict:
-        """Load the rules YAML file for an account (by slugified name)."""
+        """Load the rules YAML file for an account (by slugified name).
+
+        Results are cached for the lifetime of this Config instance.
+        """
+        cache_key = f"account:{account_name}"
+        if cache_key in self._rules_cache:
+            return self._rules_cache[cache_key]
         slug = slugify(account_name)
         rules_file = (self.rules_dir / f"{slug}.yaml").resolve()
         try:
@@ -344,10 +360,13 @@ class Config:
             raise ConfigError(f"Account name {account_name!r} resolves outside rules directory")
         if not rules_file.exists():
             log.debug("No rules file for account %s (expected %s)", account_name, rules_file)
-            return {}
+            empty: dict = {}
+            self._rules_cache[cache_key] = empty
+            return empty
         data = _yaml_load(rules_file)
         if not isinstance(data, dict):
             raise ConfigError(f"Account rules file {rules_file} is not a YAML mapping")
+        self._rules_cache[cache_key] = data
         return data
 
 

@@ -11,7 +11,8 @@ class Phase:
     friendly_name: str
     cf_phase: str
     default_action: str | None  # None means user must specify in YAML
-    account_level: bool = False  # True for phases supported at account level
+    zone_level: bool = True  # True for phases that work at zone level
+    account_level: bool = False  # True for phases that work at account level
 
 
 PHASES: list[Phase] = [
@@ -23,17 +24,47 @@ PHASES: list[Phase] = [
     Phase("origin_rules", "http_request_origin", "route"),
     Phase("cache_rules", "http_request_cache_settings", "set_cache_settings"),
     Phase("compression_rules", "http_response_compression", "compress_response"),
-    Phase("custom_error_rules", "http_custom_errors", "serve_error", account_level=True),
-    Phase("waf_custom_rules", "http_request_firewall_custom", None, account_level=True),
-    Phase("waf_managed_exceptions", "http_request_firewall_managed", None, account_level=True),
-    Phase("rate_limiting_rules", "http_ratelimit", None, account_level=True),
+    Phase(
+        "custom_error_rules",
+        "http_custom_errors",
+        "serve_error",
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase(
+        "waf_custom_rules",
+        "http_request_firewall_custom",
+        None,
+        zone_level=True,
+        account_level=True,
+    ),
+    Phase(
+        "waf_managed_rules",
+        "http_request_firewall_managed",
+        None,
+        zone_level=True,
+        account_level=True,
+    ),
+    Phase(
+        "rate_limiting_rules",
+        "http_ratelimit",
+        None,
+        zone_level=True,
+        account_level=True,
+    ),
+    Phase("bot_fight_rules", "http_request_sbfm", None),
+    Phase("sensitive_data_detection", "http_response_firewall_managed", None),
 ]
 
 PHASE_BY_NAME: dict[str, Phase] = {p.friendly_name: p for p in PHASES}
 PHASE_BY_CF: dict[str, Phase] = {p.cf_phase: p for p in PHASES}
 
+# Backward-compatibility alias: old name → current Phase object
+PHASE_BY_NAME["waf_managed_exceptions"] = PHASE_BY_NAME["waf_managed_rules"]
+
 ALL_FRIENDLY_NAMES: list[str] = [p.friendly_name for p in PHASES]
 ALL_CF_PHASES: list[str] = [p.cf_phase for p in PHASES]
+ZONE_CF_PHASES: list[str] = [p.cf_phase for p in PHASES if p.zone_level]
 ACCOUNT_CF_PHASES: list[str] = [p.cf_phase for p in PHASES if p.account_level]
 
 # Fields injected by the CF API that should be stripped when processing rules.
