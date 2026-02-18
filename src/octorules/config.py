@@ -59,6 +59,9 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
     the custom !include constructor while keeping safe YAML parsing.
     """
     path = path.resolve()
+    path_str = str(path)
+    if ".." in path_str or "~" in path_str:
+        raise ConfigError(f"Potentially unsafe file path: {path}")
     if visited is None:
         visited = set()
     visited = visited | {path}
