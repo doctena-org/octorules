@@ -12,6 +12,7 @@ from cloudflare import (
     APIConnectionError,
     APIError,
     AuthenticationError,
+    BadRequestError,
     DefaultHttpxClient,
     NotFoundError,
     PermissionDeniedError,
@@ -145,6 +146,12 @@ class CloudflareProvider:
             rules = ruleset.rules or []
             return [_rule_to_dict(r) for r in rules]
         except NotFoundError:
+            return []
+        except BadRequestError as e:
+            # Cloudflare returns 400 for phases the zone/account doesn't
+            # support (e.g. SBFM without the entitlement).  Treat the same
+            # as "no ruleset" so callers aren't surprised.
+            log.debug("Phase %s not supported for %s: %s", cf_phase, _fmt_scope(scope), e)
             return []
 
     def put_phase_rules(self, scope: Scope, cf_phase: str, rules: list[dict]) -> int:
