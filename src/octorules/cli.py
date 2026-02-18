@@ -212,8 +212,12 @@ def _filter_current_by_phase(
 
 def _write_output_file(path: str, write_fn: Callable[[IO[str]], None]) -> bool:
     """Write output to a file. Returns True on success, False on error."""
+    resolved = str(Path(path).resolve())
+    if ".." in resolved or "~" in resolved:
+        log.error("Potentially unsafe output path: %s", path)
+        return False
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        with open(resolved, "w", encoding="utf-8") as f:
             write_fn(f)
         return True
     except OSError as e:
