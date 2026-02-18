@@ -69,6 +69,42 @@ def _compute_field_diffs(change: RuleChange) -> list[tuple[str, object, object]]
     return diffs
 
 
+def _rule_detail_pairs(rule: dict | None) -> list[tuple[str, object]]:
+    """Extract key-value pairs from a normalized rule for Details display.
+
+    Orders: action, description, expression first, then remaining alphabetically.
+    Skips 'enabled' when True (the default) since it's not informative.
+    """
+    if not rule:
+        return []
+    priority_keys = ["action", "description", "expression"]
+    pairs: list[tuple[str, object]] = []
+    seen: set[str] = set()
+    for key in priority_keys:
+        if key in rule:
+            val = rule[key]
+            if key == "enabled" and val is True:
+                continue
+            pairs.append((key, val))
+            seen.add(key)
+    for key in sorted(rule.keys()):
+        if key in seen:
+            continue
+        val = rule[key]
+        if key == "enabled" and val is True:
+            continue
+        pairs.append((key, val))
+    return pairs
+
+
+def _format_add_remove_details(rule: dict | None, use_color: bool) -> list[str]:
+    """Format rule details for an ADD or REMOVE change."""
+    details = []
+    for key, val in _rule_detail_pairs(rule):
+        details.append(_color(f"      {key}: ", DIM, use_color) + f"{val!r}")
+    return details
+
+
 def _format_modify_details(change: RuleChange, use_color: bool) -> list[str]:
     """Format field-level diffs for a MODIFY change."""
     details = []
@@ -94,6 +130,10 @@ def format_change(change: RuleChange, use_color: bool = True) -> list[str]:
     lines = [_color(f"  {symbol} {label}: {change.ref}", color, use_color)]
     if change.change_type == ChangeType.MODIFY:
         lines.extend(_format_modify_details(change, use_color))
+    elif change.change_type == ChangeType.ADD:
+        lines.extend(_format_add_remove_details(change.normalized_desired, use_color))
+    elif change.change_type == ChangeType.REMOVE:
+        lines.extend(_format_add_remove_details(change.normalized_current, use_color))
     return lines
 
 
@@ -216,7 +256,17 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 elif c.change_type == ChangeType.REORDER:
                     details = "reorder rules"
                 else:
-                    details = ""
+                    rule = (
+                        c.normalized_desired
+                        if c.change_type == ChangeType.ADD
+                        else c.normalized_current
+                    )
+                    pairs = _rule_detail_pairs(rule)
+                    if pairs:
+                        parts = [f"`{key}`: {val!r}" for key, val in pairs]
+                        details = _md_escape("; ".join(parts))
+                    else:
+                        details = ""
                 lines.append(f"| {op} | {phase} | {ref} | {details} |")
         lines.append("")
 
@@ -268,19 +318,22 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
             for c in pp.changes:
                 op = _html_op_name(c.change_type)
 
-                if c.change_type == ChangeType.ADD:
-                    creates += 1
+                if c.change_type in (ChangeType.ADD, ChangeType.REMOVE):
+                    if c.change_type == ChangeType.ADD:
+                        creates += 1
+                        detail_pairs = _rule_detail_pairs(c.normalized_desired)
+                    else:
+                        removes += 1
+                        detail_pairs = _rule_detail_pairs(c.normalized_current)
+                    # Single row per Create/Delete (matches octodns)
                     lines.append("  <tr>")
                     lines.append(f"    <td>{e(op)}</td>")
                     lines.append(f"    <td>{e(c.ref)}</td>")
-                    lines.append("    <td></td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.REMOVE:
-                    removes += 1
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append(f"    <td>{e(c.ref)}</td>")
-                    lines.append("    <td></td>")
+                    if detail_pairs:
+                        parts = [f"{e(key)}: {e(str(val))}" for key, val in detail_pairs]
+                        lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
+                    else:
+                        lines.append("    <td></td>")
                     lines.append("  </tr>")
                 elif c.change_type == ChangeType.REORDER:
                     reorders += 1
@@ -301,12 +354,12 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                         else:
                             lines.append("  <tr>")
                             lines.append("    <td colspan=2></td>")
-                        lines.append(f"    <td>{e(key)}: {e(str(old_val))}</td>")
+                        lines.append(f"    <td>{e(key)}: {e(str(new_val))}</td>")
                         lines.append("  </tr>")
-                        # Continuation row with new value
+                        # Continuation row with old value
                         lines.append("  <tr>")
                         lines.append("    <td colspan=2></td>")
-                        lines.append(f"    <td>{e(key)}: {e(str(new_val))}</td>")
+                        lines.append(f"    <td>{e(key)}: {e(str(old_val))}</td>")
                         lines.append("  </tr>")
                     if not diffs:
                         lines.append("  <tr>")

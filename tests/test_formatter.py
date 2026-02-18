@@ -9,6 +9,7 @@ from octorules.formatter import (
     GREEN,
     RESET,
     _color,
+    _rule_detail_pairs,
     _supports_color,
     build_report_data,
     format_change,
@@ -78,6 +79,33 @@ class TestFormatChange:
         change = RuleChange(ChangeType.REORDER, "*", REDIRECT_PHASE)
         lines = format_change(change, use_color=False)
         assert any("reorder" in line for line in lines)
+
+    def test_add_with_details(self):
+        change = RuleChange(
+            ChangeType.ADD,
+            "new-rule",
+            REDIRECT_PHASE,
+            desired={"expression": "true", "action": "redirect", "enabled": True},
+        )
+        lines = format_change(change, use_color=False)
+        assert any("+ add: new-rule" in line for line in lines)
+        assert any("action:" in line and "'redirect'" in line for line in lines)
+        assert any("expression:" in line and "'true'" in line for line in lines)
+        # enabled=True should be skipped
+        assert not any("enabled:" in line for line in lines)
+
+    def test_remove_with_details(self):
+        change = RuleChange(
+            ChangeType.REMOVE,
+            "old-rule",
+            REDIRECT_PHASE,
+            current={"expression": "true", "action": "redirect", "enabled": False},
+        )
+        lines = format_change(change, use_color=False)
+        assert any("- remove: old-rule" in line for line in lines)
+        assert any("action:" in line for line in lines)
+        # enabled=False IS shown (it's meaningful)
+        assert any("enabled:" in line for line in lines)
 
     def test_add_with_color(self):
         change = RuleChange(ChangeType.ADD, "my-rule", REDIRECT_PHASE)
@@ -349,6 +377,39 @@ class TestFormatPlanMarkdown:
         assert "b.com" not in result
         assert "1 change(s) across 2 zone(s)" in result
 
+    def test_add_shows_details(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={"expression": "true", "action": "redirect"},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        assert "`action`: 'redirect'" in result
+        assert "`expression`: 'true'" in result
+
+    def test_remove_shows_details(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.REMOVE,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={"expression": "true", "action": "redirect"},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        assert "`action`: 'redirect'" in result
+
     def test_summary_no_changes(self):
         result = format_plan_markdown([ZonePlan("example.com")])
         assert "**No changes detected.**" in result
@@ -390,7 +451,7 @@ class TestFormatPlanHtml:
         result = format_plan_html([zp])
         assert "Delete" in result
 
-    def test_modify_shows_old_and_new_on_separate_rows(self):
+    def test_modify_shows_new_then_old_on_separate_rows(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[
@@ -408,8 +469,8 @@ class TestFormatPlanHtml:
         assert "Update" in result
         assert "expression: old-expr" in result
         assert "expression: new-expr" in result
-        # Old value appears before new value
-        assert result.index("old-expr") < result.index("new-expr")
+        # New value appears first, old value on continuation row
+        assert result.index("new-expr") < result.index("old-expr")
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(
@@ -432,6 +493,48 @@ class TestFormatPlanHtml:
         assert "a.com" in result
         assert "b.com" not in result
 
+    def test_create_shows_rule_details_single_row(self):
+        """Create uses a single <tr> with <br/>-joined details (matches octodns)."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={"expression": "true", "action": "redirect"},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "action: redirect" in result
+        assert "expression: true" in result
+        # Details joined with <br/> in a single <td>
+        assert "action: redirect<br/>expression: true" in result
+        # No colspan=2 continuation rows for Create
+        # (only Update uses continuation rows)
+        create_section = result[result.index("Create") : result.index("Summary")]
+        assert "colspan=2" not in create_section
+
+    def test_delete_shows_rule_details_single_row(self):
+        """Delete uses a single <tr> with <br/>-joined details (matches octodns)."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.REMOVE,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={"expression": "true", "action": "redirect"},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "Delete" in result
+        assert "action: redirect<br/>expression: true" in result
+
     def test_xss_safety(self):
         """Script tags in zone names and refs must be escaped."""
         pp = PhasePlan(
@@ -439,6 +542,27 @@ class TestFormatPlanHtml:
             changes=[RuleChange(ChangeType.ADD, "<script>alert(1)</script>", REDIRECT_PHASE)],
         )
         zp = ZonePlan("<script>xss</script>", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+    def test_xss_safety_in_details(self):
+        """Script tags in rule values must be escaped in Details."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={
+                        "expression": '<script>alert("xss")</script>',
+                        "action": "redirect",
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "<script>" not in result
         assert "&lt;script&gt;" in result
@@ -684,3 +808,37 @@ class TestPrintReport:
         output = buf.getvalue()
         parsed = json.loads(output)
         assert parsed["zones"][0]["zone"] == "a.com"
+
+
+class TestRuleDetailPairs:
+    def test_none_returns_empty(self):
+        assert _rule_detail_pairs(None) == []
+
+    def test_empty_dict_returns_empty(self):
+        assert _rule_detail_pairs({}) == []
+
+    def test_priority_ordering(self):
+        """action, description, expression come first in order."""
+        rule = {"expression": "true", "action": "redirect", "description": "My rule"}
+        pairs = _rule_detail_pairs(rule)
+        keys = [k for k, _ in pairs]
+        assert keys == ["action", "description", "expression"]
+
+    def test_skips_enabled_true(self):
+        rule = {"action": "redirect", "enabled": True, "expression": "true"}
+        pairs = _rule_detail_pairs(rule)
+        keys = [k for k, _ in pairs]
+        assert "enabled" not in keys
+
+    def test_keeps_enabled_false(self):
+        rule = {"action": "redirect", "enabled": False, "expression": "true"}
+        pairs = _rule_detail_pairs(rule)
+        keys = [k for k, _ in pairs]
+        assert "enabled" in keys
+
+    def test_non_priority_fields_sorted(self):
+        rule = {"expression": "true", "action": "redirect", "zone_name": "z", "beta": "b"}
+        pairs = _rule_detail_pairs(rule)
+        keys = [k for k, _ in pairs]
+        # priority keys first, then beta, zone_name alphabetically
+        assert keys == ["action", "expression", "beta", "zone_name"]
