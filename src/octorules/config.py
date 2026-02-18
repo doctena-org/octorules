@@ -34,6 +34,14 @@ def _make_include_loader(base_path: Path, visited: set[Path]) -> type:
     def _include_constructor(loader: yaml.SafeLoader, node: yaml.Node) -> object:
         rel_path = loader.construct_scalar(node)
         include_path = (base_path / rel_path).resolve()
+        # Prevent path traversal outside the base directory tree
+        try:
+            include_path.relative_to(base_path.resolve())
+        except ValueError:
+            raise ConfigError(
+                f"Include path escapes base directory: {rel_path!r} "
+                f"(resolves to {include_path}, base is {base_path.resolve()})"
+            )
         if include_path in visited:
             raise ConfigError(f"Circular include detected: {include_path}")
         if not include_path.exists():
@@ -45,7 +53,11 @@ def _make_include_loader(base_path: Path, visited: set[Path]) -> type:
 
 
 def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
-    """Load a YAML file with !include directive support."""
+    """Load a YAML file with !include directive support.
+
+    Uses a SafeLoader subclass directly (instead of yaml.load) to support
+    the custom !include constructor while keeping safe YAML parsing.
+    """
     path = path.resolve()
     if visited is None:
         visited = set()
@@ -53,7 +65,11 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
     loader_cls = _make_include_loader(path.parent, visited)
     try:
         with open(path, encoding="utf-8") as f:
-            return yaml.load(f, Loader=loader_cls)
+            loader = loader_cls(f)
+            try:
+                return loader.get_single_data()
+            finally:
+                loader.dispose()
     except yaml.YAMLError as e:
         raise ConfigError(f"Invalid YAML in {path}: {e}") from e
 
@@ -174,7 +190,7 @@ class Config:
     token: str
     rules_dir: Path
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
-    max_workers: int = 1
+    max_workers: int = 4
     max_retries: int = 2
     timeout: float | None = None
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
@@ -269,7 +285,7 @@ class Config:
             manager_section = {}
         if not isinstance(manager_section, dict):
             raise ConfigError("'manager' must be a mapping")
-        max_workers = int(manager_section.get("max_workers", 1))
+        max_workers = int(manager_section.get("max_workers", 4))
         if max_workers < 1:
             raise ConfigError("'manager.max_workers' must be >= 1")
 
@@ -300,7 +316,9 @@ class Config:
         if zone_cfg and zone_cfg.sources and "rules" not in zone_cfg.sources:
             log.debug("Zone %s does not include 'rules' in sources, skipping rules file", zone_name)
             return {}
-        rules_file = self.rules_dir / f"{zone_name}.yaml"
+        rules_file = (self.rules_dir / f"{zone_name}.yaml").resolve()
+        if not str(rules_file).startswith(str(self.rules_dir.resolve())):
+            raise ConfigError(f"Zone name {zone_name!r} resolves outside rules directory")
         if not rules_file.exists():
             log.debug("No rules file for zone %s (expected %s)", zone_name, rules_file)
             return {}
@@ -314,7 +332,9 @@ class Config:
     def load_account_rules(self, account_name: str) -> dict:
         """Load the rules YAML file for an account (by slugified name)."""
         slug = slugify(account_name)
-        rules_file = self.rules_dir / f"{slug}.yaml"
+        rules_file = (self.rules_dir / f"{slug}.yaml").resolve()
+        if not str(rules_file).startswith(str(self.rules_dir.resolve())):
+            raise ConfigError(f"Account name {account_name!r} resolves outside rules directory")
         if not rules_file.exists():
             log.debug("No rules file for account %s (expected %s)", account_name, rules_file)
             return {}
@@ -324,12 +344,33 @@ class Config:
         return data
 
 
-def resolve_zone_ids(config: Config, resolve_fn: Callable[[str], str]) -> None:
+def resolve_zone_ids(
+    config: Config,
+    resolve_fn: Callable[[str], str],
+    max_workers: int | None = None,
+) -> None:
     """Resolve zone IDs by calling resolve_fn(zone_name) for zones without one.
 
     Since zone_id is never set from config files, this resolves all zones
     loaded via Config.from_file(). Mutates zone_cfg.zone_id in-place.
+
+    Args:
+        max_workers: Concurrency for resolution. Uses config.max_workers when None.
     """
-    for zone_name, zone_cfg in config.zones.items():
-        if zone_cfg.zone_id is None:
+    to_resolve = {name: cfg for name, cfg in config.zones.items() if cfg.zone_id is None}
+    if not to_resolve:
+        return
+
+    workers = max_workers if max_workers is not None else config.max_workers
+    if workers <= 1 or len(to_resolve) <= 1:
+        for zone_name, zone_cfg in to_resolve.items():
             zone_cfg.zone_id = resolve_fn(zone_name)
+        return
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    with ThreadPoolExecutor(max_workers=min(workers, len(to_resolve))) as executor:
+        futures = {executor.submit(resolve_fn, name): name for name in to_resolve}
+        for future in as_completed(futures):
+            zone_name = futures[future]
+            to_resolve[zone_name].zone_id = future.result()

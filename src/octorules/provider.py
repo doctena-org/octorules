@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import cloudflare
@@ -15,7 +16,9 @@ from cloudflare import (
 )
 
 from octorules.config import ConfigError
-from octorules.phases import ALL_CF_PHASES
+from octorules.phases import ACCOUNT_CF_PHASES, ALL_CF_PHASES
+
+_ACCOUNT_PHASE_SET: frozenset[str] = frozenset(ACCOUNT_CF_PHASES)
 
 log = logging.getLogger("octorules")
 
@@ -151,11 +154,13 @@ class CloudflareProvider:
     def get_all_phase_rules(
         self, scope: Scope, *, cf_phases: list[str] | None = None
     ) -> PhaseRulesResult:
-        """Fetch rules for supported phases. Returns cf_phase → rules mapping.
+        """Fetch rules for supported phases in parallel. Returns cf_phase → rules mapping.
 
         AuthenticationError and PermissionDeniedError propagate immediately
         (permanent errors). Transient errors (rate limit, server error,
         connection) are logged and the phase is recorded in ``result.failed_phases``.
+
+        For account scopes, automatically restricts to account-compatible phases.
 
         Args:
             scope: The Scope (zone or account) to fetch rules for.
@@ -163,21 +168,33 @@ class CloudflareProvider:
                        Defaults to all supported phases.
         """
         phases_to_fetch = cf_phases if cf_phases is not None else ALL_CF_PHASES
+        if scope.is_account:
+            phases_to_fetch = [p for p in phases_to_fetch if p in _ACCOUNT_PHASE_SET]
         sl = _fmt_scope(scope)
         log.debug("Fetching %d phase(s) for %s", len(phases_to_fetch), sl)
         rules: dict[str, list[dict]] = {}
         failed: list[str] = []
-        for cf_phase in phases_to_fetch:
-            try:
-                phase_rules = self.get_phase_rules(scope, cf_phase)
-            except (AuthenticationError, PermissionDeniedError):
-                raise
-            except (APIError, APIConnectionError) as e:
-                log.warning("Failed to fetch phase %s for %s: %s", cf_phase, sl, e)
-                failed.append(cf_phase)
-                continue
-            if phase_rules:
-                rules[cf_phase] = phase_rules
+
+        if not phases_to_fetch:
+            return PhaseRulesResult(rules, failed_phases=failed)
+
+        with ThreadPoolExecutor(max_workers=min(4, len(phases_to_fetch))) as executor:
+            futures = {executor.submit(self.get_phase_rules, scope, p): p for p in phases_to_fetch}
+            for future in as_completed(futures):
+                cf_phase = futures[future]
+                try:
+                    phase_rules = future.result()
+                except (AuthenticationError, PermissionDeniedError):
+                    # Cancel remaining futures before propagating
+                    for f in futures:
+                        f.cancel()
+                    raise
+                except (APIError, APIConnectionError) as e:
+                    log.warning("Failed to fetch phase %s for %s: %s", cf_phase, sl, e)
+                    failed.append(cf_phase)
+                    continue
+                if phase_rules:
+                    rules[cf_phase] = phase_rules
         return PhaseRulesResult(rules, failed_phases=failed)
 
 

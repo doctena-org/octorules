@@ -1483,8 +1483,8 @@ class TestParallelPlanning:
 
     @patch("octorules.cli.CloudflareProvider")
     def test_cmd_plan_sequential(self, mock_provider_cls, sample_config):
-        """max_workers=1 (default): sequential planning works same as before."""
-        assert sample_config.max_workers == 1
+        """max_workers=1: sequential planning works same as before."""
+        sample_config.max_workers = 1
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}

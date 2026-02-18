@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from octorules.phases import (
+    ACCOUNT_CF_PHASES,
     ALL_CF_PHASES,
     ALL_FRIENDLY_NAMES,
     PHASES,
@@ -58,6 +59,33 @@ class TestPhaseRegistry:
     def test_get_phase_by_cf(self):
         phase = get_phase_by_cf("http_request_dynamic_redirect")
         assert phase.friendly_name == "redirect_rules"
+
+    def test_account_level_phases(self):
+        account_phases = [p for p in PHASES if p.account_level]
+        assert len(account_phases) == 4
+        account_cf = {p.cf_phase for p in account_phases}
+        assert account_cf == {
+            "http_custom_errors",
+            "http_request_firewall_custom",
+            "http_request_firewall_managed",
+            "http_ratelimit",
+        }
+
+    def test_account_cf_phases_list(self):
+        assert set(ACCOUNT_CF_PHASES) == {
+            "http_custom_errors",
+            "http_request_firewall_custom",
+            "http_request_firewall_managed",
+            "http_ratelimit",
+        }
+        assert len(ACCOUNT_CF_PHASES) == 4
+
+    def test_account_cf_phases_subset_of_all(self):
+        assert set(ACCOUNT_CF_PHASES).issubset(set(ALL_CF_PHASES))
+
+    def test_non_account_phases_default_false(self):
+        non_account = [p for p in PHASES if not p.account_level]
+        assert len(non_account) == 8
 
     def test_get_phase_by_cf_unknown(self):
         with pytest.raises(KeyError, match="Unknown CF phase"):

@@ -420,16 +420,30 @@ def _cmd_plan_or_compare(
     failed: list[str] = []
 
     zone_plans: list[ZonePlan] = []
-    if scope_filter in ("all", "zones"):
-        zone_names = _get_zones(config, zone_filter)
-        zp_list, _, _, zone_failed = _plan_zones(config, provider, zone_names, phase_filter)
-        zone_plans.extend(zp_list)
-        failed.extend(zone_failed)
+    do_zones = scope_filter in ("all", "zones")
+    do_account = scope_filter in ("all", "account")
 
-    if scope_filter in ("all", "account"):
-        acct_plan, _, _ = _plan_account(config, provider, phase_filter)
-        if acct_plan is not None:
-            zone_plans.append(acct_plan)
+    if do_zones and do_account:
+        # Run account planning concurrently with zone planning
+        with ThreadPoolExecutor(max_workers=1) as acct_executor:
+            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
+            zone_names = _get_zones(config, zone_filter)
+            zp_list, _, _, zone_failed = _plan_zones(config, provider, zone_names, phase_filter)
+            zone_plans.extend(zp_list)
+            failed.extend(zone_failed)
+            acct_plan, _, _ = acct_future.result()
+            if acct_plan is not None:
+                zone_plans.append(acct_plan)
+    else:
+        if do_zones:
+            zone_names = _get_zones(config, zone_filter)
+            zp_list, _, _, zone_failed = _plan_zones(config, provider, zone_names, phase_filter)
+            zone_plans.extend(zp_list)
+            failed.extend(zone_failed)
+        if do_account:
+            acct_plan, _, _ = _plan_account(config, provider, phase_filter)
+            if acct_plan is not None:
+                zone_plans.append(acct_plan)
 
     if not _emit_plan_outputs(config, zone_plans):
         return 1
@@ -659,19 +673,11 @@ def cmd_sync(
     current_by_zone: dict[str, dict] = {}
     scope_map: dict[str, Scope] = {}
     account_label: str | None = None
+    do_zones = scope_filter in ("all", "zones")
+    do_account = scope_filter in ("all", "account")
 
-    if scope_filter in ("all", "zones"):
-        zone_names = _get_zones(config, zone_filter)
-        zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-            config, provider, zone_names, phase_filter
-        )
-        zone_plans.extend(zp_list)
-        desired_by_zone.update(d_by_z)
-        current_by_zone.update(c_by_z)
-        failed.extend(zone_failed)
-
-    if scope_filter in ("all", "account"):
-        acct_plan, acct_desired, acct_current = _plan_account(config, provider, phase_filter)
+    def _collect_account(acct_plan, acct_desired, acct_current):
+        nonlocal account_label
         if acct_plan is not None:
             zone_plans.append(acct_plan)
             desired_by_zone[acct_plan.zone_name] = acct_desired
@@ -680,6 +686,31 @@ def cmd_sync(
             scope_map[acct_plan.zone_name] = Scope(
                 account_id=provider.account_id, label=provider.account_name
             )
+
+    if do_zones and do_account:
+        with ThreadPoolExecutor(max_workers=1) as acct_executor:
+            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
+            zone_names = _get_zones(config, zone_filter)
+            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
+                config, provider, zone_names, phase_filter
+            )
+            zone_plans.extend(zp_list)
+            desired_by_zone.update(d_by_z)
+            current_by_zone.update(c_by_z)
+            failed.extend(zone_failed)
+            _collect_account(*acct_future.result())
+    else:
+        if do_zones:
+            zone_names = _get_zones(config, zone_filter)
+            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
+                config, provider, zone_names, phase_filter
+            )
+            zone_plans.extend(zp_list)
+            desired_by_zone.update(d_by_z)
+            current_by_zone.update(c_by_z)
+            failed.extend(zone_failed)
+        if do_account:
+            _collect_account(*_plan_account(config, provider, phase_filter))
 
     if failed:
         log.error("Aborting sync: failed to plan %d zone(s)", len(failed))
@@ -778,36 +809,26 @@ def cmd_dump(
     provider = _init_provider(config)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
     had_errors = False
-
-    if scope_filter in ("all", "zones"):
-        zone_names = _get_zones(config, zone_filter)
-
-        def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
-            zone_cfg = config.zones[zone_name]
-            scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
-            try:
-                rules = provider.get_all_phase_rules(scope)
-            except (AuthenticationError, PermissionDeniedError):
-                raise
-            except (APIError, APIConnectionError) as e:
-                return zone_name, None, _format_api_error(e)
-            result = dump_zone_rules(zone_name, rules, out_dir)
-            return zone_name, result, None
-
-        results = _map_ordered(_fetch_and_dump, zone_names, config.max_workers)
-
-        for zone_name, result, error in results:
-            if error:
-                log.error("Failed to dump %s: %s", zone_name, error)
-                had_errors = True
-            elif result:
-                log.info("Dumped %s → %s", zone_name, result)
-
-    if (
+    do_zones = scope_filter in ("all", "zones")
+    do_account = (
         scope_filter in ("all", "account")
         and isinstance(provider.account_id, str)
         and isinstance(provider.account_name, str)
-    ):
+    )
+
+    def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
+        zone_cfg = config.zones[zone_name]
+        scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
+        try:
+            rules = provider.get_all_phase_rules(scope)
+        except (AuthenticationError, PermissionDeniedError):
+            raise
+        except (APIError, APIConnectionError) as e:
+            return zone_name, None, _format_api_error(e)
+        result = dump_zone_rules(zone_name, rules, out_dir)
+        return zone_name, result, None
+
+    def _dump_account() -> tuple[bool, str | None]:
         account_label = slugify(provider.account_name)
         scope = Scope(account_id=provider.account_id, label=provider.account_name)
         try:
@@ -815,12 +836,46 @@ def cmd_dump(
         except (AuthenticationError, PermissionDeniedError):
             raise
         except (APIError, APIConnectionError) as e:
-            log.error("Failed to dump account %s: %s", provider.account_name, _format_api_error(e))
-            had_errors = True
-        else:
-            result = dump_zone_rules(account_label, rules, out_dir)
-            if result:
-                log.info("Dumped account %s → %s", provider.account_name, result)
+            log.error(
+                "Failed to dump account %s: %s",
+                provider.account_name,
+                _format_api_error(e),
+            )
+            return True, None
+        result = dump_zone_rules(account_label, rules, out_dir)
+        if result:
+            log.info("Dumped account %s → %s", provider.account_name, result)
+        return False, result
+
+    if do_zones and do_account:
+        # Run account dump concurrently with zone dumps
+        with ThreadPoolExecutor(max_workers=1) as acct_executor:
+            acct_future = acct_executor.submit(_dump_account)
+            zone_names = _get_zones(config, zone_filter)
+            results = _map_ordered(_fetch_and_dump, zone_names, config.max_workers)
+            for zone_name, result, error in results:
+                if error:
+                    log.error("Failed to dump %s: %s", zone_name, error)
+                    had_errors = True
+                elif result:
+                    log.info("Dumped %s → %s", zone_name, result)
+            acct_error, _ = acct_future.result()
+            if acct_error:
+                had_errors = True
+    else:
+        if do_zones:
+            zone_names = _get_zones(config, zone_filter)
+            results = _map_ordered(_fetch_and_dump, zone_names, config.max_workers)
+            for zone_name, result, error in results:
+                if error:
+                    log.error("Failed to dump %s: %s", zone_name, error)
+                    had_errors = True
+                elif result:
+                    log.info("Dumped %s → %s", zone_name, result)
+        if do_account:
+            acct_error, _ = _dump_account()
+            if acct_error:
+                had_errors = True
 
     return 1 if had_errors else 0
 

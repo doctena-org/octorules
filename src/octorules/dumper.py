@@ -50,7 +50,11 @@ def dump_zone_rules(
         log.error("Failed to create output directory %s: %s", output_dir, e)
         return None
 
-    output_path = output_dir / f"{zone_name}.yaml"
+    output_path = (output_dir / f"{zone_name}.yaml").resolve()
+    # Prevent path traversal outside the output directory
+    if not str(output_path).startswith(str(output_dir.resolve())):
+        log.error("Zone name %r would write outside output directory", zone_name)
+        return None
 
     try:
         with open(output_path, "w", encoding="utf-8") as f:
