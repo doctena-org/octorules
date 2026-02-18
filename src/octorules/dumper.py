@@ -52,7 +52,9 @@ def dump_zone_rules(
 
     output_path = (output_dir / f"{zone_name}.yaml").resolve()
     # Prevent path traversal outside the output directory
-    if not str(output_path).startswith(str(output_dir.resolve())):
+    try:
+        output_path.relative_to(output_dir.resolve())
+    except ValueError:
         log.error("Zone name %r would write outside output directory", zone_name)
         return None
 

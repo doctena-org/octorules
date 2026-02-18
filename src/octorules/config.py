@@ -317,7 +317,9 @@ class Config:
             log.debug("Zone %s does not include 'rules' in sources, skipping rules file", zone_name)
             return {}
         rules_file = (self.rules_dir / f"{zone_name}.yaml").resolve()
-        if not str(rules_file).startswith(str(self.rules_dir.resolve())):
+        try:
+            rules_file.relative_to(self.rules_dir.resolve())
+        except ValueError:
             raise ConfigError(f"Zone name {zone_name!r} resolves outside rules directory")
         if not rules_file.exists():
             log.debug("No rules file for zone %s (expected %s)", zone_name, rules_file)
@@ -333,7 +335,9 @@ class Config:
         """Load the rules YAML file for an account (by slugified name)."""
         slug = slugify(account_name)
         rules_file = (self.rules_dir / f"{slug}.yaml").resolve()
-        if not str(rules_file).startswith(str(self.rules_dir.resolve())):
+        try:
+            rules_file.relative_to(self.rules_dir.resolve())
+        except ValueError:
             raise ConfigError(f"Account name {account_name!r} resolves outside rules directory")
         if not rules_file.exists():
             log.debug("No rules file for account %s (expected %s)", account_name, rules_file)
