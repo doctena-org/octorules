@@ -63,6 +63,7 @@ class RuleChange:
 class PhasePlan:
     phase: Phase
     changes: list[RuleChange] = field(default_factory=list)
+    prepared_rules: list[dict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def has_changes(self) -> bool:
@@ -134,8 +135,22 @@ def validate_rules(rules: list[dict], phase: Phase) -> None:
         seen_refs.add(ref)
 
 
+_RENAMED_PHASES: dict[str, str] = {"waf_managed_exceptions": "waf_managed_rules"}
+
+
 def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
     """Warn about unknown top-level keys in a zone rules file."""
+    # Warn about renamed phases (they still work via aliases but are deprecated)
+    for key in sorted(set(rules_data.keys()) & _RENAMED_PHASES.keys()):
+        new_name = _RENAMED_PHASES[key]
+        log.warning(
+            "Phase %r has been renamed to %r in rules for %s. "
+            "Please update your YAML file. The old name still works but is deprecated.",
+            key,
+            new_name,
+            zone_name,
+        )
+    # Warn about truly unknown phases
     unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys()
     for key in sorted(unknown):
         log.warning("%s in rules for %s", unknown_phase_message(key), zone_name)
@@ -189,6 +204,7 @@ def diff_phase(
     plan = PhasePlan(phase=phase)
 
     desired = prepare_desired_rules(desired_rules, phase)
+    plan.prepared_rules = desired
     desired_by_ref = _rules_by_ref(desired)
     current_by_ref = _rules_by_ref(current_rules)
 
@@ -223,15 +239,17 @@ def diff_phase(
         norm_desired = normalize_rule(desired_by_ref[ref])
         norm_current = normalize_rule(current_by_ref[ref])
         if norm_desired != norm_current:
-            plan.changes.append(
-                RuleChange(
-                    change_type=ChangeType.MODIFY,
-                    ref=ref,
-                    phase=phase,
-                    current=current_by_ref[ref],
-                    desired=desired_by_ref[ref],
-                )
+            change = RuleChange(
+                change_type=ChangeType.MODIFY,
+                ref=ref,
+                phase=phase,
+                current=current_by_ref[ref],
+                desired=desired_by_ref[ref],
             )
+            # Pre-populate cached properties to avoid re-normalizing
+            change.__dict__["normalized_current"] = norm_current
+            change.__dict__["normalized_desired"] = norm_desired
+            plan.changes.append(change)
 
     # Reorder detection (same set of refs, but different order)
     desired_order = _ref_order(desired)
@@ -261,10 +279,12 @@ def plan_zone(
     warn_unknown_phase_keys(desired_rules_by_phase, zone_name)
 
     # Process phases that appear in desired config
+    processed_cf_phases: set[str] = set()
     for friendly_name, desired_rules in desired_rules_by_phase.items():
         if friendly_name not in PHASE_BY_NAME:
             continue
         phase = get_phase(friendly_name)
+        processed_cf_phases.add(phase.cf_phase)
         current_rules = current_rules_by_cf_phase.get(phase.cf_phase, [])
         phase_plan = diff_phase(
             phase, desired_rules, current_rules, allow_unmanaged=allow_unmanaged
@@ -278,8 +298,10 @@ def plan_zone(
         for cf_phase, current_rules in current_rules_by_cf_phase.items():
             if cf_phase not in PHASE_BY_CF:
                 continue
+            if cf_phase in processed_cf_phases:
+                continue
             phase = PHASE_BY_CF[cf_phase]
-            if phase.friendly_name not in desired_rules_by_phase and current_rules:
+            if current_rules:
                 phase_plan = diff_phase(phase, [], current_rules)
                 if phase_plan.has_changes:
                     zone_plan.phase_plans.append(phase_plan)

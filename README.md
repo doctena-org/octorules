@@ -2,7 +2,7 @@
 
 ## Cloudflare Rules as code - Manage rules across zones declaratively
 
-In the vein of [infrastructure as code](https://en.wikipedia.org/wiki/Infrastructure_as_Code), octorules provides tools & patterns to manage Cloudflare Rules (Redirect Rules, Cache Rules, Origin Rules, WAF Custom Rules, Rate Limiting, and more) as YAML files. The resulting config can live in a repository and be deployed just like the rest of your code, maintaining a clear history and using your existing review & workflow.
+In the vein of [infrastructure as code](https://en.wikipedia.org/wiki/Infrastructure_as_Code), octorules provides tools & patterns to manage Cloudflare Rules (Redirect Rules, Cache Rules, Origin Rules, WAF Custom Rules, WAF Managed Rules, Rate Limiting, Bot Fight Mode, Sensitive Data Detection, and more) as YAML files. The resulting config can live in a repository and be deployed just like the rest of your code, maintaining a clear history and using your existing review & workflow.
 
 [octodns](https://github.com/octodns/octodns) manages DNS records, but can't touch Cloudflare's newer Rules products. **octorules** fills that gap — one YAML file per domain, plan-before-apply, fail-fast on errors.
 
@@ -95,24 +95,28 @@ octorules dump --config config.yaml
 
 ## Supported phases
 
-| YAML Key | Cloudflare Phase | Default Action |
-|---|---|---|
-| `redirect_rules` | `http_request_dynamic_redirect` | `redirect` |
-| `url_rewrite_rules` | `http_request_transform` | `rewrite` |
-| `request_header_rules` | `http_request_late_transform` | `rewrite` |
-| `response_header_rules` | `http_response_headers_transform` | `rewrite` |
-| `config_rules` | `http_config_settings` | `set_config` |
-| `origin_rules` | `http_request_origin` | `route` |
-| `cache_rules` | `http_request_cache_settings` | `set_cache_settings` |
-| `compression_rules` | `http_response_compression` | `compress_response` |
-| `custom_error_rules` | `http_custom_errors` | `serve_error` |
-| `waf_custom_rules` | `http_request_firewall_custom` | *(must specify)* |
-| `waf_managed_exceptions` | `http_request_firewall_managed` | *(must specify)* |
-| `rate_limiting_rules` | `http_ratelimit` | *(must specify)* |
+| YAML Key | Cloudflare Phase | Default Action | Zone | Account |
+|---|---|---|---|---|
+| `redirect_rules` | `http_request_dynamic_redirect` | `redirect` | Yes | — |
+| `url_rewrite_rules` | `http_request_transform` | `rewrite` | Yes | — |
+| `request_header_rules` | `http_request_late_transform` | `rewrite` | Yes | — |
+| `response_header_rules` | `http_response_headers_transform` | `rewrite` | Yes | — |
+| `config_rules` | `http_config_settings` | `set_config` | Yes | — |
+| `origin_rules` | `http_request_origin` | `route` | Yes | — |
+| `cache_rules` | `http_request_cache_settings` | `set_cache_settings` | Yes | — |
+| `compression_rules` | `http_response_compression` | `compress_response` | Yes | — |
+| `custom_error_rules` | `http_custom_errors` | `serve_error` | — | Yes |
+| `waf_custom_rules` | `http_request_firewall_custom` | *(must specify)* | Yes | Yes |
+| `waf_managed_rules` | `http_request_firewall_managed` | *(must specify)* | Yes | Yes |
+| `rate_limiting_rules` | `http_ratelimit` | *(must specify)* | Yes | Yes |
+| `bot_fight_rules` | `http_request_sbfm` | *(must specify)* | Yes | — |
+| `sensitive_data_detection` | `http_response_firewall_managed` | *(must specify)* | Yes | — |
 
-Phases with a default action don't need `action` in the YAML — it's injected automatically. For `waf_custom_rules`, `waf_managed_exceptions`, and `rate_limiting_rules`, you must specify `action` explicitly (e.g., `block`, `challenge`, `log`).
+Phases with a default action don't need `action` in the YAML — it's injected automatically. For WAF phases (`waf_custom_rules`, `waf_managed_rules`, `rate_limiting_rules`, `bot_fight_rules`, `sensitive_data_detection`), you must specify `action` explicitly (e.g., `block`, `challenge`, `log`).
 
-Only `custom_error_rules`, `waf_custom_rules`, `waf_managed_exceptions`, and `rate_limiting_rules` are supported at account level — zone-only phases are automatically skipped for account scopes.
+Phases marked with both Zone and Account support work at either scope. Account-only phases are skipped for zone scopes, and zone-only phases are skipped for account scopes, eliminating wasted API calls.
+
+> **Note:** `waf_managed_exceptions` was renamed to `waf_managed_rules`. The old name still works as an alias but is deprecated — update your YAML files to use the new name.
 
 ## CLI reference
 
@@ -198,7 +202,7 @@ providers:
     directory: ./rules               # Path to rules directory
 
 manager:
-  max_workers: 4                     # Parallel zone processing (default: 4)
+  max_workers: 4                     # Parallel processing (default: 1)
   plan_outputs:                      # Config-driven plan output (replaces --format/--output)
     text:
       class: octorules.plan_output.PlanText
@@ -222,12 +226,15 @@ zones:
 2. **Sync** — Executes the plan by doing an atomic PUT per phase (full replacement of the phase ruleset). Fail-fast on errors.
 3. **Dump** — Fetches all rules from Cloudflare and writes them to YAML files, stripping API-only fields (`id`, `version`, `last_updated`, etc.).
 
-Performance:
-- **Parallel phase fetching** — phases within each scope are fetched concurrently (up to 4 workers).
-- **Parallel zone processing** — multiple zones are planned/synced concurrently (configurable via `max_workers`, default: 4).
+Performance (all parallelism controlled via `manager.max_workers`, default: 1):
+- **Parallel phase fetching** — phases within each scope are fetched concurrently.
+- **Parallel phase apply** — phase PUTs within a zone are applied concurrently during sync.
+- **Parallel zone processing** — multiple zones are planned/synced concurrently.
 - **Parallel zone ID resolution** — zone name lookups run concurrently.
 - **Concurrent account planning** — account-level rules are planned in parallel with zone rules.
-- **Account phase filtering** — only account-compatible phases are fetched for account scopes, eliminating wasted API calls.
+- **Scope-aware phase filtering** — only zone-level phases are fetched for zone scopes, and only account-level phases for account scopes, eliminating wasted API calls.
+- **Connection pool scaling** — HTTP connection pool is sized to match `max_workers`.
+- **Rules caching** — YAML rule files are parsed once and cached for the duration of each run.
 
 Safety features:
 - **`--doit` flag** — sync requires explicit confirmation.
@@ -292,8 +299,8 @@ ruff format --check src/ tests/
 3. Tag the release and push the tag:
 
 ```bash
-git tag v0.7.0
-git push origin v0.7.0
+git tag v0.8.1
+git push origin v0.8.1
 ```
 
 Pushing a `v*` tag triggers the [publish workflow](.github/workflows/publish.yaml), which builds the package, publishes it to [PyPI](https://pypi.org/project/octorules/), and creates a GitHub Release.

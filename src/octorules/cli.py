@@ -24,6 +24,7 @@ from octorules.formatter import build_report_data, print_report
 from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME, get_phase, unknown_phase_message
 from octorules.plan_output import PlanText
 from octorules.planner import (
+    PhasePlan,
     RuleValidationError,
     ZonePlan,
     check_safety,
@@ -40,7 +41,10 @@ log = logging.getLogger("octorules")
 def _init_provider(config: Config) -> CloudflareProvider:
     """Create a CloudflareProvider from config and resolve missing zone IDs."""
     provider = CloudflareProvider(
-        config.token, max_retries=config.max_retries, timeout=config.timeout
+        config.token,
+        max_retries=config.max_retries,
+        timeout=config.timeout,
+        max_workers=config.max_workers,
     )
     resolve_zone_ids(config, provider.resolve_zone_id)
     return provider
@@ -258,22 +262,31 @@ def _format_api_error(e: APIError | APIConnectionError) -> str:
     return str(e)
 
 
-def _map_ordered(fn, items: list, max_workers: int) -> list:
+def _map_ordered(
+    fn, items: list, max_workers: int, executor: ThreadPoolExecutor | None = None
+) -> list:
     """Run fn(item) for each item, returning results in input order.
 
     Uses ThreadPoolExecutor when max_workers > 1, otherwise runs sequentially.
+    An optional *executor* can be provided to reuse a thread pool across calls.
     Exceptions from callables propagate directly; callers should ensure fn
     handles expected errors internally (e.g. returning sentinel values).
     """
     if max_workers <= 1:
         return [fn(item) for item in items]
-    results: dict[int, object] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(fn, item): i for i, item in enumerate(items)}
+
+    def _run(ex: ThreadPoolExecutor) -> list:
+        results: dict[int, object] = {}
+        futures = {ex.submit(fn, item): i for i, item in enumerate(items)}
         for future in as_completed(futures):
             idx = futures[future]
-            results[idx] = future.result()  # propagates exceptions from fn
-    return [results[i] for i in range(len(items))]
+            results[idx] = future.result()
+        return [results[i] for i in range(len(items))]
+
+    if executor is not None:
+        return _run(executor)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        return _run(ex)
 
 
 def _plan_single_zone(
@@ -331,6 +344,7 @@ def _plan_zones(
     provider: CloudflareProvider,
     zone_names: list[str],
     phase_filter: list[str] | None,
+    executor: ThreadPoolExecutor | None = None,
 ) -> tuple[list[ZonePlan], dict[str, dict], dict[str, dict], list[str]]:
     """Plan all zones, optionally in parallel.
 
@@ -345,6 +359,7 @@ def _plan_zones(
         lambda zn: _plan_single_zone_safe(config, provider, zn, phase_filter),
         zone_names,
         config.max_workers,
+        executor=executor,
     )
 
     for zone_name, result in zip(zone_names, results):
@@ -513,22 +528,39 @@ def cmd_report(
     desired_by_zone: dict[str, dict] = {}
     current_by_zone: dict[str, dict] = {}
 
-    if scope_filter in ("all", "zones"):
-        zone_names = _get_zones(config, zone_filter)
-        zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-            config, provider, zone_names, phase_filter
-        )
-        zone_plans.extend(zp_list)
-        desired_by_zone.update(d_by_z)
-        current_by_zone.update(c_by_z)
-        failed.extend(zone_failed)
+    do_zones = scope_filter in ("all", "zones")
+    do_account = scope_filter in ("all", "account")
 
-    if scope_filter in ("all", "account"):
-        acct_plan, acct_desired, acct_current = _plan_account(config, provider, phase_filter)
+    def _collect_account(acct_plan, acct_desired, acct_current):
         if acct_plan is not None:
             zone_plans.append(acct_plan)
             desired_by_zone[acct_plan.zone_name] = acct_desired
             current_by_zone[acct_plan.zone_name] = acct_current
+
+    if do_zones and do_account:
+        with ThreadPoolExecutor(max_workers=1) as acct_executor:
+            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
+            zone_names = _get_zones(config, zone_filter)
+            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
+                config, provider, zone_names, phase_filter
+            )
+            zone_plans.extend(zp_list)
+            desired_by_zone.update(d_by_z)
+            current_by_zone.update(c_by_z)
+            failed.extend(zone_failed)
+            _collect_account(*acct_future.result())
+    else:
+        if do_zones:
+            zone_names = _get_zones(config, zone_filter)
+            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
+                config, provider, zone_names, phase_filter
+            )
+            zone_plans.extend(zp_list)
+            desired_by_zone.update(d_by_z)
+            current_by_zone.update(c_by_z)
+            failed.extend(zone_failed)
+        if do_account:
+            _collect_account(*_plan_account(config, provider, phase_filter))
 
     report_data = build_report_data(zone_plans, desired_by_zone, current_by_zone)
     print_report(report_data, fmt=report_format)
@@ -585,20 +617,116 @@ def _log_safety_violations(violations: list) -> None:
         )
 
 
+def _apply_single_phase(
+    zp_zone_name: str,
+    pp: PhasePlan,
+    desired: dict,
+    scope: Scope,
+    provider: CloudflareProvider,
+) -> tuple[str, str | None]:
+    """Apply a single phase. Returns (phase_label, error_msg).
+
+    AuthenticationError/PermissionDeniedError propagate immediately.
+    """
+
+    phase = pp.phase
+    friendly_name = phase.friendly_name
+    n_changes = len(pp.changes)
+    log.info("  %s/%s: applying %d change(s)", zp_zone_name, friendly_name, n_changes)
+    if pp.prepared_rules is not None:
+        payload = pp.prepared_rules
+    else:
+        phase_rules = desired.get(friendly_name, [])
+        payload = prepare_desired_rules(phase_rules, phase)
+    kw = scope.api_kwargs
+    scope_key = next(iter(kw))
+    log.debug(
+        "  PUT %s %s (%s=%s) rules=%d",
+        phase.cf_phase,
+        zp_zone_name,
+        scope_key,
+        kw[scope_key],
+        len(payload),
+    )
+    try:
+        provider.put_phase_rules(scope, phase.cf_phase, payload)
+    except (AuthenticationError, PermissionDeniedError):
+        raise
+    except (APIError, APIConnectionError) as e:
+        return f"{zp_zone_name}/{friendly_name}", _format_api_error(e)
+    log.info("  %s/%s: done", zp_zone_name, friendly_name)
+    return f"{zp_zone_name}/{friendly_name}", None
+
+
+def _apply_single_zone(
+    zp: ZonePlan,
+    desired: dict,
+    scope: Scope,
+    provider: CloudflareProvider,
+) -> tuple[str, list[str], str | None]:
+    """Apply changes for a single zone. Returns (zone_name, synced_phases, error_msg).
+
+    Phases within a zone are applied in parallel when max_workers > 1.
+    AuthenticationError/PermissionDeniedError propagate immediately.
+    """
+    log.info("Syncing %s", zp.zone_name)
+    phases = zp.phase_plans
+    if not phases:
+        return zp.zone_name, [], None
+
+    _mw = getattr(provider, "_max_workers", 1)
+    max_w: int = _mw if isinstance(_mw, int) else 1
+    if max_w <= 1 or len(phases) <= 1:
+        # Sequential path
+        synced: list[str] = []
+        for pp in phases:
+            label, error = _apply_single_phase(zp.zone_name, pp, desired, scope, provider)
+            if error:
+                return zp.zone_name, synced, error
+            synced.append(label)
+        return zp.zone_name, synced, None
+
+    # Parallel path: apply phases concurrently
+    synced = []
+    first_error: str | None = None
+    workers = min(max_w, len(phases))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                _apply_single_phase, zp.zone_name, pp, desired, scope, provider
+            ): pp.phase.friendly_name
+            for pp in phases
+        }
+        for future in as_completed(futures):
+            try:
+                label, error = future.result()
+            except (AuthenticationError, PermissionDeniedError):
+                for f in futures:
+                    f.cancel()
+                raise
+            if error:
+                if first_error is None:
+                    first_error = error
+            else:
+                synced.append(label)
+    return zp.zone_name, synced, first_error
+
+
 def _apply_zone_changes(
     actionable: list[ZonePlan],
     desired_by_zone: dict[str, dict],
     config: Config,
     provider: CloudflareProvider,
     scope_map: dict[str, Scope] | None = None,
+    executor: ThreadPoolExecutor | None = None,
 ) -> int:
-    """Apply planned changes to Cloudflare. Returns exit code."""
+    """Apply planned changes to Cloudflare in parallel across zones. Returns exit code."""
     total = len(actionable)
     log.info("Applying changes to %d zone(s)...", total)
 
-    synced_phases: list[str] = []
-    for i, zp in enumerate(actionable, 1):
-        # Look up scope and zone_cfg
+    # Build list of (zone_plan, desired, scope) to apply
+    to_apply: list[tuple[ZonePlan, dict, Scope]] = []
+    for zp in actionable:
         if zp.zone_name in config.zones:
             zone_cfg = config.zones[zp.zone_name]
             scope = Scope(zone_id=zone_cfg.zone_id, label=zp.zone_name)
@@ -606,55 +734,45 @@ def _apply_zone_changes(
             zone_cfg = _make_account_zone_config(config)
             scope = scope_map[zp.zone_name]
         else:
-            log.warning("[%d/%d] Skipping %s (no config found)", i, total, zp.zone_name)
+            log.warning("Skipping %s (no config found)", zp.zone_name)
             continue
 
         if zone_cfg.always_dry_run:
-            log.warning("[%d/%d] Skipping %s (always_dry_run is enabled)", i, total, zp.zone_name)
+            log.warning("Skipping %s (always_dry_run is enabled)", zp.zone_name)
             continue
 
-        log.info("[%d/%d] Syncing %s", i, total, zp.zone_name)
-        desired = desired_by_zone[zp.zone_name]
+        to_apply.append((zp, desired_by_zone[zp.zone_name], scope))
 
-        for pp in zp.phase_plans:
-            phase = pp.phase
-            friendly_name = phase.friendly_name
-            n_changes = len(pp.changes)
-            log.info("  %s: applying %d change(s)", friendly_name, n_changes)
-            phase_rules = desired.get(friendly_name, [])
-            payload = prepare_desired_rules(phase_rules, phase)
-            kw = scope.api_kwargs
-            scope_key = next(iter(kw))
-            log.debug(
-                "  PUT %s %s (%s=%s) rules=%d",
-                phase.cf_phase,
-                zp.zone_name,
-                scope_key,
-                kw[scope_key],
-                len(payload),
-            )
-            try:
-                provider.put_phase_rules(scope, phase.cf_phase, payload)
-            except (AuthenticationError, PermissionDeniedError) as e:
-                log.error(
-                    "Authentication/permission error syncing %s for %s: %s",
-                    friendly_name,
-                    zp.zone_name,
-                    _format_api_error(e),
-                )
-                return 1
-            except (APIError, APIConnectionError) as e:
-                log.error(
-                    "API error syncing %s for %s: %s",
-                    friendly_name,
-                    zp.zone_name,
-                    _format_api_error(e),
-                )
-                if synced_phases:
-                    log.error("Successfully synced before failure: %s", ", ".join(synced_phases))
-                return 1
-            synced_phases.append(f"{zp.zone_name}/{friendly_name}")
-            log.info("  %s: done", friendly_name)
+    if not to_apply:
+        log.info("Done.")
+        return 0
+
+    # Apply zones in parallel, phases within each zone sequentially
+    all_synced: list[str] = []
+    had_error = False
+
+    def _apply_one(item: tuple[ZonePlan, dict, Scope]) -> tuple[str, list[str], str | None]:
+        zp, desired, scope = item
+        return _apply_single_zone(zp, desired, scope, provider)
+
+    try:
+        results = _map_ordered(_apply_one, to_apply, config.max_workers, executor=executor)
+    except (AuthenticationError, PermissionDeniedError) as e:
+        log.error("Authentication/permission error during sync: %s", _format_api_error(e))
+        if all_synced:
+            log.error("Successfully synced before failure: %s", ", ".join(all_synced))
+        return 1
+
+    for zone_name, synced, error in results:
+        all_synced.extend(synced)
+        if error:
+            log.error("API error syncing %s: %s", zone_name, error)
+            had_error = True
+
+    if had_error:
+        if all_synced:
+            log.error("Successfully synced before failure: %s", ", ".join(all_synced))
+        return 1
 
     log.info("Done.")
     return 0
@@ -670,6 +788,30 @@ def cmd_sync(
 ) -> int:
     """Run the sync command. Returns exit code."""
     provider = _init_provider(config)
+    # Shared executor reused across plan + apply phases
+    shared_ex: ThreadPoolExecutor | None = None
+    if config.max_workers > 1:
+        shared_ex = ThreadPoolExecutor(max_workers=config.max_workers)
+    try:
+        return _cmd_sync_inner(
+            config, provider, zone_filter, phase_filter, checksum, force, scope_filter, shared_ex
+        )
+    finally:
+        if shared_ex is not None:
+            shared_ex.shutdown(wait=False)
+
+
+def _cmd_sync_inner(
+    config: Config,
+    provider: CloudflareProvider,
+    zone_filter: list[str] | None,
+    phase_filter: list[str] | None,
+    checksum: str | None,
+    force: bool,
+    scope_filter: str,
+    executor: ThreadPoolExecutor | None,
+) -> int:
+    """Inner sync logic using an optional shared executor."""
     failed: list[str] = []
 
     zone_plans: list[ZonePlan] = []
@@ -696,7 +838,7 @@ def cmd_sync(
             acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
             zone_names = _get_zones(config, zone_filter)
             zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-                config, provider, zone_names, phase_filter
+                config, provider, zone_names, phase_filter, executor=executor
             )
             zone_plans.extend(zp_list)
             desired_by_zone.update(d_by_z)
@@ -707,7 +849,7 @@ def cmd_sync(
         if do_zones:
             zone_names = _get_zones(config, zone_filter)
             zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-                config, provider, zone_names, phase_filter
+                config, provider, zone_names, phase_filter, executor=executor
             )
             zone_plans.extend(zp_list)
             desired_by_zone.update(d_by_z)
@@ -742,7 +884,9 @@ def cmd_sync(
             return 1
 
     actionable = [zp for zp in zone_plans if zp.has_changes]
-    return _apply_zone_changes(actionable, desired_by_zone, config, provider, scope_map=scope_map)
+    return _apply_zone_changes(
+        actionable, desired_by_zone, config, provider, scope_map=scope_map, executor=executor
+    )
 
 
 def cmd_validate(
@@ -808,10 +952,12 @@ def cmd_dump(
     zone_filter: list[str] | None,
     output_dir: str | None,
     scope_filter: str = "all",
+    phase_filter: list[str] | None = None,
 ) -> int:
     """Run the dump command. Returns exit code."""
     provider = _init_provider(config)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
+    cf_phases = _phase_filter_to_cf_phases(phase_filter)
     had_errors = False
     do_zones = scope_filter in ("all", "zones")
     do_account = (
@@ -824,7 +970,7 @@ def cmd_dump(
         zone_cfg = config.zones[zone_name]
         scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
         try:
-            rules = provider.get_all_phase_rules(scope)
+            rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
         except (AuthenticationError, PermissionDeniedError):
             raise
         except (APIError, APIConnectionError) as e:
@@ -836,7 +982,7 @@ def cmd_dump(
         account_label = slugify(provider.account_name)
         scope = Scope(account_id=provider.account_id, label=provider.account_name)
         try:
-            rules = provider.get_all_phase_rules(scope)
+            rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
         except (AuthenticationError, PermissionDeniedError):
             raise
         except (APIError, APIConnectionError) as e:
@@ -995,7 +1141,15 @@ def main(argv: list[str] | None = None) -> None:
                 )
             )
         elif args.command == "dump":
-            sys.exit(cmd_dump(config, args.zones, args.output_dir, scope_filter=args.scope))
+            sys.exit(
+                cmd_dump(
+                    config,
+                    args.zones,
+                    args.output_dir,
+                    scope_filter=args.scope,
+                    phase_filter=phase_filter,
+                )
+            )
     except ConfigError as e:
         log.error("Config error: %s", e)
         sys.exit(1)

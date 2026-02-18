@@ -352,9 +352,7 @@ class TestFormatPlanMarkdown:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_markdown([zp])
-        assert "expression" in result
-        assert "old" in result
-        assert "new" in result
+        assert "`expression`: ~~'old'~~ → **'new'**" in result
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(
@@ -467,10 +465,11 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "Update" in result
-        assert "expression: old-expr" in result
-        assert "expression: new-expr" in result
+        # New value wrapped in <ins>, old value in <del>
+        assert "<code>expression</code>: <ins>new-expr</ins>" in result
+        assert "<code>expression</code>: <del>old-expr</del>" in result
         # New value appears first, old value on continuation row
-        assert result.index("new-expr") < result.index("old-expr")
+        assert result.index("<ins>new-expr</ins>") < result.index("<del>old-expr</del>")
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(
@@ -508,10 +507,11 @@ class TestFormatPlanHtml:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        assert "action: redirect" in result
-        assert "expression: true" in result
+        # Field names wrapped in <code> tags
+        assert "<code>action</code>: redirect" in result
+        assert "<code>expression</code>: true" in result
         # Details joined with <br/> in a single <td>
-        assert "action: redirect<br/>expression: true" in result
+        assert "<code>action</code>: redirect<br/><code>expression</code>: true" in result
         # No colspan=2 continuation rows for Create
         # (only Update uses continuation rows)
         create_section = result[result.index("Create") : result.index("Summary")]
@@ -533,7 +533,7 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "Delete" in result
-        assert "action: redirect<br/>expression: true" in result
+        assert "<code>action</code>: redirect<br/><code>expression</code>: true" in result
 
     def test_xss_safety(self):
         """Script tags in zone names and refs must be escaped."""

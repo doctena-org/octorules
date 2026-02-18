@@ -36,6 +36,7 @@ def mock_provider():
     provider = MagicMock()
     provider.get_all_phase_rules.return_value = {}
     provider.put_phase_rules.return_value = None
+    provider._max_workers = 1
     return provider
 
 
@@ -400,7 +401,7 @@ class TestCmdSync:
 
     @patch("octorules.cli.CloudflareProvider")
     def test_sync_progress_logging(self, mock_provider_cls, tmp_path, caplog):
-        """Sync should log [i/n] progress for each zone."""
+        """Sync should log progress for each zone."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "a.com.yaml").write_text(
@@ -422,8 +423,8 @@ class TestCmdSync:
             result = cmd_sync(config, None)
         assert result == 0
         assert "Applying changes to 2 zone(s)" in caplog.text
-        assert "[1/2] Syncing a.com" in caplog.text
-        assert "[2/2] Syncing b.com" in caplog.text
+        assert "Syncing a.com" in caplog.text
+        assert "Syncing b.com" in caplog.text
 
     @patch("octorules.cli.CloudflareProvider")
     def test_sync_per_phase_logging(self, mock_provider_cls, sample_config, caplog):
@@ -2114,3 +2115,127 @@ class TestEmitPlanOutputs:
             result = _emit_plan_outputs(sample_config, [zp])
         assert result is False
         assert "Failed to write output file" in caplog.text
+
+
+class TestParallelPhaseApply:
+    """Tests for parallel phase PUT within a zone during sync."""
+
+    @patch("octorules.cli.CloudflareProvider")
+    def test_sync_parallel_phases_with_max_workers_gt_1(self, mock_provider_cls, tmp_path):
+        """With max_workers > 1 and multiple phases, phases applied in parallel."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+        )
+        config = Config(
+            token="test-token",
+            rules_dir=rules_dir,
+            max_workers=2,
+            zones={
+                "example.com": ZoneConfig(
+                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                ),
+            },
+        )
+        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        mock_provider_cls.return_value._max_workers = 2
+        result = cmd_sync(config, None)
+        assert result == 0
+        # Both phases should have been applied
+        assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
+
+    @patch("octorules.cli.CloudflareProvider")
+    def test_sync_sequential_phases_with_max_workers_1(self, mock_provider_cls, tmp_path):
+        """With max_workers=1, phases are applied sequentially (no thread pool)."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+        )
+        config = Config(
+            token="test-token",
+            rules_dir=rules_dir,
+            max_workers=1,
+            zones={
+                "example.com": ZoneConfig(
+                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                ),
+            },
+        )
+        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        mock_provider_cls.return_value._max_workers = 1
+        result = cmd_sync(config, None)
+        assert result == 0
+        assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
+
+    @patch("octorules.cli.CloudflareProvider")
+    def test_parallel_phase_api_error_reported(self, mock_provider_cls, tmp_path, caplog):
+        """API error in one phase during parallel apply should be reported."""
+        from cloudflare import APIError
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+        )
+        config = Config(
+            token="test-token",
+            rules_dir=rules_dir,
+            max_workers=2,
+            zones={
+                "example.com": ZoneConfig(
+                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                ),
+            },
+        )
+        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        mock_provider_cls.return_value._max_workers = 2
+
+        call_count = 0
+
+        def put_side_effect(scope, cf_phase, rules):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise APIError("Server error", request=MagicMock(), body=None)
+
+        mock_provider_cls.return_value.put_phase_rules.side_effect = put_side_effect
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = cmd_sync(config, None)
+        assert result == 1
+        assert "API error syncing example.com" in caplog.text
+
+
+class TestPreparedRulesReuse:
+    """Tests that prepared_rules from planning are reused during sync."""
+
+    @patch("octorules.cli.CloudflareProvider")
+    def test_sync_uses_prepared_rules(self, mock_provider_cls, tmp_path):
+        """Sync should use prepared_rules from planning, not re-prepare."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        config = Config(
+            token="test-token",
+            rules_dir=rules_dir,
+            zones={
+                "example.com": ZoneConfig(
+                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                ),
+            },
+        )
+        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        mock_provider_cls.return_value._max_workers = 1
+        result = cmd_sync(config, None)
+        assert result == 0
+        # Verify the PUT payload has defaults injected (from prepared_rules)
+        call_args = mock_provider_cls.return_value.put_phase_rules.call_args
+        payload = call_args[0][2]  # third positional arg: rules
+        assert payload[0]["enabled"] is True
+        assert payload[0]["action"] == "redirect"

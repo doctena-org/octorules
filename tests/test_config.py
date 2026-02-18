@@ -551,7 +551,7 @@ class TestMaxWorkers:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
         config = Config.from_file(config_file)
-        assert config.max_workers == 4
+        assert config.max_workers == 1
 
     def test_parse_max_workers(self, tmp_path):
         config_file = tmp_path / "config.yaml"
@@ -809,7 +809,7 @@ class TestManagerSection:
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg() + "manager:\n")
         config = Config.from_file(config_file)
-        assert config.max_workers == 4
+        assert config.max_workers == 1
 
 
 class TestResolveZoneIds:
@@ -1076,3 +1076,44 @@ class TestLoadAccountRules:
         config = Config.from_file(tmp_config)
         with pytest.raises(ConfigError, match="not a YAML mapping"):
             config.load_account_rules("Bad Account")
+
+
+class TestRulesCache:
+    """Tests for YAML rules caching in Config."""
+
+    def test_zone_rules_cached(self, tmp_config):
+        rules_dir = tmp_config.parent / "rules"
+        zone_file = rules_dir / "example.com.yaml"
+        zone_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        config = Config.from_file(tmp_config)
+        first = config.load_zone_rules("example.com")
+        second = config.load_zone_rules("example.com")
+        assert first is second
+        assert first["redirect_rules"][0]["ref"] == "r1"
+
+    def test_account_rules_cached(self, tmp_config):
+        rules_dir = tmp_config.parent / "rules"
+        acct_file = rules_dir / "test-acct.yaml"
+        acct_file.write_text("waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n")
+        config = Config.from_file(tmp_config)
+        first = config.load_account_rules("Test Acct")
+        second = config.load_account_rules("Test Acct")
+        assert first is second
+
+    def test_missing_zone_rules_cached_as_empty(self, tmp_config):
+        config = Config.from_file(tmp_config)
+        first = config.load_zone_rules("nonexistent.com")
+        second = config.load_zone_rules("nonexistent.com")
+        assert first == {}
+        assert first is second
+
+    def test_different_zones_independent(self, tmp_config):
+        rules_dir = tmp_config.parent / "rules"
+        (rules_dir / "a.com.yaml").write_text("redirect_rules:\n  - ref: a\n    expression: 't'\n")
+        (rules_dir / "b.com.yaml").write_text("cache_rules:\n  - ref: b\n    expression: 't'\n")
+        config = Config.from_file(tmp_config)
+        a = config.load_zone_rules("a.com")
+        b = config.load_zone_rules("b.com")
+        assert "redirect_rules" in a
+        assert "cache_rules" in b
+        assert a is not b

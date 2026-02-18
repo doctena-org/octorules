@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from octorules.provider import CloudflareProvider, Scope, _rule_to_dict
+from octorules.provider import CloudflareProvider, PhaseRulesResult, Scope, _rule_to_dict
 
 
 class MockRuleset:
@@ -328,8 +328,10 @@ class TestCloudflareProvider:
         assert "http_request_cache_settings" not in result
         assert "Failed to fetch phase" in caplog.text
         assert "http_request_cache_settings" in caplog.text
-        # All 12 phases should have been attempted
-        assert call_count == 12
+        # All zone-level phases should have been attempted
+        from octorules.phases import ZONE_CF_PHASES
+
+        assert call_count == len(ZONE_CF_PHASES)
 
     def test_get_all_phase_rules_filtered(self, mock_cf_client):
         """When cf_phases is given, only those phases should be fetched."""
@@ -342,8 +344,8 @@ class TestCloudflareProvider:
         # Should only have been called once (for the single filtered phase)
         mock_cf_client.rulesets.phases.get.assert_called_once()
 
-    def test_get_all_phase_rules_filter_none_fetches_all(self, mock_cf_client):
-        """When cf_phases is None, all phases should be fetched."""
+    def test_get_all_phase_rules_filter_none_fetches_all_zone(self, mock_cf_client):
+        """When cf_phases is None with zone scope, all zone-level phases should be fetched."""
         from cloudflare import NotFoundError
 
         mock_response = MagicMock()
@@ -353,8 +355,9 @@ class TestCloudflareProvider:
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
         provider.get_all_phase_rules(_zs(), cf_phases=None)
-        # Should have been called for all 12 phases
-        assert mock_cf_client.rulesets.phases.get.call_count == 12
+        from octorules.phases import ZONE_CF_PHASES
+
+        assert mock_cf_client.rulesets.phases.get.call_count == len(ZONE_CF_PHASES)
 
     def test_put_phase_rules_logs_debug(self, mock_cf_client, caplog):
         rules = [{"ref": "r1"}, {"ref": "r2"}]
@@ -470,7 +473,7 @@ class TestCloudflareProvider:
         from octorules.phases import ACCOUNT_CF_PHASES
 
         assert set(call_args) == set(ACCOUNT_CF_PHASES)
-        assert len(call_args) == 4
+        assert len(call_args) == len(ACCOUNT_CF_PHASES)
 
     def test_get_all_phase_rules_account_scope_with_filter(self, mock_cf_client):
         """Account scope with cf_phases filter should intersect with account phases."""
@@ -494,18 +497,27 @@ class TestCloudflareProvider:
         )
         assert call_args == ["http_request_firewall_custom"]
 
-    def test_get_all_phase_rules_zone_scope_not_filtered(self, mock_cf_client):
-        """Zone scope should fetch all phases, not just account-compatible ones."""
+    def test_get_all_phase_rules_zone_scope_filters_to_zone_phases(self, mock_cf_client):
+        """Zone scope should only fetch zone-level phases, excluding account-only ones."""
         from cloudflare import NotFoundError
 
-        mock_response = MagicMock()
-        mock_response.status_code = 404
-        mock_cf_client.rulesets.phases.get.side_effect = NotFoundError(
-            message="Not Found", response=mock_response, body=None
-        )
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
         provider.get_all_phase_rules(_zs())
-        assert mock_cf_client.rulesets.phases.get.call_count == 12
+        from octorules.phases import ZONE_CF_PHASES
+
+        assert set(call_args) == set(ZONE_CF_PHASES)
+        assert len(call_args) == len(ZONE_CF_PHASES)
+        # Account-only phases should NOT be fetched for zone scope
+        assert "http_custom_errors" not in call_args
 
     def test_get_all_phase_rules_parallel_results_correct(self, mock_cf_client):
         """Parallel fetching should produce the same results as sequential."""
@@ -541,6 +553,116 @@ class TestCloudflareProvider:
         result = provider.get_all_phase_rules(scope, cf_phases=["http_request_dynamic_redirect"])
         assert result == {}
         assert result.failed_phases == []
+        mock_cf_client.rulesets.phases.get.assert_not_called()
+
+    def test_get_all_phase_rules_zone_scope_excludes_account_only(self, mock_cf_client):
+        """Zone scope should exclude account-only phases like custom_error_rules."""
+        from cloudflare import NotFoundError
+
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        # Request an account-only phase for a zone scope — should be filtered out
+        provider.get_all_phase_rules(
+            _zs(),
+            cf_phases=["http_custom_errors", "http_request_dynamic_redirect"],
+        )
+        assert call_args == ["http_request_dynamic_redirect"]
+
+    def test_get_all_phase_rules_zone_scope_empty_filter_returns_empty(self, mock_cf_client):
+        """Zone scope with only account-only phases in filter should return empty."""
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        result = provider.get_all_phase_rules(_zs(), cf_phases=["http_custom_errors"])
+        assert result == {}
+        assert result.failed_phases == []
+        mock_cf_client.rulesets.phases.get.assert_not_called()
+
+    def test_get_all_phase_rules_zone_includes_waf_phases(self, mock_cf_client):
+        """Zone scope should include WAF phases (they work at both zone and account level)."""
+        from cloudflare import NotFoundError
+
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.get_all_phase_rules(_zs())
+        assert "http_request_firewall_custom" in call_args
+        assert "http_request_firewall_managed" in call_args
+        assert "http_ratelimit" in call_args
+        assert "http_request_sbfm" in call_args
+        assert "http_response_firewall_managed" in call_args
+
+    def test_get_all_phase_rules_account_includes_waf_phases(self, mock_cf_client):
+        """Account scope should include dual zone+account WAF phases."""
+        from cloudflare import NotFoundError
+
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        provider.get_all_phase_rules(scope)
+        assert "http_request_firewall_custom" in call_args
+        assert "http_request_firewall_managed" in call_args
+        assert "http_ratelimit" in call_args
+        # Zone-only new phases should NOT be in account scope
+        assert "http_request_sbfm" not in call_args
+        assert "http_response_firewall_managed" not in call_args
+
+    def test_get_all_phase_rules_zone_scope_with_new_phase_filter(self, mock_cf_client):
+        """Zone scope should allow filtering to new phases (sbfm, sensitive data)."""
+        from cloudflare import NotFoundError
+
+        call_args = []
+
+        def mock_get(cf_phase, **kwargs):
+            call_args.append(cf_phase)
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.get_all_phase_rules(
+            _zs(),
+            cf_phases=[
+                "http_request_sbfm",
+                "http_response_firewall_managed",
+            ],
+        )
+        assert set(call_args) == {
+            "http_request_sbfm",
+            "http_response_firewall_managed",
+        }
+
+    def test_get_all_phase_rules_account_scope_rejects_new_zone_only_phases(self, mock_cf_client):
+        """Account scope should filter out new zone-only phases from explicit filter."""
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        result = provider.get_all_phase_rules(
+            scope,
+            cf_phases=["http_request_sbfm", "http_response_firewall_managed"],
+        )
+        assert result == {}
         mock_cf_client.rulesets.phases.get.assert_not_called()
 
 
@@ -670,7 +792,7 @@ class TestCFApiResilience:
         assert "ref" not in rules[1]
 
     def test_get_all_ignores_phases_not_in_registry(self, mock_cf_client):
-        """get_all_phase_rules only fetches phases from the registry."""
+        """get_all_phase_rules only fetches phases from the registry (zone-level for zone scope)."""
         from cloudflare import NotFoundError
 
         call_args = []
@@ -684,10 +806,10 @@ class TestCFApiResilience:
         mock_cf_client.rulesets.phases.get.side_effect = mock_get
         provider = CloudflareProvider("token", client=mock_cf_client)
         provider.get_all_phase_rules(_zs())
-        # Should only call registered phases, not any hypothetical new ones
-        from octorules.phases import ALL_CF_PHASES
+        # Zone scope should only call zone-level registered phases
+        from octorules.phases import ZONE_CF_PHASES
 
-        assert set(call_args) == set(ALL_CF_PHASES)
+        assert set(call_args) == set(ZONE_CF_PHASES)
 
     def test_connection_error_on_single_phase_doesnt_stop_others(self, mock_cf_client):
         """A network error on one phase should not prevent fetching other phases."""
@@ -833,3 +955,56 @@ class TestResolveZoneId:
         provider.resolve_zone_id("example.com")
         assert provider.account_id is None
         assert provider.account_name is None
+
+
+class TestScopeApiKwargsCache:
+    """Tests for Scope.api_kwargs caching."""
+
+    def test_zone_scope_returns_same_dict(self):
+        scope = Scope(zone_id="z1")
+        first = scope.api_kwargs
+        second = scope.api_kwargs
+        assert first is second
+        assert first == {"zone_id": "z1"}
+
+    def test_account_scope_returns_same_dict(self):
+        scope = Scope(account_id="a1")
+        first = scope.api_kwargs
+        second = scope.api_kwargs
+        assert first is second
+        assert first == {"account_id": "a1"}
+
+
+class TestMaxWorkersInit:
+    """Tests for max_workers in CloudflareProvider."""
+
+    def test_default_max_workers_is_1(self, mock_cf_client):
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        assert provider._max_workers == 1
+
+    def test_custom_max_workers(self, mock_cf_client):
+        provider = CloudflareProvider("token", max_workers=8, client=mock_cf_client)
+        assert provider._max_workers == 8
+
+    def test_connection_pool_scaled_when_max_workers_gt_1(self):
+        """When max_workers > 1 and no client given, http_client should be configured."""
+        with patch("octorules.provider.cloudflare.Cloudflare") as mock_cf_cls:
+            CloudflareProvider("fake-token", max_workers=4)
+            call_kwargs = mock_cf_cls.call_args[1]
+            assert "http_client" in call_kwargs
+
+    def test_no_custom_pool_when_max_workers_1(self):
+        """When max_workers=1, default pool is used (no http_client override)."""
+        with patch("octorules.provider.cloudflare.Cloudflare") as mock_cf_cls:
+            CloudflareProvider("fake-token", max_workers=1)
+            call_kwargs = mock_cf_cls.call_args[1]
+            assert "http_client" not in call_kwargs
+
+    def test_phase_fetching_uses_max_workers(self, mock_cf_client):
+        """get_all_phase_rules should respect _max_workers for thread pool size."""
+        mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[])
+        provider = CloudflareProvider("token", max_workers=4, client=mock_cf_client)
+        scope = Scope(zone_id="z1")
+        # Fetch just 2 phases — workers should be min(4, 2) = 2
+        result = provider.get_all_phase_rules(scope, cf_phases=["p1", "p2"])
+        assert isinstance(result, PhaseRulesResult)
