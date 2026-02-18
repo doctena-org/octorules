@@ -854,6 +854,49 @@ class TestCFApiResilience:
         assert "http_request_dynamic_redirect" not in result
         assert "http_request_cache_settings" in result
 
+    def test_bad_request_on_unsupported_phase_returns_empty(self, mock_cf_client):
+        """A 400 'unknown phase' error should return empty list, not propagate."""
+        from cloudflare import BadRequestError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_cf_client.rulesets.phases.get.side_effect = BadRequestError(
+            message='unknown phase "http_request_sbfm"',
+            response=mock_response,
+            body=None,
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        result = provider.get_phase_rules(_zs(), "http_request_sbfm")
+        assert result == []
+
+    def test_bad_request_on_single_phase_doesnt_stop_others(self, mock_cf_client):
+        """A 400 on one phase should not prevent fetching other phases."""
+        from cloudflare import BadRequestError, NotFoundError
+
+        def mock_get(cf_phase, **kwargs):
+            if cf_phase == "http_request_sbfm":
+                mock_response = MagicMock()
+                mock_response.status_code = 400
+                raise BadRequestError(
+                    message='unknown phase "http_request_sbfm"',
+                    response=mock_response,
+                    body=None,
+                )
+            if cf_phase == "http_request_cache_settings":
+                return MockRuleset(
+                    rules=[{"ref": "c1", "expression": "true", "action": "set_cache_settings"}]
+                )
+            mock_response = MagicMock()
+            mock_response.status_code = 404
+            raise NotFoundError(message="Not Found", response=mock_response, body=None)
+
+        mock_cf_client.rulesets.phases.get.side_effect = mock_get
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        result = provider.get_all_phase_rules(_zs())
+        assert "http_request_sbfm" not in result
+        assert "http_request_cache_settings" in result
+        assert "http_request_sbfm" not in result.failed_phases
+
 
 class TestResolveZoneId:
     """Tests for CloudflareProvider.resolve_zone_id."""

@@ -51,6 +51,16 @@ def _init_provider(config: Config) -> CloudflareProvider:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    # Shared parent parser: allows global flags both before and after the subcommand.
+    # Uses SUPPRESS defaults so subparser values don't overwrite the main parser's.
+    shared = argparse.ArgumentParser(add_help=False)
+    shared.add_argument("--config", default=argparse.SUPPRESS)
+    shared.add_argument("--zone", action="append", dest="zones", default=argparse.SUPPRESS)
+    shared.add_argument("--phase", action="append", dest="phases", default=argparse.SUPPRESS)
+    shared.add_argument("--scope", choices=["all", "zones", "account"], default=argparse.SUPPRESS)
+    shared.add_argument("--debug", action="store_true", default=argparse.SUPPRESS)
+    shared.add_argument("--quiet", action="store_true", default=argparse.SUPPRESS)
+
     parser = argparse.ArgumentParser(
         prog="octorules",
         description="Manage Cloudflare Rules as IaC",
@@ -99,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command")
 
-    plan_parser = sub.add_parser("plan", help="Show planned changes (dry-run)")
+    plan_parser = sub.add_parser("plan", parents=[shared], help="Show planned changes (dry-run)")
     plan_parser.add_argument(
         "--checksum",
         action="store_true",
@@ -111,7 +121,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit with 2 when changes are detected (useful for CI)",
     )
 
-    sync_parser = sub.add_parser("sync", help="Apply changes to Cloudflare")
+    sync_parser = sub.add_parser("sync", parents=[shared], help="Apply changes to Cloudflare")
     sync_parser.add_argument(
         "--doit",
         action="store_true",
@@ -129,21 +139,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bypass safety threshold checks",
     )
 
-    validate_parser = sub.add_parser("validate", help="Validate config and rules files (offline)")
+    validate_parser = sub.add_parser(
+        "validate", parents=[shared], help="Validate config and rules files (offline)"
+    )
     validate_parser.add_argument(
         "--output",
         dest="validate_output",
         help="Write validation results to a file",
     )
 
-    dump_parser = sub.add_parser("dump", help="Export existing Cloudflare rules to YAML")
+    dump_parser = sub.add_parser(
+        "dump", parents=[shared], help="Export existing Cloudflare rules to YAML"
+    )
     dump_parser.add_argument(
         "--output-dir",
         help="Output directory for dumped rules (default: rules_dir from config)",
     )
 
     compare_parser = sub.add_parser(
-        "compare", help="Compare local rules against live Cloudflare state"
+        "compare", parents=[shared], help="Compare local rules against live Cloudflare state"
     )
     compare_parser.add_argument(
         "--checksum",
@@ -151,7 +165,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print a SHA-256 checksum of the comparison plan",
     )
 
-    report_parser = sub.add_parser("report", help="Drift report: deployed vs YAML source of truth")
+    report_parser = sub.add_parser(
+        "report", parents=[shared], help="Drift report: deployed vs YAML source of truth"
+    )
     report_parser.add_argument(
         "--output-format",
         choices=["csv", "json"],
@@ -160,7 +176,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report output format (default: csv)",
     )
 
-    sub.add_parser("versions", help="Show versions of octorules and dependencies")
+    sub.add_parser("versions", parents=[shared], help="Show versions of octorules and dependencies")
 
     # Provide defaults for subcommand-specific attributes so getattr is never needed
     parser.set_defaults(
@@ -1080,6 +1096,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     _setup_logging(debug=args.debug, quiet=args.quiet)
+
+    # When --zone is specified without explicit --scope, skip account processing.
+    if args.zones and args.scope == "all":
+        args.scope = "zones"
 
     # versions doesn't need config
     if args.command == "versions":

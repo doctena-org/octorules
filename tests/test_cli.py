@@ -182,6 +182,34 @@ class TestBuildParser:
         with pytest.raises(SystemExit):
             parser.parse_args(["--scope", "invalid", "plan"])
 
+    def test_config_after_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["dump", "--config", "my.yaml"])
+        assert args.config == "my.yaml"
+        assert args.command == "dump"
+
+    def test_zone_after_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["plan", "--zone", "example.com"])
+        assert args.zones == ["example.com"]
+
+    def test_debug_after_subcommand(self):
+        parser = build_parser()
+        args = parser.parse_args(["plan", "--debug"])
+        assert args.debug is True
+
+    def test_mixed_flags_before_and_after(self):
+        parser = build_parser()
+        args = parser.parse_args(["--debug", "plan", "--zone", "example.com"])
+        assert args.debug is True
+        assert args.zones == ["example.com"]
+
+    def test_config_before_still_works(self):
+        """Ensure flags before the subcommand still work after the refactor."""
+        parser = build_parser()
+        args = parser.parse_args(["--config", "my.yaml", "plan"])
+        assert args.config == "my.yaml"
+
 
 class TestGetZones:
     def test_all_zones(self, sample_config):
@@ -859,6 +887,36 @@ class TestMain:
         with pytest.raises(SystemExit) as exc_info:
             main(["--config", "/nonexistent/config.yaml", "plan"])
         assert exc_info.value.code == 1
+
+    @patch("octorules.cli.cmd_plan", return_value=0)
+    @patch("octorules.cli.Config.from_file")
+    def test_zone_filter_narrows_scope_to_zones(self, mock_config, mock_cmd, tmp_config):
+        """--zone without explicit --scope should skip account processing."""
+        mock_config.return_value = MagicMock()
+        with pytest.raises(SystemExit):
+            main(["--config", str(tmp_config), "--zone", "example.com", "plan"])
+        _, kwargs = mock_cmd.call_args
+        assert kwargs["scope_filter"] == "zones"
+
+    @patch("octorules.cli.cmd_plan", return_value=0)
+    @patch("octorules.cli.Config.from_file")
+    def test_zone_filter_with_explicit_scope_all(self, mock_config, mock_cmd, tmp_config):
+        """--zone with explicit --scope all should still narrow to zones."""
+        mock_config.return_value = MagicMock()
+        with pytest.raises(SystemExit):
+            main(["--config", str(tmp_config), "--zone", "example.com", "--scope", "all", "plan"])
+        _, kwargs = mock_cmd.call_args
+        assert kwargs["scope_filter"] == "zones"
+
+    @patch("octorules.cli.cmd_plan", return_value=0)
+    @patch("octorules.cli.Config.from_file")
+    def test_no_zone_filter_keeps_scope_all(self, mock_config, mock_cmd, tmp_config):
+        """Without --zone, scope should remain 'all'."""
+        mock_config.return_value = MagicMock()
+        with pytest.raises(SystemExit):
+            main(["--config", str(tmp_config), "plan"])
+        _, kwargs = mock_cmd.call_args
+        assert kwargs["scope_filter"] == "all"
 
     @patch("octorules.cli.cmd_plan", return_value=0)
     @patch("octorules.cli.Config.from_file")
