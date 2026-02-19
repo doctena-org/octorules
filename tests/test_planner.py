@@ -495,7 +495,7 @@ class TestPlanZone:
 
 
 class TestRenamedPhaseAlias:
-    """Tests for waf_managed_exceptions → waf_managed_rules alias in planning."""
+    """Tests for waf_managed_exceptions -> waf_managed_rules alias in planning."""
 
     def test_alias_works_in_plan_zone(self):
         """Using old name waf_managed_exceptions in desired rules should still work."""
@@ -1004,7 +1004,7 @@ class TestCFApiResilience:
         This documents the current behavior: unknown new fields from CF are
         NOT stripped and will cause a false-positive MODIFY when compared
         against the desired rules that lack the field. This is the expected
-        safe default — the user sees a diff rather than silently ignoring it.
+        safe default -- the user sees a diff rather than silently ignoring it.
         """
         desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
         current = [
@@ -1073,7 +1073,7 @@ class TestCFApiResilience:
             }
         ]
         plan = diff_phase(REDIRECT_PHASE, desired, current)
-        # None != missing key — this is a modification
+        # None != missing key -- this is a modification
         assert plan.has_changes
 
     def test_action_parameters_empty_dict_vs_missing(self):
@@ -1172,7 +1172,7 @@ class TestCFApiResilience:
             {"expression": "some-managed-rule", "action": "block"},  # No ref
         ]
         plan = diff_phase(REDIRECT_PHASE, desired, current)
-        # The no-ref rule is invisible to the diff engine — no REMOVE for it
+        # The no-ref rule is invisible to the diff engine -- no REMOVE for it
         removes = [c for c in plan.changes if c.change_type == ChangeType.REMOVE]
         assert len(removes) == 0
 
@@ -1364,5 +1364,5 @@ class TestNormalizeRuleCaching:
         plan = diff_phase(phase, desired, [])
         change = plan.changes[0]
         assert change.change_type == ChangeType.ADD
-        # Not pre-populated — will be computed lazily if accessed
+        # Not pre-populated -- will be computed lazily if accessed
         assert "normalized_desired" not in change.__dict__

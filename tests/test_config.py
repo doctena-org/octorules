@@ -1117,3 +1117,105 @@ class TestRulesCache:
         assert "redirect_rules" in a
         assert "cache_rules" in b
         assert a is not b
+
+
+class TestListsDir:
+    def test_lists_dir_defaults_to_custom_lists(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg())
+        (tmp_path / "rules").mkdir()
+        config = Config.from_file(config_file)
+        assert config.lists_dir == (tmp_path / "rules" / "custom_lists").resolve()
+
+    def test_lists_dir_from_config(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        my_lists = rules_dir / "my_lists"
+        my_lists.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "  lists:\n"
+            "    directory: ./rules/my_lists\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.lists_dir == my_lists.resolve()
+
+    def test_lists_dir_outside_rules_dir_raises(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        (tmp_path / "other").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "  lists:\n"
+            "    directory: ./other\n"
+            "zones: {}\n"
+        )
+        with pytest.raises(ConfigError, match="must be within the rules directory"):
+            Config.from_file(config_file)
+
+    def test_lists_dir_relative_to_config_file(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        rules_dir = sub / "rules"
+        rules_dir.mkdir()
+        lists_dir = rules_dir / "lists"
+        lists_dir.mkdir()
+        config_file = sub / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "  lists:\n"
+            "    directory: ./rules/lists\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.lists_dir == lists_dir.resolve()
+
+    def test_lists_dir_not_a_mapping_raises(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "  lists: notadict\n"
+            "zones: {}\n"
+        )
+        with pytest.raises(ConfigError, match="'providers.lists' must be a mapping"):
+            Config.from_file(config_file)
+
+    def test_lists_dir_null_treated_as_empty(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "  lists:\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.lists_dir == (tmp_path / "rules" / "custom_lists").resolve()
+
+    def test_lists_dir_post_init_default(self, tmp_path):
+        """Config created directly (not via from_file) defaults lists_dir."""
+        rules_dir = tmp_path / "rules"
+        config = Config(token="tok", rules_dir=rules_dir)
+        assert config.lists_dir == rules_dir / "custom_lists"

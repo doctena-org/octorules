@@ -192,12 +192,17 @@ def _parse_plan_outputs(raw_dict: dict, context: str) -> dict[str, PlanOutput]:
 class Config:
     token: str
     rules_dir: Path
+    lists_dir: Path | None = None
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
     max_workers: int = 1
     max_retries: int = 2
     timeout: float | None = None
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
     _rules_cache: dict[str, dict] = field(default_factory=dict, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.lists_dir is None:
+            self.lists_dir = Path(self.rules_dir) / "custom_lists"
 
     @classmethod
     def from_file(cls, path: str | Path) -> Config:
@@ -267,6 +272,25 @@ class Config:
         if not rules_dir.is_dir():
             log.warning("rules directory does not exist: %s", rules_dir)
 
+        # providers.lists
+        lists_section = providers_section.get("lists", {})
+        if lists_section is None:
+            lists_section = {}
+        if not isinstance(lists_section, dict):
+            raise ConfigError("'providers.lists' must be a mapping")
+        raw_lists_dir = lists_section.get("directory")
+        if raw_lists_dir is not None:
+            lists_dir = (path.parent / raw_lists_dir).resolve()
+            try:
+                lists_dir.relative_to(rules_dir)
+            except ValueError:
+                raise ConfigError(
+                    f"'providers.lists.directory' must be within the rules directory "
+                    f"({rules_dir}), got {lists_dir}"
+                )
+        else:
+            lists_dir = rules_dir / "custom_lists"
+
         # --- zones section ---
         zones: dict[str, ZoneConfig] = {}
         raw_zones = raw.get("zones", {})
@@ -304,6 +328,7 @@ class Config:
         return cls(
             token=token,
             rules_dir=rules_dir,
+            lists_dir=lists_dir,
             zones=zones,
             max_workers=max_workers,
             max_retries=max_retries,

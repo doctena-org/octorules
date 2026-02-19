@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json as _json
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -19,7 +21,13 @@ from cloudflare import (
 )
 
 from octorules.config import ConfigError
-from octorules.phases import ACCOUNT_CF_PHASES, ALL_CF_PHASES, ZONE_CF_PHASES
+from octorules.phases import (
+    ACCOUNT_CF_PHASES,
+    ALL_CF_PHASES,
+    LIST_ITEM_API_FIELDS,
+    PAGE_SHIELD_POLICY_API_FIELDS,
+    ZONE_CF_PHASES,
+)
 
 _ZONE_PHASE_SET: frozenset[str] = frozenset(ZONE_CF_PHASES)
 _ACCOUNT_PHASE_SET: frozenset[str] = frozenset(ACCOUNT_CF_PHASES)
@@ -110,6 +118,11 @@ class CloudflareProvider:
         self._account_name: str | None = None
 
     @property
+    def max_workers(self) -> int:
+        """Maximum concurrent workers for parallel operations."""
+        return self._max_workers
+
+    @property
     def account_id(self) -> str | None:
         return self._account_id
 
@@ -152,6 +165,12 @@ class CloudflareProvider:
             # support (e.g. SBFM without the entitlement).  Treat the same
             # as "no ruleset" so callers aren't surprised.
             log.debug("Phase %s not supported for %s: %s", cf_phase, _fmt_scope(scope), e)
+            return []
+        except PermissionDeniedError as e:
+            # Token lacks permission for this specific phase (e.g. ddos_l7,
+            # http_log_custom_fields).  Skip rather than aborting the entire
+            # operation — the caller can still process other phases.
+            log.debug("Phase %s not permitted for %s: %s", cf_phase, _fmt_scope(scope), e)
             return []
 
     def put_phase_rules(self, scope: Scope, cf_phase: str, rules: list[dict]) -> int:
@@ -226,6 +245,389 @@ class CloudflareProvider:
                 if phase_rules:
                     rules[cf_phase] = phase_rules
         return PhaseRulesResult(rules, failed_phases=failed)
+
+    def list_custom_rulesets(self, scope: Scope) -> list[dict]:
+        """List custom rulesets (kind == 'custom') for a scope.
+
+        Returns list of {id, name, phase, description} dicts.
+        """
+        sl = _fmt_scope(scope)
+        log.debug("LIST rulesets (custom) %s", sl)
+        result = self._client.rulesets.list(**scope.api_kwargs)
+        custom = []
+        for rs in result:
+            rs_dict = _ruleset_to_dict(rs)
+            if rs_dict.get("kind") != "custom":
+                continue
+            custom.append(
+                {
+                    "id": rs_dict["id"],
+                    "name": rs_dict.get("name", ""),
+                    "phase": rs_dict.get("phase", ""),
+                    "description": rs_dict.get("description", ""),
+                }
+            )
+        return custom
+
+    def get_custom_ruleset(self, scope: Scope, ruleset_id: str) -> list[dict]:
+        """Fetch rules inside a single custom ruleset. Returns list of rule dicts."""
+        sl = _fmt_scope(scope)
+        log.debug("GET rulesets/%s %s", ruleset_id, sl)
+        ruleset = self._client.rulesets.get(ruleset_id, **scope.api_kwargs)
+        rules = ruleset.rules or []
+        return [_rule_to_dict(r) for r in rules]
+
+    def put_custom_ruleset(self, scope: Scope, ruleset_id: str, rules: list[dict]) -> int:
+        """Replace all rules in a custom ruleset. Returns rule count from response."""
+        sl = _fmt_scope(scope)
+        log.debug("PUT rulesets/%s %s rules=%d", ruleset_id, sl, len(rules))
+        result = self._client.rulesets.update(ruleset_id, **scope.api_kwargs, rules=rules)
+        response_rules = result.rules or []
+        response_count = len(response_rules)
+        if response_count != len(rules):
+            log.warning(
+                "PUT ruleset %s %s: sent %d rule(s) but response contains %d",
+                ruleset_id,
+                sl,
+                len(rules),
+                response_count,
+            )
+        return response_count
+
+    def get_all_custom_rulesets(
+        self, scope: Scope, *, ruleset_ids: list[str] | None = None
+    ) -> dict[str, dict]:
+        """Fetch all custom rulesets in parallel.
+
+        Returns {ruleset_id: {"name": ..., "phase": ..., "rules": [...]}}.
+        If ruleset_ids is None, discovers via list_custom_rulesets.
+        """
+        if ruleset_ids is None:
+            rulesets_meta = self.list_custom_rulesets(scope)
+        else:
+            rulesets_meta = [{"id": rid, "name": "", "phase": ""} for rid in ruleset_ids]
+
+        if not rulesets_meta:
+            return {}
+
+        sl = _fmt_scope(scope)
+        log.debug("Fetching %d custom ruleset(s) for %s", len(rulesets_meta), sl)
+        meta_by_id = {rs["id"]: rs for rs in rulesets_meta}
+        result: dict[str, dict] = {}
+
+        workers = min(self._max_workers, len(rulesets_meta))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(self.get_custom_ruleset, scope, rs["id"]): rs["id"]
+                for rs in rulesets_meta
+            }
+            for future in as_completed(futures):
+                rs_id = futures[future]
+                try:
+                    rules = future.result()
+                except (AuthenticationError, PermissionDeniedError):
+                    for f in futures:
+                        f.cancel()
+                    raise
+                except (APIError, APIConnectionError) as e:
+                    log.warning("Failed to fetch custom ruleset %s for %s: %s", rs_id, sl, e)
+                    continue
+                meta = meta_by_id[rs_id]
+                result[rs_id] = {
+                    "name": meta.get("name", ""),
+                    "phase": meta.get("phase", ""),
+                    "rules": rules,
+                }
+        return result
+
+    # --- Lists API ---
+
+    def list_lists(self, scope: Scope) -> list[dict]:
+        """List all account-level lists.
+
+        Returns list of {id, name, kind, description} dicts.
+        """
+        sl = _fmt_scope(scope)
+        log.debug("LIST rules/lists %s", sl)
+        result = self._client.rules.lists.list(**scope.api_kwargs)
+        lists = []
+        for item in result:
+            d = _ruleset_to_dict(item)
+            lists.append(
+                {
+                    "id": d.get("id", ""),
+                    "name": d.get("name", ""),
+                    "kind": d.get("kind", ""),
+                    "description": d.get("description", ""),
+                }
+            )
+        return lists
+
+    def create_list(self, scope: Scope, name: str, kind: str, description: str = "") -> dict:
+        """Create a new list. Returns created list metadata dict."""
+        sl = _fmt_scope(scope)
+        log.debug("CREATE rules/lists %s name=%s kind=%s", sl, name, kind)
+        result = self._client.rules.lists.create(
+            **scope.api_kwargs, kind=kind, name=name, description=description
+        )
+        return _ruleset_to_dict(result)
+
+    def delete_list(self, scope: Scope, list_id: str) -> None:
+        """Delete a list by ID."""
+        sl = _fmt_scope(scope)
+        log.debug("DELETE rules/lists/%s %s", list_id, sl)
+        self._client.rules.lists.delete(list_id, **scope.api_kwargs)
+
+    def update_list_description(self, scope: Scope, list_id: str, description: str) -> None:
+        """Update list metadata (description)."""
+        sl = _fmt_scope(scope)
+        log.debug("UPDATE rules/lists/%s %s description=%r", list_id, sl, description)
+        self._client.rules.lists.update(list_id, **scope.api_kwargs, description=description)
+
+    def get_list_items(self, scope: Scope, list_id: str, *, _page_retries: int = 2) -> list[dict]:
+        """Fetch all items in a list, handling cursor-based pagination.
+
+        Strips LIST_ITEM_API_FIELDS from each item.
+        Uses raw responses to extract pagination cursors, since the SDK
+        returns a plain list without cursor metadata.
+
+        Each page is retried up to *_page_retries* times on transient errors
+        (``APIError``, ``APIConnectionError``).  ``AuthenticationError`` and
+        ``PermissionDeniedError`` propagate immediately.
+        """
+        sl = _fmt_scope(scope)
+        log.debug("GET rules/lists/%s/items %s", list_id, sl)
+        all_items: list[dict] = []
+        cursor: str | None = None
+        while True:
+            kwargs: dict = {**scope.api_kwargs, "per_page": 500}
+            if cursor:
+                kwargs["cursor"] = cursor
+            last_exc: APIError | APIConnectionError | None = None
+            for attempt in range(_page_retries + 1):
+                try:
+                    raw = self._client.rules.lists.items.with_raw_response.list(list_id, **kwargs)
+                    body = _json.loads(raw.http_response.text)
+                    last_exc = None
+                    break
+                except (AuthenticationError, PermissionDeniedError):
+                    raise
+                except (APIError, APIConnectionError) as e:
+                    last_exc = e
+                    if attempt < _page_retries:
+                        delay = (attempt + 1) * 1.0
+                        log.warning(
+                            "Retrying page fetch for list %s (%s, attempt %d/%d): %s",
+                            list_id,
+                            sl,
+                            attempt + 1,
+                            _page_retries + 1,
+                            e,
+                        )
+                        time.sleep(delay)
+            if last_exc is not None:
+                raise last_exc
+            for item in body.get("result", []):
+                cleaned = {k: v for k, v in item.items() if k not in LIST_ITEM_API_FIELDS}
+                all_items.append(cleaned)
+            # Extract next cursor from result_info
+            cursor = None
+            result_info = body.get("result_info")
+            if result_info:
+                cursors = result_info.get("cursors")
+                if cursors:
+                    cursor = cursors.get("after") or None
+            if not cursor:
+                break
+        return all_items
+
+    def put_list_items(self, scope: Scope, list_id: str, items: list[dict]) -> str:
+        """Replace all items in a list (async). Returns operation_id."""
+        sl = _fmt_scope(scope)
+        log.debug("PUT rules/lists/%s/items %s items=%d", list_id, sl, len(items))
+        result = self._client.rules.lists.items.update(list_id, **scope.api_kwargs, body=items)
+        d = _ruleset_to_dict(result)
+        return d.get("operation_id", "")
+
+    def poll_bulk_operation(
+        self, scope: Scope, operation_id: str, *, timeout: float = 120.0, interval: float = 2.0
+    ) -> str:
+        """Poll a bulk operation until completion.
+
+        Returns "completed". Raises APIError on "failed", TimeoutError on timeout.
+        """
+        sl = _fmt_scope(scope)
+        log.debug("POLL bulk_operations/%s %s", operation_id, sl)
+        start = time.monotonic()
+        while True:
+            result = self._client.rules.lists.bulk_operations.get(operation_id, **scope.api_kwargs)
+            d = _ruleset_to_dict(result)
+            status = d.get("status", "")
+            if status == "completed":
+                return "completed"
+            if status == "failed":
+                error = d.get("error", "unknown error")
+                raise APIError(
+                    f"Bulk operation {operation_id} failed: {error}",
+                    request=None,
+                    body=None,
+                )
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout:
+                raise TimeoutError(
+                    f"Bulk operation {operation_id} timed out after {timeout}s (status={status})"
+                )
+            time.sleep(interval)
+
+    def get_all_lists(
+        self, scope: Scope, *, list_names: list[str] | None = None
+    ) -> dict[str, dict]:
+        """Fetch all lists and their items in parallel.
+
+        Returns {list_name: {"id": ..., "kind": ..., "description": ..., "items": [...]}}.
+        If list_names is provided, filters to those names only.
+        """
+        all_meta = self.list_lists(scope)
+        if list_names is not None:
+            name_set = set(list_names)
+            all_meta = [m for m in all_meta if m["name"] in name_set]
+
+        if not all_meta:
+            return {}
+
+        sl = _fmt_scope(scope)
+        log.debug("Fetching items for %d list(s) for %s", len(all_meta), sl)
+        result: dict[str, dict] = {}
+
+        workers = min(self._max_workers, len(all_meta))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(self.get_list_items, scope, m["id"]): m for m in all_meta}
+            for future in as_completed(futures):
+                meta = futures[future]
+                try:
+                    items = future.result()
+                except (AuthenticationError, PermissionDeniedError):
+                    for f in futures:
+                        f.cancel()
+                    raise
+                except (APIError, APIConnectionError) as e:
+                    log.warning(
+                        "Failed to fetch items for list %s for %s: %s",
+                        meta["name"],
+                        sl,
+                        e,
+                    )
+                    continue
+                result[meta["name"]] = {
+                    "id": meta["id"],
+                    "kind": meta["kind"],
+                    "description": meta["description"],
+                    "items": items,
+                }
+        return result
+
+    # --- Page Shield Policies API ---
+
+    def list_page_shield_policies(self, scope: Scope) -> list[dict]:
+        """List all Page Shield policies for a zone.
+
+        Returns list of {id, description, action, expression, enabled, value} dicts.
+        """
+        sl = _fmt_scope(scope)
+        log.debug("LIST page_shield/policies %s", sl)
+        result = self._client.page_shield.policies.list(zone_id=scope.zone_id)
+        policies = []
+        for item in result:
+            d = _ruleset_to_dict(item)
+            policies.append(
+                {
+                    "id": d.get("id", ""),
+                    "description": d.get("description", ""),
+                    "action": d.get("action", ""),
+                    "expression": d.get("expression", ""),
+                    "enabled": d.get("enabled", False),
+                    "value": d.get("value", ""),
+                }
+            )
+        return policies
+
+    def create_page_shield_policy(
+        self,
+        scope: Scope,
+        *,
+        description: str,
+        action: str,
+        expression: str,
+        enabled: bool,
+        value: str,
+    ) -> dict:
+        """Create a new Page Shield policy. Returns created policy dict."""
+        sl = _fmt_scope(scope)
+        log.debug("CREATE page_shield/policies %s description=%r", sl, description)
+        result = self._client.page_shield.policies.create(
+            zone_id=scope.zone_id,
+            description=description,
+            action=action,
+            expression=expression,
+            enabled=enabled,
+            value=value,
+        )
+        return _ruleset_to_dict(result)
+
+    def update_page_shield_policy(
+        self,
+        scope: Scope,
+        policy_id: str,
+        *,
+        description: str,
+        action: str,
+        expression: str,
+        enabled: bool,
+        value: str,
+    ) -> dict:
+        """Update an existing Page Shield policy. Returns updated policy dict."""
+        sl = _fmt_scope(scope)
+        log.debug("UPDATE page_shield/policies/%s %s", policy_id, sl)
+        result = self._client.page_shield.policies.update(
+            policy_id,
+            zone_id=scope.zone_id,
+            description=description,
+            action=action,
+            expression=expression,
+            enabled=enabled,
+            value=value,
+        )
+        return _ruleset_to_dict(result)
+
+    def delete_page_shield_policy(self, scope: Scope, policy_id: str) -> None:
+        """Delete a Page Shield policy by ID."""
+        sl = _fmt_scope(scope)
+        log.debug("DELETE page_shield/policies/%s %s", policy_id, sl)
+        self._client.page_shield.policies.delete(policy_id, zone_id=scope.zone_id)
+
+    def get_all_page_shield_policies(self, scope: Scope) -> list[dict]:
+        """Fetch all Page Shield policies, stripping API-only fields.
+
+        Returns list of {description, action, expression, enabled, value} dicts.
+        """
+        policies = self.list_page_shield_policies(scope)
+        return [
+            {k: v for k, v in p.items() if k not in PAGE_SHIELD_POLICY_API_FIELDS} for p in policies
+        ]
+
+
+def _ruleset_to_dict(ruleset) -> dict:
+    """Convert a Cloudflare SDK ruleset object to a plain dict."""
+    if isinstance(ruleset, dict):
+        return ruleset
+    if hasattr(ruleset, "model_dump"):
+        return ruleset.model_dump(exclude_none=True)
+    if hasattr(ruleset, "to_dict"):
+        return ruleset.to_dict()
+    try:
+        return dict(ruleset)
+    except (TypeError, ValueError):
+        return {}
 
 
 def _rule_to_dict(rule) -> dict:

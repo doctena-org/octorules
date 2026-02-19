@@ -19,8 +19,8 @@ from octorules.phases import (
 
 
 class TestPhaseRegistry:
-    def test_fourteen_phases(self):
-        assert len(PHASES) == 14
+    def test_twenty_three_phases(self):
+        assert len(PHASES) == 23
 
     def test_all_friendly_names_unique(self):
         assert len(ALL_FRIENDLY_NAMES) == len(set(ALL_FRIENDLY_NAMES))
@@ -64,13 +64,20 @@ class TestPhaseRegistry:
 
     def test_account_level_phases(self):
         account_phases = [p for p in PHASES if p.account_level]
-        assert len(account_phases) == 4
+        assert len(account_phases) == 11
         account_cf = {p.cf_phase for p in account_phases}
         assert account_cf == {
             "http_custom_errors",
             "http_request_firewall_custom",
             "http_request_firewall_managed",
             "http_ratelimit",
+            "ddos_l7",
+            "http_request_redirect",
+            "ddos_l4",
+            "magic_transit",
+            "magic_transit_managed",
+            "magic_transit_ratelimit",
+            "magic_transit_ids_managed",
         }
 
     def test_account_cf_phases_list(self):
@@ -79,15 +86,22 @@ class TestPhaseRegistry:
             "http_request_firewall_custom",
             "http_request_firewall_managed",
             "http_ratelimit",
+            "ddos_l7",
+            "http_request_redirect",
+            "ddos_l4",
+            "magic_transit",
+            "magic_transit_managed",
+            "magic_transit_ratelimit",
+            "magic_transit_ids_managed",
         }
-        assert len(ACCOUNT_CF_PHASES) == 4
+        assert len(ACCOUNT_CF_PHASES) == 11
 
     def test_account_cf_phases_subset_of_all(self):
         assert set(ACCOUNT_CF_PHASES).issubset(set(ALL_CF_PHASES))
 
     def test_non_account_phases(self):
         non_account = [p for p in PHASES if not p.account_level]
-        assert len(non_account) == 10
+        assert len(non_account) == 12
 
     def test_get_phase_by_cf_unknown(self):
         with pytest.raises(KeyError, match="Unknown CF phase"):
@@ -110,6 +124,15 @@ class TestPhaseRegistry:
             ("rate_limiting_rules", "http_ratelimit"),
             ("bot_fight_rules", "http_request_sbfm"),
             ("sensitive_data_detection", "http_response_firewall_managed"),
+            ("http_ddos_rules", "ddos_l7"),
+            ("bulk_redirect_rules", "http_request_redirect"),
+            ("log_custom_fields", "http_log_custom_fields"),
+            ("network_ddos_rules", "ddos_l4"),
+            ("network_firewall_rules", "magic_transit"),
+            ("network_firewall_managed", "magic_transit_managed"),
+            ("network_firewall_ratelimit", "magic_transit_ratelimit"),
+            ("network_firewall_ids", "magic_transit_ids_managed"),
+            ("url_normalization", "http_request_sanitize"),
         ],
     )
     def test_phase_mapping(self, name, cf_phase):
@@ -123,9 +146,9 @@ class TestZoneLevelFlag:
         phase = get_phase("redirect_rules")
         assert phase.zone_level is True
 
-    def test_custom_error_rules_not_zone_level(self):
+    def test_custom_error_rules_zone_and_account(self):
         phase = get_phase("custom_error_rules")
-        assert phase.zone_level is False
+        assert phase.zone_level is True
         assert phase.account_level is True
 
     def test_waf_phases_both_zone_and_account(self):
@@ -138,15 +161,25 @@ class TestZoneLevelFlag:
         assert set(ZONE_CF_PHASES) == {p.cf_phase for p in PHASES if p.zone_level}
 
     def test_zone_cf_phases_excludes_account_only(self):
-        assert "http_custom_errors" not in ZONE_CF_PHASES
+        assert "http_request_redirect" not in ZONE_CF_PHASES
+        assert "ddos_l4" not in ZONE_CF_PHASES
+        assert "magic_transit" not in ZONE_CF_PHASES
 
     def test_zone_cf_phases_includes_waf(self):
         assert "http_request_firewall_custom" in ZONE_CF_PHASES
         assert "http_request_firewall_managed" in ZONE_CF_PHASES
         assert "http_ratelimit" in ZONE_CF_PHASES
 
+    def test_zone_cf_phases_includes_custom_errors(self):
+        assert "http_custom_errors" in ZONE_CF_PHASES
+
+    def test_zone_cf_phases_includes_new_zone_phases(self):
+        assert "ddos_l7" in ZONE_CF_PHASES
+        assert "http_log_custom_fields" in ZONE_CF_PHASES
+        assert "http_request_sanitize" in ZONE_CF_PHASES
+
     def test_zone_cf_phases_count(self):
-        assert len(ZONE_CF_PHASES) == 13
+        assert len(ZONE_CF_PHASES) == 17
 
 
 class TestNewPhases:
@@ -163,6 +196,90 @@ class TestNewPhases:
         assert phase.default_action is None
         assert phase.zone_level is True
         assert phase.account_level is False
+
+    def test_http_ddos_rules(self):
+        phase = get_phase("http_ddos_rules")
+        assert phase.cf_phase == "ddos_l7"
+        assert phase.default_action is None
+        assert phase.zone_level is True
+        assert phase.account_level is True
+
+    def test_bulk_redirect_rules(self):
+        phase = get_phase("bulk_redirect_rules")
+        assert phase.cf_phase == "http_request_redirect"
+        assert phase.default_action == "redirect"
+        assert phase.zone_level is False
+        assert phase.account_level is True
+
+    def test_log_custom_fields(self):
+        phase = get_phase("log_custom_fields")
+        assert phase.cf_phase == "http_log_custom_fields"
+        assert phase.default_action == "log_custom_field"
+        assert phase.zone_level is True
+        assert phase.account_level is False
+
+    def test_network_ddos_rules(self):
+        phase = get_phase("network_ddos_rules")
+        assert phase.cf_phase == "ddos_l4"
+        assert phase.default_action is None
+        assert phase.zone_level is False
+        assert phase.account_level is True
+
+    def test_network_firewall_rules(self):
+        phase = get_phase("network_firewall_rules")
+        assert phase.cf_phase == "magic_transit"
+        assert phase.default_action is None
+        assert phase.zone_level is False
+        assert phase.account_level is True
+
+    def test_network_firewall_managed(self):
+        phase = get_phase("network_firewall_managed")
+        assert phase.cf_phase == "magic_transit_managed"
+        assert phase.default_action is None
+        assert phase.zone_level is False
+        assert phase.account_level is True
+
+    def test_network_firewall_ratelimit(self):
+        phase = get_phase("network_firewall_ratelimit")
+        assert phase.cf_phase == "magic_transit_ratelimit"
+        assert phase.default_action is None
+        assert phase.zone_level is False
+        assert phase.account_level is True
+
+    def test_network_firewall_ids(self):
+        phase = get_phase("network_firewall_ids")
+        assert phase.cf_phase == "magic_transit_ids_managed"
+        assert phase.default_action is None
+        assert phase.zone_level is False
+        assert phase.account_level is True
+
+    def test_url_normalization(self):
+        phase = get_phase("url_normalization")
+        assert phase.cf_phase == "http_request_sanitize"
+        assert phase.default_action is None
+        assert phase.zone_level is True
+        assert phase.account_level is False
+
+
+class TestAllFriendlyNamesIncludesNewPhases:
+    """Verify all new phase names appear in ALL_FRIENDLY_NAMES."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "http_ddos_rules",
+            "bulk_redirect_rules",
+            "log_custom_fields",
+            "network_ddos_rules",
+            "network_firewall_rules",
+            "network_firewall_managed",
+            "network_firewall_ratelimit",
+            "network_firewall_ids",
+            "url_normalization",
+        ],
+    )
+    def test_new_phase_in_all_friendly_names(self, name):
+        assert name in ALL_FRIENDLY_NAMES
 
 
 class TestRenamedPhaseAlias:
@@ -237,6 +354,42 @@ class TestGetPhaseByNewCfPhases:
         phase = get_phase_by_cf("http_request_firewall_managed")
         assert phase.friendly_name == "waf_managed_rules"
 
+    def test_get_phase_by_cf_ddos_l7(self):
+        phase = get_phase_by_cf("ddos_l7")
+        assert phase.friendly_name == "http_ddos_rules"
+
+    def test_get_phase_by_cf_http_request_redirect(self):
+        phase = get_phase_by_cf("http_request_redirect")
+        assert phase.friendly_name == "bulk_redirect_rules"
+
+    def test_get_phase_by_cf_http_log_custom_fields(self):
+        phase = get_phase_by_cf("http_log_custom_fields")
+        assert phase.friendly_name == "log_custom_fields"
+
+    def test_get_phase_by_cf_ddos_l4(self):
+        phase = get_phase_by_cf("ddos_l4")
+        assert phase.friendly_name == "network_ddos_rules"
+
+    def test_get_phase_by_cf_magic_transit(self):
+        phase = get_phase_by_cf("magic_transit")
+        assert phase.friendly_name == "network_firewall_rules"
+
+    def test_get_phase_by_cf_magic_transit_managed(self):
+        phase = get_phase_by_cf("magic_transit_managed")
+        assert phase.friendly_name == "network_firewall_managed"
+
+    def test_get_phase_by_cf_magic_transit_ratelimit(self):
+        phase = get_phase_by_cf("magic_transit_ratelimit")
+        assert phase.friendly_name == "network_firewall_ratelimit"
+
+    def test_get_phase_by_cf_magic_transit_ids_managed(self):
+        phase = get_phase_by_cf("magic_transit_ids_managed")
+        assert phase.friendly_name == "network_firewall_ids"
+
+    def test_get_phase_by_cf_http_request_sanitize(self):
+        phase = get_phase_by_cf("http_request_sanitize")
+        assert phase.friendly_name == "url_normalization"
+
 
 class TestSuggestPhase:
     def test_close_typo(self):
@@ -263,6 +416,18 @@ class TestSuggestPhase:
 
     def test_cf_phase_cache_suggests_friendly(self):
         assert suggest_phase("http_request_cache_settings") == "cache_rules"
+
+    def test_cf_phase_ddos_l7_suggests_friendly(self):
+        assert suggest_phase("ddos_l7") == "http_ddos_rules"
+
+    def test_cf_phase_magic_transit_suggests_friendly(self):
+        assert suggest_phase("magic_transit") == "network_firewall_rules"
+
+    def test_bulk_redirect_typo(self):
+        assert suggest_phase("bulk_redirect_rule") == "bulk_redirect_rules"
+
+    def test_network_firewall_typo(self):
+        assert suggest_phase("network_firewall_rule") == "network_firewall_rules"
 
 
 class TestUnknownPhaseMessage:
