@@ -398,31 +398,7 @@ Safety features:
 
 ## CI/CD integration
 
-```yaml
-# .github/workflows/rules.yaml
-jobs:
-  validate:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install octorules
-      - run: octorules validate
-
-  plan:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install octorules
-      - run: octorules plan --checksum
-
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: pip install octorules
-      - run: octorules sync --doit
-```
+For GitHub Actions, see [octorules-sync](https://github.com/doctena-org/octorules-sync) — a ready-made action that runs plan on PRs and sync on merge to main.
 
 ## Development
 
