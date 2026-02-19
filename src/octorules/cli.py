@@ -24,13 +24,18 @@ from octorules.formatter import build_report_data, print_report
 from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME, get_phase, unknown_phase_message
 from octorules.plan_output import PlanText
 from octorules.planner import (
-    PhasePlan,
     RuleValidationError,
     ZonePlan,
     check_safety,
     compute_checksum,
+    diff_custom_ruleset,
+    diff_lists_full,
+    diff_page_shield_policies,
     plan_zone,
     prepare_desired_rules,
+    validate_custom_ruleset,
+    validate_list_entry,
+    validate_page_shield_policy,
     warn_unknown_phase_keys,
 )
 from octorules.provider import CloudflareProvider, Scope
@@ -305,6 +310,67 @@ def _map_ordered(
         return _run(ex)
 
 
+def _apply_parallel(
+    tasks: list[tuple[str, Callable[[], None]]],
+    max_workers: int = 0,
+) -> tuple[list[str], str | None]:
+    """Run independent API-call tasks, collecting successes.
+
+    Each task is ``(label, fn)`` where *fn()* performs the API call and raises
+    on failure.  Returns ``(successful_labels, first_error_message)``.
+
+    * ``AuthenticationError`` / ``PermissionDeniedError`` → cancel remaining,
+      re-raise.
+    * First ``APIError`` / ``APIConnectionError`` / ``TimeoutError`` → record
+      error; in the parallel path remaining in-flight tasks still finish so we
+      collect as many successes as possible.  In the sequential path we stop
+      immediately (matching the original serial behaviour).
+    """
+    if not tasks:
+        return [], None
+
+    def _run_one(label: str, fn: Callable[[], None]) -> tuple[str, str | None]:
+        try:
+            fn()
+        except (AuthenticationError, PermissionDeniedError):
+            raise
+        except (APIError, APIConnectionError) as e:
+            return label, _format_api_error(e)
+        except TimeoutError as e:
+            return label, str(e)
+        return label, None
+
+    # Sequential fast-path (isinstance guard: test mocks may pass non-int)
+    if not isinstance(max_workers, int) or max_workers <= 1 or len(tasks) <= 1:
+        successes: list[str] = []
+        for label, fn in tasks:
+            label, error = _run_one(label, fn)
+            if error:
+                return successes, f"{label}: {error}"
+            successes.append(label)
+        return successes, None
+
+    # Parallel path
+    successes = []
+    first_error: str | None = None
+    workers = min(max_workers, len(tasks))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_run_one, lbl, fn): lbl for lbl, fn in tasks}
+        for future in as_completed(futures):
+            try:
+                label, error = future.result()
+            except (AuthenticationError, PermissionDeniedError):
+                for f in futures:
+                    f.cancel()
+                raise
+            if error:
+                if first_error is None:
+                    first_error = f"{label}: {error}"
+            else:
+                successes.append(label)
+    return successes, first_error
+
+
 def _plan_single_zone(
     config: Config,
     provider: CloudflareProvider,
@@ -314,25 +380,59 @@ def _plan_single_zone(
     """Plan a single zone. Returns (zone_name, zone_plan, desired, current)."""
     zone_cfg = config.zones[zone_name]
     scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
-    desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
+    all_desired = config.load_zone_rules(zone_name)
+    desired = _filter_desired_by_phase(all_desired, phase_filter)
     cf_phases = _phase_filter_to_cf_phases(phase_filter)
-    current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
 
-    # Exclude phases that failed to fetch — planning against missing data
-    # would incorrectly treat all existing rules as deletions.
-    failed_phases = getattr(current, "failed_phases", [])
-    if failed_phases:
-        failed_friendly = {
-            PHASE_BY_CF[cf].friendly_name for cf in failed_phases if cf in PHASE_BY_CF
-        }
-        skipped = failed_friendly & set(desired.keys())
-        for name in sorted(skipped):
-            log.warning("Skipping %s for %s: failed to fetch current state", name, zone_name)
-        if skipped:
-            desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+    # Start page shield fetch concurrently with phase rules
+    ps_desired = all_desired.get("page_shield_policies")
+    ps_future = None
+    bg = None
+    if ps_desired is not None:
+        bg = ThreadPoolExecutor(max_workers=1)
+        ps_future = bg.submit(provider.get_all_page_shield_policies, scope)
 
-    zp = plan_zone(zone_name, desired, current, allow_unmanaged=zone_cfg.allow_unmanaged)
-    return (zone_name, zp, desired, current)
+    try:
+        current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
+
+        # Exclude phases that failed to fetch — planning against missing data
+        # would incorrectly treat all existing rules as deletions.
+        failed_phases = getattr(current, "failed_phases", [])
+        if failed_phases:
+            failed_friendly = {
+                PHASE_BY_CF[cf].friendly_name for cf in failed_phases if cf in PHASE_BY_CF
+            }
+            skipped = failed_friendly & set(desired.keys())
+            for name in sorted(skipped):
+                log.warning("Skipping %s for %s: failed to fetch current state", name, zone_name)
+            if skipped:
+                desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+
+        zp = plan_zone(zone_name, desired, current, allow_unmanaged=zone_cfg.allow_unmanaged)
+
+        # Plan Page Shield policies
+        if ps_future is not None:
+            try:
+                current_policies = ps_future.result()
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning(
+                    "Failed to fetch Page Shield policies for %s: %s",
+                    zone_name,
+                    _format_api_error(e),
+                )
+                current_policies = []
+
+            policy_plans = diff_page_shield_policies(ps_desired, current_policies)
+            for pp in policy_plans:
+                if pp.has_changes:
+                    zp.page_shield_policy_plans.append(pp)
+
+        return (zone_name, zp, desired, current)
+    finally:
+        if bg is not None:
+            bg.shutdown(wait=False)
 
 
 def _plan_single_zone_safe(
@@ -404,41 +504,109 @@ def _plan_account(
 
     account_label = slugify(acct_name)
     scope = Scope(account_id=provider.account_id, label=provider.account_name)
-    desired = _filter_desired_by_phase(
-        config.load_account_rules(provider.account_name), phase_filter
-    )
-
+    all_desired = config.load_account_rules(provider.account_name)
+    desired = _filter_desired_by_phase(all_desired, phase_filter)
     cf_phases = _phase_filter_to_cf_phases(phase_filter)
+
+    # Determine which secondary fetches are needed before starting phase rules
+    custom_rulesets_desired = all_desired.get("custom_rulesets", [])
+    lists_desired = all_desired.get("lists")
+
+    bg = None
+    cr_future = None
+    lists_future = None
+    bg_workers = (1 if custom_rulesets_desired else 0) + (1 if lists_desired is not None else 0)
+    if bg_workers:
+        bg = ThreadPoolExecutor(max_workers=bg_workers)
+        if custom_rulesets_desired:
+            desired_ids = [entry["id"] for entry in custom_rulesets_desired if "id" in entry]
+            cr_future = bg.submit(provider.get_all_custom_rulesets, scope, ruleset_ids=desired_ids)
+        if lists_desired is not None:
+            lists_future = bg.submit(provider.get_all_lists, scope)
+
     try:
-        current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
-    except (AuthenticationError, PermissionDeniedError):
-        raise
-    except (APIError, APIConnectionError) as e:
-        log.error("Failed to plan account %s: %s", provider.account_name, _format_api_error(e))
-        return None, {}, {}
-
-    if not desired and not current:
-        log.debug("No account rules to manage for %s", provider.account_name)
-        return None, {}, {}
-
-    # Exclude failed phases
-    failed_phases = getattr(current, "failed_phases", [])
-    if failed_phases:
-        failed_friendly = {
-            PHASE_BY_CF[cf].friendly_name for cf in failed_phases if cf in PHASE_BY_CF
-        }
-        skipped = failed_friendly & set(desired.keys())
-        for name in sorted(skipped):
-            log.warning(
-                "Skipping %s for account %s: failed to fetch current state",
-                name,
+        try:
+            current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
+        except (AuthenticationError, PermissionDeniedError):
+            raise
+        except (APIError, APIConnectionError) as e:
+            log.error(
+                "Failed to plan account %s: %s",
                 provider.account_name,
+                _format_api_error(e),
             )
-        if skipped:
-            desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+            return None, {}, {}
 
-    zp = plan_zone(account_label, desired, current, allow_unmanaged=True)
-    return zp, desired, current
+        if not desired and not current:
+            log.debug("No account rules to manage for %s", provider.account_name)
+            return None, {}, {}
+
+        # Exclude failed phases
+        failed_phases = getattr(current, "failed_phases", [])
+        if failed_phases:
+            failed_friendly = {
+                PHASE_BY_CF[cf].friendly_name for cf in failed_phases if cf in PHASE_BY_CF
+            }
+            skipped = failed_friendly & set(desired.keys())
+            for name in sorted(skipped):
+                log.warning(
+                    "Skipping %s for account %s: failed to fetch current state",
+                    name,
+                    provider.account_name,
+                )
+            if skipped:
+                desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+
+        zp = plan_zone(account_label, desired, current, allow_unmanaged=True)
+
+        # Plan custom rulesets
+        if cr_future is not None:
+            try:
+                custom_rulesets_current = cr_future.result()
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning(
+                    "Failed to fetch custom rulesets for account %s: %s",
+                    provider.account_name,
+                    _format_api_error(e),
+                )
+                custom_rulesets_current = {}
+
+            for entry in custom_rulesets_desired:
+                rs_id = entry.get("id", "")
+                rs_name = entry.get("name", "")
+                rs_phase = entry.get("phase", "")
+                desired_rules = entry.get("rules", [])
+                current_data = custom_rulesets_current.get(rs_id, {})
+                current_rules = current_data.get("rules", [])
+                crp = diff_custom_ruleset(rs_id, rs_name, rs_phase, desired_rules, current_rules)
+                if crp.has_changes:
+                    zp.custom_ruleset_plans.append(crp)
+
+        # Plan lists
+        if lists_future is not None:
+            try:
+                current_lists = lists_future.result()
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning(
+                    "Failed to fetch lists for account %s: %s",
+                    provider.account_name,
+                    _format_api_error(e),
+                )
+                current_lists = {}
+
+            list_plans = diff_lists_full(lists_desired, current_lists)
+            for lp in list_plans:
+                if lp.has_changes:
+                    zp.list_plans.append(lp)
+
+        return zp, desired, current
+    finally:
+        if bg is not None:
+            bg.shutdown(wait=False)
 
 
 def _cmd_plan_or_compare(
@@ -633,45 +801,242 @@ def _log_safety_violations(violations: list) -> None:
         )
 
 
-def _apply_single_phase(
-    zp_zone_name: str,
-    pp: PhasePlan,
-    desired: dict,
+def _apply_custom_rulesets(
+    zp: ZonePlan,
     scope: Scope,
     provider: CloudflareProvider,
-) -> tuple[str, str | None]:
-    """Apply a single phase. Returns (phase_label, error_msg).
+) -> tuple[list[str], str | None]:
+    """Apply custom ruleset changes. Returns (synced_labels, error_msg).
 
-    AuthenticationError/PermissionDeniedError propagate immediately.
+    Custom rulesets are applied before phase deploy rules so the child
+    rulesets contain the expected rules when deploy rules reference them.
     """
+    max_w = provider.max_workers
 
-    phase = pp.phase
-    friendly_name = phase.friendly_name
-    n_changes = len(pp.changes)
-    log.info("  %s/%s: applying %d change(s)", zp_zone_name, friendly_name, n_changes)
-    if pp.prepared_rules is not None:
-        payload = pp.prepared_rules
-    else:
-        phase_rules = desired.get(friendly_name, [])
-        payload = prepare_desired_rules(phase_rules, phase)
-    kw = scope.api_kwargs
-    scope_key = next(iter(kw))
-    log.debug(
-        "  PUT %s %s (%s=%s) rules=%d",
-        phase.cf_phase,
-        zp_zone_name,
-        scope_key,
-        kw[scope_key],
-        len(payload),
-    )
-    try:
-        provider.put_phase_rules(scope, phase.cf_phase, payload)
-    except (AuthenticationError, PermissionDeniedError):
-        raise
-    except (APIError, APIConnectionError) as e:
-        return f"{zp_zone_name}/{friendly_name}", _format_api_error(e)
-    log.info("  %s/%s: done", zp_zone_name, friendly_name)
-    return f"{zp_zone_name}/{friendly_name}", None
+    tasks: list[tuple[str, Callable[[], None]]] = []
+    for crp in zp.custom_ruleset_plans:
+        if not crp.has_changes:
+            continue
+        label = f"custom_ruleset:{crp.ruleset_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        n_changes = len(crp.changes)
+        log.info("  %s/%s: applying %d change(s)", zp.zone_name, label, n_changes)
+        if crp.prepared_rules is None:
+            log.warning("  %s/%s: no prepared rules, skipping", zp.zone_name, label)
+            continue
+
+        def fn(rid=crp.ruleset_id, rules=crp.prepared_rules, _lbl=label):
+            provider.put_custom_ruleset(scope, rid, rules)
+            log.info("  %s/%s: done", zp.zone_name, _lbl)
+
+        tasks.append((full_label, fn))
+
+    return _apply_parallel(tasks, max_w)
+
+
+def _apply_lists(
+    zp: ZonePlan,
+    scope: Scope,
+    provider: CloudflareProvider,
+) -> tuple[list[str], str | None]:
+    """Apply list changes. Returns (synced_labels, error_msg).
+
+    Order: creates first, then item updates, then description updates, then deletes.
+    Each stage is parallelised via ``_apply_parallel``; stages run sequentially
+    so that creates complete before item updates read ``list_id``.
+    """
+    max_w = provider.max_workers
+    synced: list[str] = []
+
+    # Stage 1: Creates (don't add to synced — matches original behaviour)
+    create_tasks: list[tuple[str, Callable[[], None]]] = []
+    for lp in zp.list_plans:
+        if not lp.create:
+            continue
+        label = f"list:{lp.list_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        log.info("  %s/%s: creating list (%s)", zp.zone_name, label, lp.list_kind)
+
+        def create_fn(_lp=lp, _label=label):
+            desc = _lp.description_change[1] if _lp.description_change else ""
+            result = provider.create_list(scope, _lp.list_name, _lp.list_kind, desc)
+            _lp.list_id = result.get("id", "")
+            log.info("  %s/%s: created (id=%s)", zp.zone_name, _label, _lp.list_id)
+
+        create_tasks.append((full_label, create_fn))
+
+    if create_tasks:
+        _, create_error = _apply_parallel(create_tasks, max_w)
+        if create_error:
+            return synced, create_error
+
+    # Stage 2: Item updates
+    item_tasks: list[tuple[str, Callable[[], None]]] = []
+    for lp in zp.list_plans:
+        if not lp.changes or not lp.list_id:
+            continue
+        label = f"list:{lp.list_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        n_changes = len(lp.changes)
+        log.info("  %s/%s: applying %d item change(s)", zp.zone_name, label, n_changes)
+        if lp.prepared_items is None:
+            log.warning("  %s/%s: no prepared items, skipping", zp.zone_name, label)
+            continue
+
+        def item_fn(_lp=lp, _label=label):
+            op_id = provider.put_list_items(scope, _lp.list_id, _lp.prepared_items)
+            provider.poll_bulk_operation(scope, op_id)
+            log.info("  %s/%s: items updated", zp.zone_name, _label)
+
+        item_tasks.append((full_label, item_fn))
+
+    if item_tasks:
+        item_synced, item_error = _apply_parallel(item_tasks, max_w)
+        synced.extend(item_synced)
+        if item_error:
+            return synced, item_error
+
+    # Stage 3: Description updates (skip if create already set it)
+    desc_tasks: list[tuple[str, Callable[[], None]]] = []
+    for lp in zp.list_plans:
+        if lp.description_change is None or lp.create or lp.delete:
+            continue
+        if not lp.list_id:
+            continue
+        label = f"list:{lp.list_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        _, new_desc = lp.description_change
+        log.info("  %s/%s: updating description", zp.zone_name, label)
+
+        def desc_fn(_lp=lp, _new_desc=new_desc, _label=label):
+            provider.update_list_description(scope, _lp.list_id, _new_desc or "")
+            log.info("  %s/%s: description updated", zp.zone_name, _label)
+
+        desc_tasks.append((full_label, desc_fn))
+
+    if desc_tasks:
+        desc_synced, desc_error = _apply_parallel(desc_tasks, max_w)
+        synced.extend(desc_synced)
+        if desc_error:
+            return synced, desc_error
+
+    # Stage 4: Deletes last
+    delete_tasks: list[tuple[str, Callable[[], None]]] = []
+    for lp in zp.list_plans:
+        if not lp.delete or not lp.list_id:
+            continue
+        label = f"list:{lp.list_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        log.info("  %s/%s: deleting list", zp.zone_name, label)
+
+        def del_fn(_lp=lp, _label=label):
+            provider.delete_list(scope, _lp.list_id)
+            log.info("  %s/%s: deleted", zp.zone_name, _label)
+
+        delete_tasks.append((full_label, del_fn))
+
+    if delete_tasks:
+        del_synced, del_error = _apply_parallel(delete_tasks, max_w)
+        synced.extend(del_synced)
+        if del_error:
+            return synced, del_error
+
+    return synced, None
+
+
+def _apply_page_shield_policies(
+    zp: ZonePlan,
+    scope: Scope,
+    provider: CloudflareProvider,
+) -> tuple[list[str], str | None]:
+    """Apply Page Shield policy changes. Returns (synced_labels, error_msg).
+
+    Order: creates first, then updates, then deletes.  Each stage is
+    parallelised via ``_apply_parallel``.
+    """
+    max_w = provider.max_workers
+    synced: list[str] = []
+
+    # Stage 1: Creates
+    create_tasks: list[tuple[str, Callable[[], None]]] = []
+    for psp in zp.page_shield_policy_plans:
+        if not psp.create:
+            continue
+        label = f"page_shield:{psp.description}"
+        full_label = f"{zp.zone_name}/{label}"
+        log.info("  %s/%s: creating policy", zp.zone_name, label)
+        # Build kwargs from changes (all fields are ADDs for create)
+        kwargs: dict = {"description": psp.description}
+        for c in psp.changes:
+            if c.normalized_desired:
+                for k, v in c.normalized_desired.items():
+                    kwargs[k] = v
+
+        def create_fn(_psp=psp, _kwargs=dict(kwargs), _label=label):
+            result = provider.create_page_shield_policy(scope, **_kwargs)
+            _psp.policy_id = result.get("id", "")
+            log.info("  %s/%s: created (id=%s)", zp.zone_name, _label, _psp.policy_id)
+
+        create_tasks.append((full_label, create_fn))
+
+    if create_tasks:
+        create_synced, create_error = _apply_parallel(create_tasks, max_w)
+        synced.extend(create_synced)
+        if create_error:
+            return synced, create_error
+
+    # Stage 2: Updates (has field changes but not create/delete)
+    update_tasks: list[tuple[str, Callable[[], None]]] = []
+    for psp in zp.page_shield_policy_plans:
+        if psp.create or psp.delete or not psp.changes:
+            continue
+        if not psp.policy_id:
+            continue
+        label = f"page_shield:{psp.description}"
+        full_label = f"{zp.zone_name}/{label}"
+        n_changes = len(psp.changes)
+        log.info("  %s/%s: applying %d change(s)", zp.zone_name, label, n_changes)
+        # Build the full updated policy from current + changes
+        kwargs = {"description": psp.description}
+        for c in psp.changes:
+            if c.normalized_desired:
+                for k, v in c.normalized_desired.items():
+                    kwargs[k] = v
+
+        def update_fn(_psp=psp, _kwargs=dict(kwargs), _label=label):
+            provider.update_page_shield_policy(scope, _psp.policy_id, **_kwargs)
+            log.info("  %s/%s: updated", zp.zone_name, _label)
+
+        update_tasks.append((full_label, update_fn))
+
+    if update_tasks:
+        update_synced, update_error = _apply_parallel(update_tasks, max_w)
+        synced.extend(update_synced)
+        if update_error:
+            return synced, update_error
+
+    # Stage 3: Deletes last
+    delete_tasks: list[tuple[str, Callable[[], None]]] = []
+    for psp in zp.page_shield_policy_plans:
+        if not psp.delete or not psp.policy_id:
+            continue
+        label = f"page_shield:{psp.description}"
+        full_label = f"{zp.zone_name}/{label}"
+        log.info("  %s/%s: deleting policy", zp.zone_name, label)
+
+        def del_fn(_psp=psp, _label=label):
+            provider.delete_page_shield_policy(scope, _psp.policy_id)
+            log.info("  %s/%s: deleted", zp.zone_name, _label)
+
+        delete_tasks.append((full_label, del_fn))
+
+    if delete_tasks:
+        del_synced, del_error = _apply_parallel(delete_tasks, max_w)
+        synced.extend(del_synced)
+        if del_error:
+            return synced, del_error
+
+    return synced, None
 
 
 def _apply_single_zone(
@@ -686,46 +1051,67 @@ def _apply_single_zone(
     AuthenticationError/PermissionDeniedError propagate immediately.
     """
     log.info("Syncing %s", zp.zone_name)
+
+    # Apply lists first (rules reference lists via $list_name)
+    all_synced: list[str] = []
+    if zp.list_plans:
+        list_synced, list_error = _apply_lists(zp, scope, provider)
+        all_synced.extend(list_synced)
+        if list_error:
+            return zp.zone_name, all_synced, list_error
+
+    # Apply Page Shield policies (zone-level, before custom rulesets and phases)
+    if zp.page_shield_policy_plans:
+        ps_synced, ps_error = _apply_page_shield_policies(zp, scope, provider)
+        all_synced.extend(ps_synced)
+        if ps_error:
+            return zp.zone_name, all_synced, ps_error
+
+    # Apply custom rulesets next (before deploy rules reference them)
+    if zp.custom_ruleset_plans:
+        cr_synced, cr_error = _apply_custom_rulesets(zp, scope, provider)
+        all_synced.extend(cr_synced)
+        if cr_error:
+            return zp.zone_name, all_synced, cr_error
+
     phases = zp.phase_plans
     if not phases:
-        return zp.zone_name, [], None
+        return zp.zone_name, all_synced, None
 
-    _mw = getattr(provider, "_max_workers", 1)
-    max_w: int = _mw if isinstance(_mw, int) else 1
-    if max_w <= 1 or len(phases) <= 1:
-        # Sequential path
-        synced: list[str] = []
-        for pp in phases:
-            label, error = _apply_single_phase(zp.zone_name, pp, desired, scope, provider)
-            if error:
-                return zp.zone_name, synced, error
-            synced.append(label)
-        return zp.zone_name, synced, None
+    max_w = provider.max_workers
 
-    # Parallel path: apply phases concurrently
-    synced = []
-    first_error: str | None = None
-    workers = min(max_w, len(phases))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(
-                _apply_single_phase, zp.zone_name, pp, desired, scope, provider
-            ): pp.phase.friendly_name
-            for pp in phases
-        }
-        for future in as_completed(futures):
-            try:
-                label, error = future.result()
-            except (AuthenticationError, PermissionDeniedError):
-                for f in futures:
-                    f.cancel()
-                raise
-            if error:
-                if first_error is None:
-                    first_error = error
-            else:
-                synced.append(label)
-    return zp.zone_name, synced, first_error
+    tasks: list[tuple[str, Callable[[], None]]] = []
+    for pp in phases:
+        phase = pp.phase
+        friendly_name = phase.friendly_name
+        full_label = f"{zp.zone_name}/{friendly_name}"
+        n_changes = len(pp.changes)
+        log.info("  %s/%s: applying %d change(s)", zp.zone_name, friendly_name, n_changes)
+        if pp.prepared_rules is not None:
+            payload = pp.prepared_rules
+        else:
+            phase_rules = desired.get(friendly_name, [])
+            payload = prepare_desired_rules(phase_rules, phase)
+
+        def fn(_payload=payload, _phase=phase, _label=friendly_name):
+            kw = scope.api_kwargs
+            scope_key = next(iter(kw))
+            log.debug(
+                "  PUT %s %s (%s=%s) rules=%d",
+                _phase.cf_phase,
+                zp.zone_name,
+                scope_key,
+                kw[scope_key],
+                len(_payload),
+            )
+            provider.put_phase_rules(scope, _phase.cf_phase, _payload)
+            log.info("  %s/%s: done", zp.zone_name, _label)
+
+        tasks.append((full_label, fn))
+
+    phase_synced, phase_error = _apply_parallel(tasks, max_w)
+    all_synced.extend(phase_synced)
+    return zp.zone_name, all_synced, phase_error
 
 
 def _apply_zone_changes(
@@ -928,6 +1314,8 @@ def cmd_validate(
         warn_unknown_phase_keys(desired, zone_name)
 
         for friendly_name, rules in desired.items():
+            if friendly_name in ("custom_rulesets", "lists", "page_shield_policies"):
+                continue  # validated separately below
             try:
                 phase = get_phase(friendly_name)
             except KeyError:
@@ -941,6 +1329,53 @@ def cmd_validate(
             except (RuleValidationError, ValueError) as e:
                 msg = f"  {zone_name}/{friendly_name}: {e}"
                 errors.append(msg)
+
+        # Validate custom_rulesets entries
+        custom_rulesets = desired.get("custom_rulesets", [])
+        if isinstance(custom_rulesets, list):
+            for i, entry in enumerate(custom_rulesets):
+                try:
+                    validate_custom_ruleset(entry, i)
+                    rs_name = entry.get("name", entry.get("id", f"index {i}"))
+                    n_rules = len(entry.get("rules", []))
+                    msg = f"  {zone_name}/custom_ruleset:{rs_name}: OK ({n_rules} rule(s))"
+                    log.info("%s", msg)
+                    lines.append(msg)
+                    validated_count += 1
+                except RuleValidationError as e:
+                    msg = f"  {zone_name}/custom_rulesets: {e}"
+                    errors.append(msg)
+
+        # Validate lists entries
+        lists_entries = desired.get("lists")
+        if isinstance(lists_entries, list):
+            for i, entry in enumerate(lists_entries):
+                try:
+                    validate_list_entry(entry, i)
+                    list_name = entry.get("name", f"index {i}")
+                    n_items = len(entry.get("items", []))
+                    msg = f"  {zone_name}/list:{list_name}: OK ({n_items} item(s))"
+                    log.info("%s", msg)
+                    lines.append(msg)
+                    validated_count += 1
+                except RuleValidationError as e:
+                    msg = f"  {zone_name}/lists: {e}"
+                    errors.append(msg)
+
+        # Validate page_shield_policies entries
+        ps_entries = desired.get("page_shield_policies")
+        if isinstance(ps_entries, list):
+            for i, entry in enumerate(ps_entries):
+                try:
+                    validate_page_shield_policy(entry, i)
+                    desc = entry.get("description", f"index {i}")
+                    msg = f"  {zone_name}/page_shield:{desc}: OK"
+                    log.info("%s", msg)
+                    lines.append(msg)
+                    validated_count += 1
+                except RuleValidationError as e:
+                    msg = f"  {zone_name}/page_shield_policies: {e}"
+                    errors.append(msg)
 
     if errors:
         log.error("Validation errors:")
@@ -973,6 +1408,7 @@ def cmd_dump(
     """Run the dump command. Returns exit code."""
     provider = _init_provider(config)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
+    lists_dir = out_dir / "custom_lists" if output_dir else config.lists_dir
     cf_phases = _phase_filter_to_cf_phases(phase_filter)
     had_errors = False
     do_zones = scope_filter in ("all", "zones")
@@ -985,33 +1421,104 @@ def cmd_dump(
     def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
         zone_cfg = config.zones[zone_name]
         scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
+
+        # Start page shield fetch concurrently with phase rules
+        bg = ThreadPoolExecutor(max_workers=1)
+        ps_future = bg.submit(provider.get_all_page_shield_policies, scope)
+
         try:
-            rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
-        except (AuthenticationError, PermissionDeniedError):
-            raise
-        except (APIError, APIConnectionError) as e:
-            return zone_name, None, _format_api_error(e)
-        result = dump_zone_rules(zone_name, rules, out_dir)
-        return zone_name, result, None
+            try:
+                rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                return zone_name, None, _format_api_error(e)
+
+            # Fetch Page Shield policies
+            page_shield_policies: list[dict] | None = None
+            try:
+                page_shield_policies = ps_future.result() or None
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning(
+                    "Failed to fetch Page Shield policies for %s: %s",
+                    zone_name,
+                    _format_api_error(e),
+                )
+
+            result = dump_zone_rules(
+                zone_name,
+                rules,
+                out_dir,
+                page_shield_policies=page_shield_policies,
+                lists_dir=lists_dir,
+            )
+            return zone_name, result, None
+        finally:
+            bg.shutdown(wait=False)
 
     def _dump_account() -> tuple[bool, str | None]:
         account_label = slugify(provider.account_name)
         scope = Scope(account_id=provider.account_id, label=provider.account_name)
+
+        # Start secondary fetches concurrently with phase rules
+        bg = ThreadPoolExecutor(max_workers=2)
+        cr_future = bg.submit(provider.get_all_custom_rulesets, scope)
+        lists_future = bg.submit(provider.get_all_lists, scope)
+
         try:
-            rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
-        except (AuthenticationError, PermissionDeniedError):
-            raise
-        except (APIError, APIConnectionError) as e:
-            log.error(
-                "Failed to dump account %s: %s",
-                provider.account_name,
-                _format_api_error(e),
+            try:
+                rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.error(
+                    "Failed to dump account %s: %s",
+                    provider.account_name,
+                    _format_api_error(e),
+                )
+                return True, None
+
+            # Fetch custom rulesets
+            custom_rulesets: dict[str, dict] | None = None
+            try:
+                custom_rulesets = cr_future.result() or None
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning(
+                    "Failed to fetch custom rulesets for account %s: %s",
+                    provider.account_name,
+                    _format_api_error(e),
+                )
+
+            # Fetch lists
+            lists: dict[str, dict] | None = None
+            try:
+                lists = lists_future.result() or None
+            except (AuthenticationError, PermissionDeniedError):
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning(
+                    "Failed to fetch lists for account %s: %s",
+                    provider.account_name,
+                    _format_api_error(e),
+                )
+
+            result = dump_zone_rules(
+                account_label,
+                rules,
+                out_dir,
+                custom_rulesets=custom_rulesets,
+                lists=lists,
+                lists_dir=lists_dir,
             )
-            return True, None
-        result = dump_zone_rules(account_label, rules, out_dir)
-        if result:
-            log.info("Dumped account %s → %s", provider.account_name, result)
-        return False, result
+            if result:
+                log.info("Dumped account %s → %s", provider.account_name, result)
+            return False, result
+        finally:
+            bg.shutdown(wait=False)
 
     if do_zones and do_account:
         # Run account dump concurrently with zone dumps

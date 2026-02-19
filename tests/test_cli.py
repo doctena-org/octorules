@@ -26,18 +26,11 @@ from octorules.cli import (
     main,
 )
 from octorules.config import Config, ConfigError, ZoneConfig
+from octorules.phases import get_phase
 from octorules.plan_output import PlanJson, PlanText
 from octorules.provider import Scope
 
-
-@pytest.fixture
-def mock_provider():
-    """Create a mock CloudflareProvider."""
-    provider = MagicMock()
-    provider.get_all_phase_rules.return_value = {}
-    provider.put_phase_rules.return_value = None
-    provider._max_workers = 1
-    return provider
+REDIRECT_PHASE = get_phase("redirect_rules")
 
 
 @pytest.fixture
@@ -2198,7 +2191,7 @@ class TestParallelPhaseApply:
             },
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value._max_workers = 2
+        mock_provider_cls.return_value.max_workers = 2
         result = cmd_sync(config, None)
         assert result == 0
         # Both phases should have been applied
@@ -2224,7 +2217,7 @@ class TestParallelPhaseApply:
             },
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value._max_workers = 1
+        mock_provider_cls.return_value.max_workers = 1
         result = cmd_sync(config, None)
         assert result == 0
         assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
@@ -2251,7 +2244,7 @@ class TestParallelPhaseApply:
             },
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value._max_workers = 2
+        mock_provider_cls.return_value.max_workers = 2
 
         call_count = 0
 
@@ -2266,6 +2259,146 @@ class TestParallelPhaseApply:
             result = cmd_sync(config, None)
         assert result == 1
         assert "API error syncing example.com" in caplog.text
+
+
+class TestApplyParallel:
+    """Direct unit tests for the _apply_parallel helper."""
+
+    def test_empty_task_list(self):
+        from octorules.cli import _apply_parallel
+
+        successes, error = _apply_parallel([], max_workers=4)
+        assert successes == []
+        assert error is None
+
+    def test_single_task_success(self):
+        from octorules.cli import _apply_parallel
+
+        called = []
+        tasks = [("task-a", lambda: called.append("a"))]
+        successes, error = _apply_parallel(tasks, max_workers=1)
+        assert successes == ["task-a"]
+        assert error is None
+        assert called == ["a"]
+
+    def test_single_task_api_error(self):
+        from cloudflare import APIError
+
+        from octorules.cli import _apply_parallel
+
+        def fail():
+            raise APIError("boom", request=MagicMock(), body=None)
+
+        tasks = [("task-a", fail)]
+        successes, error = _apply_parallel(tasks, max_workers=1)
+        assert successes == []
+        assert error is not None
+        assert "task-a" in error
+        assert "boom" in error
+
+    def test_single_task_timeout_error(self):
+        from octorules.cli import _apply_parallel
+
+        def fail():
+            raise TimeoutError("timed out")
+
+        tasks = [("task-a", fail)]
+        successes, error = _apply_parallel(tasks, max_workers=1)
+        assert successes == []
+        assert error is not None
+        assert "task-a" in error
+        assert "timed out" in error
+
+    def test_sequential_stops_on_first_error(self):
+        from cloudflare import APIError
+
+        from octorules.cli import _apply_parallel
+
+        called = []
+
+        def ok():
+            called.append("ok")
+
+        def fail():
+            raise APIError("fail", request=MagicMock(), body=None)
+
+        def never():
+            called.append("never")
+
+        tasks = [("a", ok), ("b", fail), ("c", never)]
+        successes, error = _apply_parallel(tasks, max_workers=1)
+        assert successes == ["a"]
+        assert error is not None
+        assert "b" in error
+        assert "never" not in called
+
+    def test_auth_error_propagates_sequential(self):
+        from cloudflare import AuthenticationError
+
+        from octorules.cli import _apply_parallel
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+
+        def fail():
+            raise AuthenticationError(message="bad token", response=mock_response, body=None)
+
+        tasks = [("task-a", fail)]
+        with pytest.raises(AuthenticationError):
+            _apply_parallel(tasks, max_workers=1)
+
+    def test_auth_error_propagates_parallel(self):
+        from cloudflare import AuthenticationError
+
+        from octorules.cli import _apply_parallel
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+
+        def fail():
+            raise AuthenticationError(message="bad token", response=mock_response, body=None)
+
+        tasks = [("task-a", fail), ("task-b", lambda: None)]
+        with pytest.raises(AuthenticationError):
+            _apply_parallel(tasks, max_workers=4)
+
+    def test_parallel_collects_successes_on_error(self):
+        """Parallel path: successful tasks collected even when one fails."""
+        import threading
+
+        from cloudflare import APIError
+
+        from octorules.cli import _apply_parallel
+
+        barrier = threading.Barrier(3, timeout=5)
+
+        def ok1():
+            barrier.wait()
+
+        def ok2():
+            barrier.wait()
+
+        def fail():
+            barrier.wait()
+            raise APIError("fail", request=MagicMock(), body=None)
+
+        tasks = [("a", ok1), ("b", fail), ("c", ok2)]
+        successes, error = _apply_parallel(tasks, max_workers=4)
+        assert error is not None
+        assert "b" in error
+        # Both successful tasks should be collected
+        assert sorted(successes) == ["a", "c"]
+
+    def test_non_int_max_workers_uses_sequential(self):
+        """MagicMock or other non-int max_workers falls back to sequential."""
+        from octorules.cli import _apply_parallel
+
+        called = []
+        tasks = [("a", lambda: called.append("a")), ("b", lambda: called.append("b"))]
+        successes, error = _apply_parallel(tasks, max_workers=MagicMock())
+        assert successes == ["a", "b"]
+        assert error is None
+        assert called == ["a", "b"]  # sequential order preserved
 
 
 class TestPreparedRulesReuse:
@@ -2289,7 +2422,7 @@ class TestPreparedRulesReuse:
             },
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value._max_workers = 1
+        mock_provider_cls.return_value.max_workers = 1
         result = cmd_sync(config, None)
         assert result == 0
         # Verify the PUT payload has defaults injected (from prepared_rules)

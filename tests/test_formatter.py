@@ -24,7 +24,12 @@ from octorules.formatter import (
     print_report,
 )
 from octorules.phases import get_phase
-from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
+from octorules.planner import (
+    ChangeType,
+    PhasePlan,
+    RuleChange,
+    ZonePlan,
+)
 
 REDIRECT_PHASE = get_phase("redirect_rules")
 CACHE_PHASE = get_phase("cache_rules")
@@ -609,7 +614,7 @@ class TestFormatPlanHtml:
 
 class TestBuildReportData:
     def test_empty_zones(self):
-        """No rules anywhere → summary shows all in_sync."""
+        """No rules anywhere -> summary shows all in_sync."""
         zp = ZonePlan("example.com")
         data = build_report_data([zp], {"example.com": {}}, {"example.com": {}})
         assert data["summary"]["total_zones"] == 1
@@ -618,7 +623,7 @@ class TestBuildReportData:
         assert data["zones"][0]["status"] == "in_sync"
 
     def test_drifted_zone(self):
-        """YAML rules with no live → yaml_only status."""
+        """YAML rules with no live -> yaml_only status."""
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
@@ -632,7 +637,7 @@ class TestBuildReportData:
         assert data["summary"]["drifted"] == 1
 
     def test_in_sync_phase(self):
-        """Matching rules → in_sync."""
+        """Matching rules -> in_sync."""
         zp = ZonePlan("example.com")  # no phase_plans means no changes
         desired = {"example.com": {"redirect_rules": [{"ref": "r1"}]}}
         current = {
@@ -644,7 +649,7 @@ class TestBuildReportData:
         assert data["zones"][0]["phases"][0]["live_rules"] == 1
 
     def test_live_only_status(self):
-        """Live rules with no YAML → live_only status."""
+        """Live rules with no YAML -> live_only status."""
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)],
@@ -658,7 +663,7 @@ class TestBuildReportData:
         assert data["zones"][0]["phases"][0]["status"] == "live_only"
 
     def test_yaml_only_status(self):
-        """YAML rules with no live → yaml_only status."""
+        """YAML rules with no live -> yaml_only status."""
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],

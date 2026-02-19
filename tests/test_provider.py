@@ -7,7 +7,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from octorules.provider import CloudflareProvider, PhaseRulesResult, Scope, _rule_to_dict
+from octorules.provider import (
+    CloudflareProvider,
+    PhaseRulesResult,
+    Scope,
+    _rule_to_dict,
+)
 
 
 class MockRuleset:
@@ -405,8 +410,21 @@ class TestCloudflareProvider:
         with pytest.raises(AuthenticationError):
             provider.get_all_phase_rules(_zs())
 
-    def test_get_all_phase_rules_permission_error_propagates(self, mock_cf_client):
-        """PermissionDeniedError should propagate immediately, not be caught."""
+    def test_get_phase_rules_permission_denied_returns_empty(self, mock_cf_client):
+        """PermissionDeniedError on a single phase returns [] (skip, not fatal)."""
+        from cloudflare import PermissionDeniedError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_cf_client.rulesets.phases.get.side_effect = PermissionDeniedError(
+            message="Missing zone permission", response=mock_response, body=None
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        result = provider.get_phase_rules(_zs(), "ddos_l7")
+        assert result == []
+
+    def test_get_all_phase_rules_permission_denied_skips_phase(self, mock_cf_client):
+        """PermissionDeniedError on individual phases should be skipped, not fatal."""
         from cloudflare import PermissionDeniedError
 
         mock_response = MagicMock()
@@ -416,8 +434,9 @@ class TestCloudflareProvider:
         )
         provider = CloudflareProvider("token", client=mock_cf_client)
 
-        with pytest.raises(PermissionDeniedError):
-            provider.get_all_phase_rules(_zs())
+        result = provider.get_all_phase_rules(_zs())
+        # Should complete without raising — all phases skipped
+        assert len(result) == 0
 
     def test_get_all_phase_rules_failed_phases_tracked(self, mock_cf_client):
         """Transient errors should be tracked in result.failed_phases."""
@@ -517,7 +536,9 @@ class TestCloudflareProvider:
         assert set(call_args) == set(ZONE_CF_PHASES)
         assert len(call_args) == len(ZONE_CF_PHASES)
         # Account-only phases should NOT be fetched for zone scope
-        assert "http_custom_errors" not in call_args
+        assert "http_request_redirect" not in call_args
+        assert "ddos_l4" not in call_args
+        assert "magic_transit" not in call_args
 
     def test_get_all_phase_rules_parallel_results_correct(self, mock_cf_client):
         """Parallel fetching should produce the same results as sequential."""
@@ -556,7 +577,7 @@ class TestCloudflareProvider:
         mock_cf_client.rulesets.phases.get.assert_not_called()
 
     def test_get_all_phase_rules_zone_scope_excludes_account_only(self, mock_cf_client):
-        """Zone scope should exclude account-only phases like custom_error_rules."""
+        """Zone scope should exclude account-only phases like bulk_redirect_rules."""
         from cloudflare import NotFoundError
 
         call_args = []
@@ -572,14 +593,14 @@ class TestCloudflareProvider:
         # Request an account-only phase for a zone scope — should be filtered out
         provider.get_all_phase_rules(
             _zs(),
-            cf_phases=["http_custom_errors", "http_request_dynamic_redirect"],
+            cf_phases=["http_request_redirect", "http_request_dynamic_redirect"],
         )
         assert call_args == ["http_request_dynamic_redirect"]
 
     def test_get_all_phase_rules_zone_scope_empty_filter_returns_empty(self, mock_cf_client):
         """Zone scope with only account-only phases in filter should return empty."""
         provider = CloudflareProvider("token", client=mock_cf_client)
-        result = provider.get_all_phase_rules(_zs(), cf_phases=["http_custom_errors"])
+        result = provider.get_all_phase_rules(_zs(), cf_phases=["http_request_redirect"])
         assert result == {}
         assert result.failed_phases == []
         mock_cf_client.rulesets.phases.get.assert_not_called()
@@ -1023,11 +1044,11 @@ class TestMaxWorkersInit:
 
     def test_default_max_workers_is_1(self, mock_cf_client):
         provider = CloudflareProvider("token", client=mock_cf_client)
-        assert provider._max_workers == 1
+        assert provider.max_workers == 1
 
     def test_custom_max_workers(self, mock_cf_client):
         provider = CloudflareProvider("token", max_workers=8, client=mock_cf_client)
-        assert provider._max_workers == 8
+        assert provider.max_workers == 8
 
     def test_connection_pool_scaled_when_max_workers_gt_1(self):
         """When max_workers > 1 and no client given, http_client should be configured."""
@@ -1044,7 +1065,7 @@ class TestMaxWorkersInit:
             assert "http_client" not in call_kwargs
 
     def test_phase_fetching_uses_max_workers(self, mock_cf_client):
-        """get_all_phase_rules should respect _max_workers for thread pool size."""
+        """get_all_phase_rules should respect max_workers for thread pool size."""
         mock_cf_client.rulesets.phases.get.return_value = MockRuleset(rules=[])
         provider = CloudflareProvider("token", max_workers=4, client=mock_cf_client)
         scope = Scope(zone_id="z1")

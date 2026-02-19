@@ -28,7 +28,7 @@ PHASES: list[Phase] = [
         "custom_error_rules",
         "http_custom_errors",
         "serve_error",
-        zone_level=False,
+        zone_level=True,
         account_level=True,
     ),
     Phase(
@@ -54,6 +54,57 @@ PHASES: list[Phase] = [
     ),
     Phase("bot_fight_rules", "http_request_sbfm", None),
     Phase("sensitive_data_detection", "http_response_firewall_managed", None),
+    Phase(
+        "http_ddos_rules",
+        "ddos_l7",
+        None,
+        zone_level=True,
+        account_level=True,
+    ),
+    Phase(
+        "bulk_redirect_rules",
+        "http_request_redirect",
+        "redirect",
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase("log_custom_fields", "http_log_custom_fields", "log_custom_field"),
+    Phase(
+        "network_ddos_rules",
+        "ddos_l4",
+        None,
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase(
+        "network_firewall_rules",
+        "magic_transit",
+        None,
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase(
+        "network_firewall_managed",
+        "magic_transit_managed",
+        None,
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase(
+        "network_firewall_ratelimit",
+        "magic_transit_ratelimit",
+        None,
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase(
+        "network_firewall_ids",
+        "magic_transit_ids_managed",
+        None,
+        zone_level=False,
+        account_level=True,
+    ),
+    Phase("url_normalization", "http_request_sanitize", None),
 ]
 
 PHASE_BY_NAME: dict[str, Phase] = {p.friendly_name: p for p in PHASES}
@@ -72,6 +123,12 @@ ACCOUNT_CF_PHASES: list[str] = [p.cf_phase for p in PHASES if p.account_level]
 CF_API_FIELDS: frozenset[str] = frozenset(
     {"id", "version", "last_updated", "categories", "logging"}
 )
+
+# Fields injected by the CF API on list items that should be stripped.
+LIST_ITEM_API_FIELDS: frozenset[str] = frozenset({"id", "created_on", "modified_on"})
+
+# Fields injected by the CF API on page shield policies that should be stripped.
+PAGE_SHIELD_POLICY_API_FIELDS: frozenset[str] = frozenset({"id", "last_updated"})
 
 
 def suggest_phase(name: str) -> str | None:
