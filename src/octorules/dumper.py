@@ -42,18 +42,16 @@ _Dumper.add_representer(_LiteralStr, _literal_representer)
 _Dumper.add_representer(_IncludeTag, _include_representer)
 
 
-def _write_list_items_file(
-    output_dir: Path, lists_dir: Path, list_name: str, items: list[dict]
-) -> str | None:
-    """Write cleaned list items to a separate file under lists_dir.
+def _write_list_file(output_dir: Path, lists_dir: Path, list_name: str, entry: dict) -> str | None:
+    """Write a full list entry (name, kind, description, items) to a file.
 
     Returns the relative include path (relative to ``output_dir``)
     or ``None`` if the write fails.
     """
-    items_path = (lists_dir / f"{list_name}.yaml").resolve()
+    file_path = (lists_dir / f"{list_name}.yaml").resolve()
     # Prevent path traversal outside the lists directory
     try:
-        items_path.relative_to(lists_dir.resolve())
+        file_path.relative_to(lists_dir.resolve())
     except ValueError:
         log.error("List name %r would write outside lists directory", list_name)
         return None
@@ -64,7 +62,7 @@ def _write_list_items_file(
         return None
     try:
         text = yaml.dump(
-            items,
+            entry,
             None,
             Dumper=_Dumper,
             default_flow_style=False,
@@ -72,12 +70,12 @@ def _write_list_items_file(
             allow_unicode=True,
             width=2147483647,
         )
-        with open(items_path, "w", encoding="utf-8") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(text)
     except OSError as e:
-        log.error("Failed to write list items file %s: %s", items_path, e)
+        log.error("Failed to write list file %s: %s", file_path, e)
         return None
-    return os.path.relpath(items_path, output_dir)
+    return os.path.relpath(file_path, output_dir)
 
 
 def dump_zone_rules(
@@ -123,7 +121,7 @@ def dump_zone_rules(
             output["custom_rulesets"] = cr_list
 
     if lists:
-        lists_list = []
+        lists_list: list[dict | _IncludeTag] = []
         for name in sorted(lists.keys()):
             list_data = lists[name]
             entry: dict = {"name": name, "kind": list_data.get("kind", "")}
@@ -132,15 +130,15 @@ def dump_zone_rules(
                 entry["description"] = desc
             items = list_data.get("items", [])
             cleaned_items = [_clean_list_item(item) for item in items]
+            entry["items"] = cleaned_items if cleaned_items else []
             if cleaned_items:
-                include_path = _write_list_items_file(output_dir, lists_dir, name, cleaned_items)
+                include_path = _write_list_file(output_dir, lists_dir, name, entry)
                 if include_path:
-                    entry["items"] = _IncludeTag(include_path)
+                    lists_list.append(_IncludeTag(include_path))
                 else:
-                    entry["items"] = cleaned_items  # fallback: inline
+                    lists_list.append(entry)  # fallback: inline
             else:
-                entry["items"] = []
-            lists_list.append(entry)
+                lists_list.append(entry)
         if lists_list:
             output["lists"] = lists_list
 

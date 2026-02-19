@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from octorules.cli import (
     _get_zones,
     _setup_logging,
     _validate_phases,
+    _write_output_file,
     build_parser,
     cmd_compare,
     cmd_dump,
@@ -2104,6 +2106,58 @@ class TestApiErrorStatusCodes:
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         assert "HTTP 429" in caplog.text
+
+
+class TestWriteOutputFile:
+    """Tests for _write_output_file() path traversal guard."""
+
+    def test_rejects_tilde_in_path(self, caplog):
+        """Paths containing '~' in the resolved form are rejected."""
+        # Path.resolve() does not expand ~, so it stays in the resolved string
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file("~/secret.txt", lambda f: f.write("data"))
+        assert result is False
+        assert "unsafe output path" in caplog.text.lower()
+
+    def test_rejects_tilde_in_component(self, tmp_path, caplog):
+        """Paths with '~' anywhere in the resolved path are rejected."""
+        # Create a directory with tilde in its name
+        tilde_dir = tmp_path / "~sneaky"
+        tilde_dir.mkdir()
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(str(tilde_dir / "out.txt"), lambda f: f.write("data"))
+        assert result is False
+        assert "unsafe output path" in caplog.text.lower()
+
+    def test_dotdot_normalized_by_resolve(self, tmp_path):
+        """Path.resolve() normalizes '..' away so it won't trigger the guard.
+
+        This documents the actual behavior: the guard checks the *resolved*
+        path, and resolve() removes '..' components.
+        """
+        # ../escaped.txt resolves to a sibling of tmp_path — the guard
+        # does not block it because '..' is gone after resolve().
+        unsafe_path = str(tmp_path / ".." / "escaped.txt")
+        result = _write_output_file(unsafe_path, lambda f: f.write("data"))
+        # The write succeeds because resolve() removed the '..'
+        assert result is True
+        Path(tmp_path / ".." / "escaped.txt").resolve().unlink()
+
+    def test_accepts_safe_path(self, tmp_path):
+        """Normal paths are accepted and file is written."""
+        safe_path = str(tmp_path / "output.txt")
+        result = _write_output_file(safe_path, lambda f: f.write("hello"))
+        assert result is True
+        assert (tmp_path / "output.txt").read_text() == "hello"
+
+    def test_returns_false_on_os_error(self, tmp_path, caplog):
+        """OSError during write returns False."""
+        # Use a non-existent directory to trigger OSError
+        bad_path = str(tmp_path / "no_such_dir" / "output.txt")
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(bad_path, lambda f: f.write("data"))
+        assert result is False
+        assert "Failed to write output file" in caplog.text
 
 
 class TestEmitPlanOutputs:

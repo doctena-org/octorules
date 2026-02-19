@@ -61,8 +61,10 @@ class TestListFormatting:
         output = format_zone_plan(zp, use_color=False)
         assert "old desc" in output
         assert "new desc" in output
-        # The arrow separator between old and new
-        assert "\u2192" in output
+        # Old on − line, new on + line
+        lines = output.splitlines()
+        assert any("−" in ln and "old desc" in ln for ln in lines)
+        assert any("+" in ln and "new desc" in ln for ln in lines)
 
     def test_json_format_includes_lists(self):
         lp = ListPlan(
@@ -99,6 +101,44 @@ class TestListFormatting:
         output = format_plan_markdown([zp])
         assert "list:blocked_ips" in output
         assert "1.2.3.4" in output
+
+    def test_markdown_format_modify_in_list(self):
+        """MODIFY changes in markdown should use diff code blocks."""
+        change = RuleChange(
+            ChangeType.MODIFY,
+            "1.2.3.4",
+            REDIRECT_PHASE,
+            current={"comment": "old note"},
+            desired={"comment": "new note"},
+        )
+        lp = ListPlan(
+            list_name="blocked_ips",
+            list_id="list-123",
+            list_kind="ip",
+            changes=[change],
+        )
+        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
+        output = format_plan_markdown([zp])
+        assert "list:blocked_ips" in output
+        assert "```diff" in output
+        assert "- comment: 'old note'" in output
+        assert "+ comment: 'new note'" in output
+
+    def test_markdown_format_description_change(self):
+        """Description changes in markdown should use diff code blocks."""
+        lp = ListPlan(
+            list_name="my_list",
+            list_id="list-789",
+            list_kind="ip",
+            description_change=("old desc", "new desc"),
+        )
+        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
+        output = format_plan_markdown([zp])
+        assert "| ~ |" in output
+        assert "`description`" in output
+        assert "```diff" in output
+        assert "- description: 'old desc'" in output
+        assert "+ description: 'new desc'" in output
 
     def test_html_format_includes_lists(self):
         lp = ListPlan(
