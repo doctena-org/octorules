@@ -123,10 +123,10 @@ def _format_modify_details(change: RuleChange, use_color: bool) -> list[str]:
     details = []
     for key, old_val, new_val in _compute_field_diffs(change):
         details.append(
-            _color(f"      {key}: ", DIM, use_color)
-            + _color(f"{old_val!r}", RED, use_color)
-            + " → "
-            + _color(f"{new_val!r}", GREEN, use_color)
+            _color(f"    − {key}: ", DIM, use_color) + _color(f"{old_val!r}", RED, use_color)
+        )
+        details.append(
+            _color(f"    + {key}: ", DIM, use_color) + _color(f"{new_val!r}", GREEN, use_color)
         )
     return details
 
@@ -182,12 +182,9 @@ def format_list_plan(lp: ListPlan, use_color: bool = True) -> list[str]:
         lines.append(_color("  - delete list", RED, use_color))
     if lp.description_change is not None:
         old_desc, new_desc = lp.description_change
-        lines.append(
-            _color("  ~ description: ", YELLOW, use_color)
-            + _color(repr(old_desc), RED, use_color)
-            + " → "
-            + _color(repr(new_desc), GREEN, use_color)
-        )
+        lines.append(_color("  ~ description:", YELLOW, use_color))
+        lines.append(_color("    − ", DIM, use_color) + _color(repr(old_desc), RED, use_color))
+        lines.append(_color("    + ", DIM, use_color) + _color(repr(new_desc), GREEN, use_color))
     for change in lp.changes:
         lines.extend(format_change(change, use_color))
     return lines
@@ -390,18 +387,19 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
         lines.append("")
         lines.append("| Op | Phase | Ref | Details |")
         lines.append("|---|---|---|---|")
+        pending_diffs: list[list[tuple[str, object, object]]] = []
         for pp in zp.phase_plans:
             for c in pp.changes:
                 op = _change_symbol(c.change_type)
                 phase = pp.phase.friendly_name
                 ref = _md_escape(c.ref)
                 if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    diffs = []
-                    for key, old_val, new_val in _compute_field_diffs(c):
-                        old_esc = _md_escape(repr(old_val))
-                        new_esc = _md_escape(repr(new_val))
-                        diffs.append(f"`{key}`: ~~{old_esc}~~ → **{new_esc}**")
-                    details = "; ".join(diffs)
+                    field_diffs = _compute_field_diffs(c)
+                    if field_diffs:
+                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
+                        pending_diffs.append(field_diffs)
+                    else:
+                        details = ""
                 elif c.change_type == ChangeType.REORDER:
                     details = "reorder rules"
                 else:
@@ -423,12 +421,12 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 op = _change_symbol(c.change_type)
                 ref = _md_escape(c.ref)
                 if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    diffs = []
-                    for key, old_val, new_val in _compute_field_diffs(c):
-                        old_esc = _md_escape(repr(old_val))
-                        new_esc = _md_escape(repr(new_val))
-                        diffs.append(f"`{key}`: ~~{old_esc}~~ → **{new_esc}**")
-                    details = "; ".join(diffs)
+                    field_diffs = _compute_field_diffs(c)
+                    if field_diffs:
+                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
+                        pending_diffs.append(field_diffs)
+                    else:
+                        details = ""
                 elif c.change_type == ChangeType.REORDER:
                     details = "reorder rules"
                 else:
@@ -452,20 +450,18 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 lines.append(f"| - | {phase_label} | | delete list |")
             if lp.description_change is not None:
                 old_desc, new_desc = lp.description_change
-                old_md = _md_escape(repr(old_desc))
-                new_md = _md_escape(repr(new_desc))
-                details = f"description: ~~{old_md}~~ → **{new_md}**"
-                lines.append(f"| ~ | {phase_label} | | {details} |")
+                lines.append(f"| ~ | {phase_label} | | `description` |")
+                pending_diffs.append([("description", old_desc, new_desc)])
             for c in lp.changes:
                 op = _change_symbol(c.change_type)
                 ref = _md_escape(c.ref)
                 if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    diffs = []
-                    for key, old_val, new_val in _compute_field_diffs(c):
-                        old_esc = _md_escape(repr(old_val))
-                        new_esc = _md_escape(repr(new_val))
-                        diffs.append(f"`{key}`: ~~{old_esc}~~ → **{new_esc}**")
-                    details = "; ".join(diffs)
+                    field_diffs = _compute_field_diffs(c)
+                    if field_diffs:
+                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
+                        pending_diffs.append(field_diffs)
+                    else:
+                        details = ""
                 else:
                     rule = (
                         c.normalized_desired
@@ -489,12 +485,12 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 op = _change_symbol(c.change_type)
                 ref = _md_escape(c.ref)
                 if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    diffs = []
-                    for key, old_val, new_val in _compute_field_diffs(c):
-                        old_esc = _md_escape(repr(old_val))
-                        new_esc = _md_escape(repr(new_val))
-                        diffs.append(f"`{key}`: ~~{old_esc}~~ → **{new_esc}**")
-                    details = "; ".join(diffs)
+                    field_diffs = _compute_field_diffs(c)
+                    if field_diffs:
+                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
+                        pending_diffs.append(field_diffs)
+                    else:
+                        details = ""
                 else:
                     rule = (
                         c.normalized_desired
@@ -508,6 +504,13 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                     else:
                         details = ""
                 lines.append(f"| {op} | {_md_escape(phase_label)} | {ref} | {details} |")
+        for diff_group in pending_diffs:
+            lines.append("")
+            lines.append("```diff")
+            for key, old_val, new_val in diff_group:
+                lines.append(f"- {key}: {old_val!r}")
+                lines.append(f"+ {key}: {new_val!r}")
+            lines.append("```")
         lines.append("")
 
     if total_changes == 0:
@@ -600,14 +603,14 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                             lines.append("  <tr>")
                             lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <ins>{e(str(new_val))}</ins></td>"
+                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
                         )
                         lines.append("  </tr>")
-                        # Continuation row with old value
+                        # Continuation row with new value
                         lines.append("  <tr>")
                         lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <del>{e(str(old_val))}</del></td>"
+                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
                         )
                         lines.append("  </tr>")
                     if not diffs:
@@ -684,13 +687,13 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                             lines.append("  <tr>")
                             lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <ins>{e(str(new_val))}</ins></td>"
+                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
                         )
                         lines.append("  </tr>")
                         lines.append("  <tr>")
                         lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <del>{e(str(old_val))}</del></td>"
+                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
                         )
                         lines.append("  </tr>")
                     if not diffs:
@@ -746,11 +749,11 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append("  <tr>")
                 lines.append("    <td>Update</td>")
                 lines.append("    <td></td>")
-                lines.append(f"    <td>description: <ins>{e(str(new_desc))}</ins></td>")
+                lines.append(f"    <td>&minus;&ensp;description: {e(str(old_desc))}</td>")
                 lines.append("  </tr>")
                 lines.append("  <tr>")
                 lines.append("    <td colspan=2></td>")
-                lines.append(f"    <td>description: <del>{e(str(old_desc))}</del></td>")
+                lines.append(f"    <td>+&ensp;description: {e(str(new_desc))}</td>")
                 lines.append("  </tr>")
 
             for c in lp.changes:
@@ -785,13 +788,13 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                             lines.append("  <tr>")
                             lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <ins>{e(str(new_val))}</ins></td>"
+                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
                         )
                         lines.append("  </tr>")
                         lines.append("  <tr>")
                         lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <del>{e(str(old_val))}</del></td>"
+                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
                         )
                         lines.append("  </tr>")
                     if not diffs:
@@ -872,13 +875,13 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                             lines.append("  <tr>")
                             lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <ins>{e(str(new_val))}</ins></td>"
+                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
                         )
                         lines.append("  </tr>")
                         lines.append("  <tr>")
                         lines.append("    <td colspan=2></td>")
                         lines.append(
-                            f"    <td><code>{e(key)}</code>: <del>{e(str(old_val))}</del></td>"
+                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
                         )
                         lines.append("  </tr>")
                     if not diffs:

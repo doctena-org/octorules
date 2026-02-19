@@ -207,13 +207,17 @@ class TestDumpListsExternalization:
             }
         }
         dump_zone_rules("example.com", {}, tmp_path, lists=lists)
-        items_data = yaml.safe_load((tmp_path / "custom_lists" / "my_list.yaml").read_text())
-        assert len(items_data) == 1
-        assert "id" not in items_data[0]
-        assert "created_on" not in items_data[0]
-        assert "modified_on" not in items_data[0]
-        assert items_data[0]["ip"] == "10.0.0.1"
-        assert items_data[0]["comment"] == "internal"
+        file_data = yaml.safe_load((tmp_path / "custom_lists" / "my_list.yaml").read_text())
+        # External file contains full list entry with name, kind, description, items
+        assert file_data["name"] == "my_list"
+        assert file_data["kind"] == "ip"
+        assert file_data["description"] == "test"
+        item = file_data["items"][0]
+        assert "id" not in item
+        assert "created_on" not in item
+        assert "modified_on" not in item
+        assert item["ip"] == "10.0.0.1"
+        assert item["comment"] == "internal"
 
     def test_empty_items_not_externalized(self, tmp_path):
         lists = {
@@ -259,10 +263,13 @@ class TestDumpListsExternalization:
         }
         result = dump_zone_rules("example.com", {}, tmp_path, lists=lists)
         text = result.read_text()
-        assert "!include" in text
+        # !include is at the list entry level (not on the items field)
+        assert "- !include" in text
         assert "custom_lists/my_list.yaml" in text
-        # Items should NOT be inlined in the zone file
+        # Neither items nor list metadata should be inlined in the zone file
         assert "1.2.3.4" not in text
+        assert "name:" not in text
+        assert "kind:" not in text
 
     def test_round_trip_via_yaml_load_and_diff(self, tmp_path):
         """Full round-trip: dump -> _yaml_load -> diff_list = no changes."""

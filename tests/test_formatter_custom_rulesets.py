@@ -124,7 +124,7 @@ class TestCustomRulesetFormatting:
         assert "action" in output
 
     def test_html_format_modify_in_custom_ruleset(self):
-        """MODIFY changes in HTML should show ins/del tags."""
+        """MODIFY changes in HTML should show −/+ prefixes."""
         change = RuleChange(
             ChangeType.MODIFY,
             "r1",
@@ -136,12 +136,12 @@ class TestCustomRulesetFormatting:
         zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
         output = format_plan_html([zp])
         assert "custom_ruleset: Block attackers" in output
-        assert "<ins>" in output
-        assert "<del>" in output
+        assert "&minus;&ensp;" in output
+        assert "+&ensp;" in output
         assert "Update" in output
 
     def test_markdown_format_modify_in_custom_ruleset(self):
-        """MODIFY changes in markdown should show strikethrough and bold."""
+        """MODIFY changes in markdown should use diff code blocks."""
         change = RuleChange(
             ChangeType.MODIFY,
             "r1",
@@ -153,8 +153,9 @@ class TestCustomRulesetFormatting:
         zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
         output = format_plan_markdown([zp])
         assert "custom_ruleset:Block attackers" in output
-        assert "~~" in output  # strikethrough for old value
-        assert "**" in output  # bold for new value
+        assert "```diff" in output
+        assert "- action: 'log'" in output
+        assert "+ action: 'block'" in output
 
     def test_html_format_reorder_in_custom_ruleset(self):
         """REORDER changes in HTML custom rulesets."""

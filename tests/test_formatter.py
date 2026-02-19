@@ -71,9 +71,9 @@ class TestFormatChange:
         )
         lines = format_change(change, use_color=False)
         assert any("~ modify: changed-rule" in line for line in lines)
-        detail_lines = [ln for ln in lines if "expression" in ln]
-        assert detail_lines
-        assert "old-expr" in detail_lines[0] and "new-expr" in detail_lines[0]
+        # Old value on − line, new value on + line
+        assert any("−" in ln and "old-expr" in ln for ln in lines)
+        assert any("+" in ln and "new-expr" in ln for ln in lines)
 
     def test_modify_no_details_without_current_desired(self):
         change = RuleChange(ChangeType.MODIFY, "changed-rule", REDIRECT_PHASE)
@@ -357,7 +357,12 @@ class TestFormatPlanMarkdown:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_markdown([zp])
-        assert "`expression`: ~~'old'~~ → **'new'**" in result
+        # Table cell shows only field name
+        assert "| ~ | redirect_rules | r1 | `expression` |" in result
+        # Diff block after the table
+        assert "```diff" in result
+        assert "- expression: 'old'" in result
+        assert "+ expression: 'new'" in result
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(
@@ -454,7 +459,7 @@ class TestFormatPlanHtml:
         result = format_plan_html([zp])
         assert "Delete" in result
 
-    def test_modify_shows_new_then_old_on_separate_rows(self):
+    def test_modify_shows_old_then_new_on_separate_rows(self):
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[
@@ -470,11 +475,11 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "Update" in result
-        # New value wrapped in <ins>, old value in <del>
-        assert "<code>expression</code>: <ins>new-expr</ins>" in result
-        assert "<code>expression</code>: <del>old-expr</del>" in result
-        # New value appears first, old value on continuation row
-        assert result.index("<ins>new-expr</ins>") < result.index("<del>old-expr</del>")
+        # Old value with − prefix, new value with + prefix
+        assert "&minus;&ensp;<code>expression</code>: old-expr" in result
+        assert "+&ensp;<code>expression</code>: new-expr" in result
+        # Old value (−) appears first, new value (+) on continuation row
+        assert result.index("&minus;") < result.index("+&ensp;")
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(

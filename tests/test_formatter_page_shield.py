@@ -130,8 +130,9 @@ class TestPageShieldPolicyFormatting:
         zp = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp])
         output = format_plan_markdown([zp])
         assert "page_shield:CSP" in output
-        assert "~~" in output
-        assert "**" in output
+        assert "```diff" in output
+        assert "- action: 'log'" in output
+        assert "+ action: 'allow'" in output
 
     def test_html_format_create_policy(self):
         psp = PageShieldPolicyPlan(description="CSP on all", create=True)
@@ -162,8 +163,8 @@ class TestPageShieldPolicyFormatting:
         zp = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp])
         output = format_plan_html([zp])
         assert "Update" in output
-        assert "<ins>" in output
-        assert "<del>" in output
+        assert "&minus;&ensp;" in output
+        assert "+&ensp;" in output
 
     def test_report_includes_page_shield(self):
         psp = PageShieldPolicyPlan(description="CSP on all", create=True)

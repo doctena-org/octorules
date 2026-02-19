@@ -598,7 +598,8 @@ class TestDumpBlankLineFormatting:
         }
         result = dump_zone_rules("example.com", {}, tmp_path, lists=lists)
         text = result.read_text()
-        assert "\n\n- name: list_b" in text
+        # Externalized list entries use !include at the list level
+        assert "\n\n- !include" in text
         data = _yaml_load(result)
         assert len(data["lists"]) == 2
 
