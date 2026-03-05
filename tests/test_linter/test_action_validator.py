@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
+
 from octorules.linter.action_validator import lint_actions
 from octorules.linter.engine import LintContext, Severity
+from octorules.linter.expression_bridge import WIREFILTER_AVAILABLE
 from octorules.phases import PHASE_BY_NAME
+
+_needs_wirefilter = pytest.mark.skipif(
+    not WIREFILTER_AVAILABLE,
+    reason="requires octorules-wirefilter FFI for expression parse errors",
+)
 
 
 def _lint_rule(rule, phase_name="redirect_rules"):
@@ -574,6 +582,7 @@ class TestOriginParams:
 
 
 class TestD006CountingExpression:
+    @_needs_wirefilter
     def test_d006_invalid_counting_expression(self):
         ctx = _lint_rule(
             {
@@ -812,6 +821,7 @@ class TestL005HeaderMissingValue:
 
 
 class TestL006TransformExpressionLinting:
+    @_needs_wirefilter
     def test_l006_invalid_uri_path_expression(self):
         ctx = _lint_rule(
             {
@@ -842,6 +852,7 @@ class TestL006TransformExpressionLinting:
         # reject concat syntax, so we just check it doesn't crash)
         # The test verifies the code path runs without error
 
+    @_needs_wirefilter
     def test_l006_invalid_header_expression(self):
         ctx = _lint_rule(
             {
