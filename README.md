@@ -11,10 +11,18 @@ In the vein of [infrastructure as code](https://en.wikipedia.org/wiki/Infrastruc
 ### Installation
 
 ```bash
-pip install octorules
+pip install octorules[wirefilter]    # strongly recommended
+```
 
-# Optional: Rust-based wirefilter expression parser for authoritative linting
-pip install octorules[wirefilter]
+The `wirefilter` extra installs [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter),
+a Rust-based FFI bridge to Cloudflare's actual wirefilter engine. This enables
+authoritative expression parsing and unlocks the full linter rule set. Without
+it, a regex-based fallback parser is used (fewer lint rules, no type checking).
+
+If prebuilt wheels are not available for your platform, you can install without it:
+
+```bash
+pip install octorules    # regex-based expression parser only
 ```
 
 ### Configuration
@@ -331,13 +339,7 @@ See [docs/lint-rules/README.md](docs/lint-rules/README.md#suppressing-rules) for
 
 ### Expression parsing
 
-Expressions are analyzed using a regex-based parser that extracts fields, functions, operators, and literals. For authoritative phase-aware parsing using Cloudflare's actual wirefilter engine (with context-dependent schemes for transform phases), install the optional FFI package:
-
-```bash
-pip install octorules[wirefilter]
-```
-
-See [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter) for details on the Rust FFI bridge.
+When the `wirefilter` extra is installed (see [Installation](#installation)), expressions are parsed by Cloudflare's actual wirefilter engine via [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter), providing authoritative phase-aware type checking and context-dependent schemes for transform phases. Without it, a regex-based fallback parser extracts fields, functions, operators, and literals but cannot perform type checking.
 
 ## CLI reference
 
