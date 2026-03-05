@@ -103,19 +103,30 @@ def lint_zone_file(
 ) -> LintContext:
     """Run all lint checks on a zone rules file.
 
+    Runs four stages: YAML structure → per-rule checks (actions, expressions,
+    phase restrictions) → plan-tier limits → cross-rule analysis.  When the
+    optional ``octorules-wirefilter`` package is installed, expression checks
+    use Cloudflare's actual wirefilter parser; otherwise a regex fallback
+    provides best-effort field/operator extraction (fewer lint rules fire).
+
+    Top-level keys ``custom_rulesets`` and ``page_shield_policies`` in
+    *rules_data* are linted alongside phase sections.
+
     Args:
-        rules_data: Parsed YAML data (dict of phase_name → rules list).
+        rules_data: Parsed YAML data — phase friendly names as keys mapping
+            to rule lists, plus optional ``custom_rulesets`` and
+            ``page_shield_policies`` keys.
         file_path: Path to the source file (for reporting).
         zone_name: Zone name (for reporting).
         plan_tier: Cloudflare plan tier for entitlement checks.
         severity_filter: Minimum severity to report.
-        phase_filter: Only lint these phases.
+        phase_filter: Only lint these phases (friendly names).
         rule_filter: Only check these rule IDs.
         suppressions: Map of ref (or ``"*"``) to suppressed rule IDs,
             typically from ``parse_suppressions()``.
 
     Returns:
-        LintContext with all findings.
+        LintContext with accumulated ``results`` (list of ``LintResult``).
     """
     from octorules.linter.action_validator import lint_actions
     from octorules.linter.ast_linter import lint_expressions

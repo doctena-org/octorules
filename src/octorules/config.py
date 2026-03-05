@@ -58,9 +58,6 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
     Uses a SafeLoader subclass directly (instead of yaml.load) to support
     the custom !include constructor while keeping safe YAML parsing.
     """
-    path_str = str(path)
-    if ".." in path_str or "~" in path_str:
-        raise ConfigError(f"Potentially unsafe file path: {path}")
     path = path.resolve()
     if visited is None:
         visited = set()

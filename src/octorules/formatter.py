@@ -240,14 +240,21 @@ def _total_changes(zone_plans: list[ZonePlan]) -> int:
     return sum(zp.total_changes for zp in zone_plans)
 
 
+def _change_to_dict(c: RuleChange) -> dict:
+    """Convert a RuleChange to a JSON-serializable dict."""
+    d: dict = {"type": c.change_type.value, "ref": c.ref}
+    if (v := c.normalized_current) is not None:
+        d["current"] = v
+    if (v := c.normalized_desired) is not None:
+        d["desired"] = v
+    return d
+
+
 def format_plan_json(zone_plans: list[ZonePlan]) -> str:
     """Format the plan as structured JSON.
 
     Only zones with changes are included in the output.
     """
-    # TODO: extract _change_to_dict() helper — change-to-dict conversion is
-    # repeated 4 times below (phase_plans, custom_rulesets, lists, page_shield).
-    # Same applies to format_plan_markdown/html with change rendering.
     total_changes = _total_changes(zone_plans)
     zones = []
     for zp in zone_plans:
@@ -255,64 +262,26 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             continue
         phase_plans = []
         for pp in zp.phase_plans:
-            changes = []
-            for c in pp.changes:
-                change_data: dict = {
-                    "type": c.change_type.value,
-                    "ref": c.ref,
-                }
-                norm_current = c.normalized_current
-                if norm_current is not None:
-                    change_data["current"] = norm_current
-                norm_desired = c.normalized_desired
-                if norm_desired is not None:
-                    change_data["desired"] = norm_desired
-                changes.append(change_data)
             phase_plans.append(
                 {
                     "phase": pp.phase.friendly_name,
                     "cf_phase": pp.phase.cf_phase,
-                    "changes": changes,
+                    "changes": [_change_to_dict(c) for c in pp.changes],
                 }
             )
         cr_plans = []
         for crp in zp.custom_ruleset_plans:
-            cr_changes = []
-            for c in crp.changes:
-                change_data: dict = {
-                    "type": c.change_type.value,
-                    "ref": c.ref,
-                }
-                norm_current = c.normalized_current
-                if norm_current is not None:
-                    change_data["current"] = norm_current
-                norm_desired = c.normalized_desired
-                if norm_desired is not None:
-                    change_data["desired"] = norm_desired
-                cr_changes.append(change_data)
             cr_plans.append(
                 {
                     "ruleset_id": crp.ruleset_id,
                     "ruleset_name": crp.ruleset_name,
                     "phase": crp.phase,
-                    "changes": cr_changes,
+                    "changes": [_change_to_dict(c) for c in crp.changes],
                 }
             )
         lp_plans = []
         for lp in zp.list_plans:
-            lp_changes = []
-            for c in lp.changes:
-                change_data: dict = {
-                    "type": c.change_type.value,
-                    "ref": c.ref,
-                }
-                norm_current = c.normalized_current
-                if norm_current is not None:
-                    change_data["current"] = norm_current
-                norm_desired = c.normalized_desired
-                if norm_desired is not None:
-                    change_data["desired"] = norm_desired
-                lp_changes.append(change_data)
+            lp_changes = [_change_to_dict(c) for c in lp.changes]
             lp_entry: dict = {
                 "list_name": lp.list_name,
                 "list_kind": lp.list_kind,
@@ -333,19 +302,7 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             }
             if psp.policy_id:
                 psp_entry["policy_id"] = psp.policy_id
-            psp_changes = []
-            for c in psp.changes:
-                change_data: dict = {
-                    "type": c.change_type.value,
-                    "ref": c.ref,
-                }
-                norm_current = c.normalized_current
-                if norm_current is not None:
-                    change_data["current"] = norm_current
-                norm_desired = c.normalized_desired
-                if norm_desired is not None:
-                    change_data["desired"] = norm_desired
-                psp_changes.append(change_data)
+            psp_changes = [_change_to_dict(c) for c in psp.changes]
             if psp_changes:
                 psp_entry["changes"] = psp_changes
             psp_plans.append(psp_entry)
@@ -374,6 +331,37 @@ def _md_escape(text: str) -> str:
     return str(text).replace("|", "\\|")
 
 
+def _md_change_row(
+    c: RuleChange,
+    phase_label: str,
+    pending_diffs: list[list[tuple[str, object, object]]],
+    *,
+    has_reorder: bool = True,
+) -> str:
+    """Build a single markdown table row for a RuleChange."""
+    op = _change_symbol(c.change_type)
+    ref = _md_escape(c.ref)
+    escaped_phase = _md_escape(phase_label)
+    if c.change_type == ChangeType.MODIFY and c.current and c.desired:
+        field_diffs = _compute_field_diffs(c)
+        if field_diffs:
+            details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
+            pending_diffs.append(field_diffs)
+        else:
+            details = ""
+    elif has_reorder and c.change_type == ChangeType.REORDER:
+        details = "reorder rules"
+    else:
+        rule = c.normalized_desired if c.change_type == ChangeType.ADD else c.normalized_current
+        pairs = _rule_detail_pairs(rule)
+        if pairs:
+            parts = [f"`{key}`: {val!r}" for key, val in pairs]
+            details = _md_escape("; ".join(parts))
+        else:
+            details = ""
+    return f"| {op} | {escaped_phase} | {ref} | {details} |"
+
+
 def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
     """Format the plan as markdown for PR comments.
 
@@ -393,58 +381,11 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
         pending_diffs: list[list[tuple[str, object, object]]] = []
         for pp in zp.phase_plans:
             for c in pp.changes:
-                op = _change_symbol(c.change_type)
-                phase = pp.phase.friendly_name
-                ref = _md_escape(c.ref)
-                if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    field_diffs = _compute_field_diffs(c)
-                    if field_diffs:
-                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
-                        pending_diffs.append(field_diffs)
-                    else:
-                        details = ""
-                elif c.change_type == ChangeType.REORDER:
-                    details = "reorder rules"
-                else:
-                    rule = (
-                        c.normalized_desired
-                        if c.change_type == ChangeType.ADD
-                        else c.normalized_current
-                    )
-                    pairs = _rule_detail_pairs(rule)
-                    if pairs:
-                        parts = [f"`{key}`: {val!r}" for key, val in pairs]
-                        details = _md_escape("; ".join(parts))
-                    else:
-                        details = ""
-                lines.append(f"| {op} | {phase} | {ref} | {details} |")
+                lines.append(_md_change_row(c, pp.phase.friendly_name, pending_diffs))
         for crp in zp.custom_ruleset_plans:
             phase_label = f"custom_ruleset:{crp.ruleset_name}"
             for c in crp.changes:
-                op = _change_symbol(c.change_type)
-                ref = _md_escape(c.ref)
-                if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    field_diffs = _compute_field_diffs(c)
-                    if field_diffs:
-                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
-                        pending_diffs.append(field_diffs)
-                    else:
-                        details = ""
-                elif c.change_type == ChangeType.REORDER:
-                    details = "reorder rules"
-                else:
-                    rule = (
-                        c.normalized_desired
-                        if c.change_type == ChangeType.ADD
-                        else c.normalized_current
-                    )
-                    pairs = _rule_detail_pairs(rule)
-                    if pairs:
-                        parts = [f"`{key}`: {val!r}" for key, val in pairs]
-                        details = _md_escape("; ".join(parts))
-                    else:
-                        details = ""
-                lines.append(f"| {op} | {phase_label} | {ref} | {details} |")
+                lines.append(_md_change_row(c, phase_label, pending_diffs))
         for lp in zp.list_plans:
             phase_label = f"list:{lp.list_name}"
             if lp.create:
@@ -456,28 +397,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 lines.append(f"| ~ | {phase_label} | | `description` |")
                 pending_diffs.append([("description", old_desc, new_desc)])
             for c in lp.changes:
-                op = _change_symbol(c.change_type)
-                ref = _md_escape(c.ref)
-                if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    field_diffs = _compute_field_diffs(c)
-                    if field_diffs:
-                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
-                        pending_diffs.append(field_diffs)
-                    else:
-                        details = ""
-                else:
-                    rule = (
-                        c.normalized_desired
-                        if c.change_type == ChangeType.ADD
-                        else c.normalized_current
-                    )
-                    pairs = _rule_detail_pairs(rule)
-                    if pairs:
-                        parts = [f"`{key}`: {val!r}" for key, val in pairs]
-                        details = _md_escape("; ".join(parts))
-                    else:
-                        details = ""
-                lines.append(f"| {op} | {phase_label} | {ref} | {details} |")
+                lines.append(_md_change_row(c, phase_label, pending_diffs, has_reorder=False))
         for psp in zp.page_shield_policy_plans:
             phase_label = f"page_shield:{psp.description}"
             if psp.create:
@@ -485,28 +405,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
             if psp.delete:
                 lines.append(f"| - | {_md_escape(phase_label)} | | delete policy |")
             for c in psp.changes:
-                op = _change_symbol(c.change_type)
-                ref = _md_escape(c.ref)
-                if c.change_type == ChangeType.MODIFY and c.current and c.desired:
-                    field_diffs = _compute_field_diffs(c)
-                    if field_diffs:
-                        details = "; ".join(f"`{key}`" for key, _, _ in field_diffs)
-                        pending_diffs.append(field_diffs)
-                    else:
-                        details = ""
-                else:
-                    rule = (
-                        c.normalized_desired
-                        if c.change_type == ChangeType.ADD
-                        else c.normalized_current
-                    )
-                    pairs = _rule_detail_pairs(rule)
-                    if pairs:
-                        parts = [f"`{key}`: {val!r}" for key, val in pairs]
-                        details = _md_escape("; ".join(parts))
-                    else:
-                        details = ""
-                lines.append(f"| {op} | {_md_escape(phase_label)} | {ref} | {details} |")
+                lines.append(_md_change_row(c, phase_label, pending_diffs, has_reorder=False))
         for diff_group in pending_diffs:
             lines.append("")
             lines.append("```diff")
@@ -536,6 +435,99 @@ def _html_op_name(change_type: ChangeType) -> str:
     return _HTML_OP_NAMES[change_type]
 
 
+def _html_render_changes(
+    changes: list[RuleChange],
+    lines: list[str],
+) -> tuple[int, int, int, int]:
+    """Render HTML table rows for a list of RuleChanges.
+
+    Returns (creates, removes, modifies, reorders) counts.
+    """
+    e = html_escape
+    creates = removes = modifies = reorders = 0
+
+    for c in changes:
+        op = _html_op_name(c.change_type)
+
+        if c.change_type in (ChangeType.ADD, ChangeType.REMOVE):
+            if c.change_type == ChangeType.ADD:
+                creates += 1
+                detail_pairs = _rule_detail_pairs(c.normalized_desired)
+            else:
+                removes += 1
+                detail_pairs = _rule_detail_pairs(c.normalized_current)
+            lines.append("  <tr>")
+            lines.append(f"    <td>{e(op)}</td>")
+            lines.append(f"    <td>{e(c.ref)}</td>")
+            if detail_pairs:
+                parts = [f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs]
+                lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
+            else:
+                lines.append("    <td></td>")
+            lines.append("  </tr>")
+        elif c.change_type == ChangeType.REORDER:
+            reorders += 1
+            lines.append("  <tr>")
+            lines.append(f"    <td>{e(op)}</td>")
+            lines.append("    <td></td>")
+            lines.append("    <td>reorder rules</td>")
+            lines.append("  </tr>")
+        elif c.change_type == ChangeType.MODIFY:
+            modifies += 1
+            diffs = _compute_field_diffs(c)
+            for i, (key, old_val, new_val) in enumerate(diffs):
+                if i == 0:
+                    lines.append("  <tr>")
+                    lines.append(f"    <td>{e(op)}</td>")
+                    lines.append(f"    <td>{e(c.ref)}</td>")
+                else:
+                    lines.append("  <tr>")
+                    lines.append("    <td colspan=2></td>")
+                lines.append(f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>")
+                lines.append("  </tr>")
+                lines.append("  <tr>")
+                lines.append("    <td colspan=2></td>")
+                lines.append(f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>")
+                lines.append("  </tr>")
+            if not diffs:
+                lines.append("  <tr>")
+                lines.append(f"    <td>{e(op)}</td>")
+                lines.append(f"    <td>{e(c.ref)}</td>")
+                lines.append("    <td></td>")
+                lines.append("  </tr>")
+
+    return creates, removes, modifies, reorders
+
+
+def _html_summary_row(creates: int, removes: int, modifies: int, reorders: int) -> list[str]:
+    """Build the summary <tr> lines for an HTML table."""
+    parts = []
+    if creates:
+        parts.append(f"Creates={creates}")
+    if modifies:
+        parts.append(f"Updates={modifies}")
+    if removes:
+        parts.append(f"Deletes={removes}")
+    if reorders:
+        parts.append(f"Reorders={reorders}")
+    summary = ", ".join(parts) if parts else "No changes"
+    return [
+        "  <tr>",
+        f"    <td colspan=3>Summary: {summary}</td>",
+        "  </tr>",
+    ]
+
+
+_HTML_TABLE_HEADER = [
+    "<table>",
+    "  <tr>",
+    "    <th>Operation</th>",
+    "    <th>Ref</th>",
+    "    <th>Details</th>",
+    "  </tr>",
+]
+
+
 def format_plan_html(zone_plans: list[ZonePlan]) -> str:
     """Format the plan as embeddable HTML fragment for PR comments.
 
@@ -555,180 +547,21 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
 
         for pp in zp.phase_plans:
             lines.append(f"<h3>{e(pp.phase.friendly_name)}</h3>")
-            lines.append("<table>")
-            lines.append("  <tr>")
-            lines.append("    <th>Operation</th>")
-            lines.append("    <th>Ref</th>")
-            lines.append("    <th>Details</th>")
-            lines.append("  </tr>")
-
-            creates = removes = modifies = reorders = 0
-
-            for c in pp.changes:
-                op = _html_op_name(c.change_type)
-
-                if c.change_type in (ChangeType.ADD, ChangeType.REMOVE):
-                    if c.change_type == ChangeType.ADD:
-                        creates += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_desired)
-                    else:
-                        removes += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_current)
-                    # Single row per Create/Delete (matches octodns)
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append(f"    <td>{e(c.ref)}</td>")
-                    if detail_pairs:
-                        parts = [
-                            f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs
-                        ]
-                        lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
-                    else:
-                        lines.append("    <td></td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.REORDER:
-                    reorders += 1
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append("    <td></td>")
-                    lines.append("    <td>reorder rules</td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.MODIFY:
-                    modifies += 1
-                    diffs = _compute_field_diffs(c)
-                    for i, (key, old_val, new_val) in enumerate(diffs):
-                        # First diff row carries the operation and ref
-                        if i == 0:
-                            lines.append("  <tr>")
-                            lines.append(f"    <td>{e(op)}</td>")
-                            lines.append(f"    <td>{e(c.ref)}</td>")
-                        else:
-                            lines.append("  <tr>")
-                            lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                        # Continuation row with new value
-                        lines.append("  <tr>")
-                        lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                    if not diffs:
-                        lines.append("  <tr>")
-                        lines.append(f"    <td>{e(op)}</td>")
-                        lines.append(f"    <td>{e(c.ref)}</td>")
-                        lines.append("    <td></td>")
-                        lines.append("  </tr>")
-
-            # Summary row inside the table (matches octodns style)
-            parts = []
-            if creates:
-                parts.append(f"Creates={creates}")
-            if modifies:
-                parts.append(f"Updates={modifies}")
-            if removes:
-                parts.append(f"Deletes={removes}")
-            if reorders:
-                parts.append(f"Reorders={reorders}")
-            summary = ", ".join(parts) if parts else "No changes"
-            lines.append("  <tr>")
-            lines.append(f"    <td colspan=3>Summary: {summary}</td>")
-            lines.append("  </tr>")
+            lines.extend(_HTML_TABLE_HEADER)
+            creates, removes, modifies, reorders = _html_render_changes(pp.changes, lines)
+            lines.extend(_html_summary_row(creates, removes, modifies, reorders))
             lines.append("</table>")
 
         for crp in zp.custom_ruleset_plans:
             lines.append(f"<h3>custom_ruleset: {e(crp.ruleset_name)}</h3>")
-            lines.append("<table>")
-            lines.append("  <tr>")
-            lines.append("    <th>Operation</th>")
-            lines.append("    <th>Ref</th>")
-            lines.append("    <th>Details</th>")
-            lines.append("  </tr>")
-
-            cr_creates = cr_removes = cr_modifies = cr_reorders = 0
-
-            for c in crp.changes:
-                op = _html_op_name(c.change_type)
-
-                if c.change_type in (ChangeType.ADD, ChangeType.REMOVE):
-                    if c.change_type == ChangeType.ADD:
-                        cr_creates += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_desired)
-                    else:
-                        cr_removes += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_current)
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append(f"    <td>{e(c.ref)}</td>")
-                    if detail_pairs:
-                        parts = [
-                            f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs
-                        ]
-                        lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
-                    else:
-                        lines.append("    <td></td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.REORDER:
-                    cr_reorders += 1
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append("    <td></td>")
-                    lines.append("    <td>reorder rules</td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.MODIFY:
-                    cr_modifies += 1
-                    diffs = _compute_field_diffs(c)
-                    for i, (key, old_val, new_val) in enumerate(diffs):
-                        if i == 0:
-                            lines.append("  <tr>")
-                            lines.append(f"    <td>{e(op)}</td>")
-                            lines.append(f"    <td>{e(c.ref)}</td>")
-                        else:
-                            lines.append("  <tr>")
-                            lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                        lines.append("  <tr>")
-                        lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                    if not diffs:
-                        lines.append("  <tr>")
-                        lines.append(f"    <td>{e(op)}</td>")
-                        lines.append(f"    <td>{e(c.ref)}</td>")
-                        lines.append("    <td></td>")
-                        lines.append("  </tr>")
-
-            cr_parts = []
-            if cr_creates:
-                cr_parts.append(f"Creates={cr_creates}")
-            if cr_modifies:
-                cr_parts.append(f"Updates={cr_modifies}")
-            if cr_removes:
-                cr_parts.append(f"Deletes={cr_removes}")
-            if cr_reorders:
-                cr_parts.append(f"Reorders={cr_reorders}")
-            cr_summary = ", ".join(cr_parts) if cr_parts else "No changes"
-            lines.append("  <tr>")
-            lines.append(f"    <td colspan=3>Summary: {cr_summary}</td>")
-            lines.append("  </tr>")
+            lines.extend(_HTML_TABLE_HEADER)
+            creates, removes, modifies, reorders = _html_render_changes(crp.changes, lines)
+            lines.extend(_html_summary_row(creates, removes, modifies, reorders))
             lines.append("</table>")
 
         for lp in zp.list_plans:
             lines.append(f"<h3>list: {e(lp.list_name)} ({e(lp.list_kind)})</h3>")
-            lines.append("<table>")
-            lines.append("  <tr>")
-            lines.append("    <th>Operation</th>")
-            lines.append("    <th>Ref</th>")
-            lines.append("    <th>Details</th>")
-            lines.append("  </tr>")
+            lines.extend(_HTML_TABLE_HEADER)
 
             lp_creates = lp_removes = lp_modifies = 0
 
@@ -759,75 +592,16 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append(f"    <td>+&ensp;description: {e(str(new_desc))}</td>")
                 lines.append("  </tr>")
 
-            for c in lp.changes:
-                op = _html_op_name(c.change_type)
-                if c.change_type in (ChangeType.ADD, ChangeType.REMOVE):
-                    if c.change_type == ChangeType.ADD:
-                        lp_creates += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_desired)
-                    else:
-                        lp_removes += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_current)
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append(f"    <td>{e(c.ref)}</td>")
-                    if detail_pairs:
-                        parts = [
-                            f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs
-                        ]
-                        lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
-                    else:
-                        lines.append("    <td></td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.MODIFY:
-                    lp_modifies += 1
-                    diffs = _compute_field_diffs(c)
-                    for i, (key, old_val, new_val) in enumerate(diffs):
-                        if i == 0:
-                            lines.append("  <tr>")
-                            lines.append(f"    <td>{e(op)}</td>")
-                            lines.append(f"    <td>{e(c.ref)}</td>")
-                        else:
-                            lines.append("  <tr>")
-                            lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                        lines.append("  <tr>")
-                        lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                    if not diffs:
-                        lines.append("  <tr>")
-                        lines.append(f"    <td>{e(op)}</td>")
-                        lines.append(f"    <td>{e(c.ref)}</td>")
-                        lines.append("    <td></td>")
-                        lines.append("  </tr>")
-
-            lp_parts = []
-            if lp_creates:
-                lp_parts.append(f"Creates={lp_creates}")
-            if lp_modifies:
-                lp_parts.append(f"Updates={lp_modifies}")
-            if lp_removes:
-                lp_parts.append(f"Deletes={lp_removes}")
-            lp_summary = ", ".join(lp_parts) if lp_parts else "No changes"
-            lines.append("  <tr>")
-            lines.append(f"    <td colspan=3>Summary: {lp_summary}</td>")
-            lines.append("  </tr>")
+            c_creates, c_removes, c_modifies, _ = _html_render_changes(lp.changes, lines)
+            lp_creates += c_creates
+            lp_removes += c_removes
+            lp_modifies += c_modifies
+            lines.extend(_html_summary_row(lp_creates, lp_removes, lp_modifies, 0))
             lines.append("</table>")
 
         for psp in zp.page_shield_policy_plans:
             lines.append(f"<h3>page_shield: {e(psp.description)}</h3>")
-            lines.append("<table>")
-            lines.append("  <tr>")
-            lines.append("    <th>Operation</th>")
-            lines.append("    <th>Ref</th>")
-            lines.append("    <th>Details</th>")
-            lines.append("  </tr>")
+            lines.extend(_HTML_TABLE_HEADER)
 
             psp_creates = psp_removes = psp_modifies = 0
 
@@ -846,65 +620,11 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append("    <td>delete policy</td>")
                 lines.append("  </tr>")
 
-            for c in psp.changes:
-                op = _html_op_name(c.change_type)
-                if c.change_type in (ChangeType.ADD, ChangeType.REMOVE):
-                    if c.change_type == ChangeType.ADD:
-                        psp_creates += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_desired)
-                    else:
-                        psp_removes += 1
-                        detail_pairs = _rule_detail_pairs(c.normalized_current)
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append(f"    <td>{e(c.ref)}</td>")
-                    if detail_pairs:
-                        parts = [
-                            f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs
-                        ]
-                        lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
-                    else:
-                        lines.append("    <td></td>")
-                    lines.append("  </tr>")
-                elif c.change_type == ChangeType.MODIFY:
-                    psp_modifies += 1
-                    diffs = _compute_field_diffs(c)
-                    for i, (key, old_val, new_val) in enumerate(diffs):
-                        if i == 0:
-                            lines.append("  <tr>")
-                            lines.append(f"    <td>{e(op)}</td>")
-                            lines.append(f"    <td>{e(c.ref)}</td>")
-                        else:
-                            lines.append("  <tr>")
-                            lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                        lines.append("  <tr>")
-                        lines.append("    <td colspan=2></td>")
-                        lines.append(
-                            f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>"
-                        )
-                        lines.append("  </tr>")
-                    if not diffs:
-                        lines.append("  <tr>")
-                        lines.append(f"    <td>{e(op)}</td>")
-                        lines.append(f"    <td>{e(c.ref)}</td>")
-                        lines.append("    <td></td>")
-                        lines.append("  </tr>")
-
-            psp_parts = []
-            if psp_creates:
-                psp_parts.append(f"Creates={psp_creates}")
-            if psp_modifies:
-                psp_parts.append(f"Updates={psp_modifies}")
-            if psp_removes:
-                psp_parts.append(f"Deletes={psp_removes}")
-            psp_summary = ", ".join(psp_parts) if psp_parts else "No changes"
-            lines.append("  <tr>")
-            lines.append(f"    <td colspan=3>Summary: {psp_summary}</td>")
-            lines.append("  </tr>")
+            c_creates, c_removes, c_modifies, _ = _html_render_changes(psp.changes, lines)
+            psp_creates += c_creates
+            psp_removes += c_removes
+            psp_modifies += c_modifies
+            lines.extend(_html_summary_row(psp_creates, psp_removes, psp_modifies, 0))
             lines.append("</table>")
 
     if not any(zp.has_changes for zp in zone_plans):

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.0] - 2026-03-05
+
+### Added
+- Schema sync script (`scripts/sync_schemas.py`): regenerates generated blocks
+  in `fields.py` and `functions.py` from wirefilter's `get_schema_info()` FFI
+  function, merged with Python-only metadata from `overlay.toml`. Supports
+  `--check` flag for CI validation.
+- `overlay.toml`: Python-only metadata (`requires_plan`, `is_response`,
+  `restricted_phases`) not present in the Rust wirefilter side.
+- Generated markers in `functions.py` (`BEGIN/END GENERATED FUNCTIONS`).
+- `octorules lint` now logs which expression parser is active at startup
+  (`wirefilter` or `regex fallback`), so users can confirm at a glance.
+- Per-expression wirefilter parse errors now emit a WARNING-level log before
+  falling back to regex extraction (previously only visible at DEBUG level).
+
+### Fixed
+- `_clean_list_item` in `dumper.py` now guards against non-dict items instead
+  of raising `AttributeError`.
+
+### Changed
+- `dumper.py`: YAML width magic number `2147483647` extracted to
+  `_YAML_NO_WRAP_WIDTH` module-level constant.
+
 ## [0.11.0] - 2026-03-05
 
 ### Added

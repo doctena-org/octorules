@@ -274,19 +274,23 @@ def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
     return prepared
 
 
-def diff_phase(
+def _diff_rules(
     phase: Phase,
     desired_rules: list[dict],
     current_rules: list[dict],
     *,
     allow_unmanaged: bool = False,
-) -> PhasePlan:
-    """Compute the diff for a single phase."""
-    plan = PhasePlan(phase=phase)
+) -> list[RuleChange]:
+    """Compute add/remove/modify/reorder changes between desired and current rules.
 
-    desired = prepare_desired_rules(desired_rules, phase)
-    plan.prepared_rules = desired
-    desired_by_ref = _rules_by_ref(desired)
+    Works for both real phases and synthetic phases (custom rulesets). When
+    allow_unmanaged=True, REMOVE changes are suppressed. Note: when
+    allow_unmanaged=True, current may contain extra refs not in desired, so the
+    set comparison will be False and reorder is not detected for the managed
+    subset. This is a known limitation.
+    """
+    changes: list[RuleChange] = []
+    desired_by_ref = _rules_by_ref(desired_rules)
     current_by_ref = _rules_by_ref(current_rules)
 
     desired_refs = set(desired_by_ref.keys())
@@ -294,7 +298,7 @@ def diff_phase(
 
     # Additions
     for ref in desired_refs - current_refs:
-        plan.changes.append(
+        changes.append(
             RuleChange(
                 change_type=ChangeType.ADD,
                 ref=ref,
@@ -306,7 +310,7 @@ def diff_phase(
     # Removals (skipped when allow_unmanaged is True)
     if not allow_unmanaged:
         for ref in current_refs - desired_refs:
-            plan.changes.append(
+            changes.append(
                 RuleChange(
                     change_type=ChangeType.REMOVE,
                     ref=ref,
@@ -330,16 +334,13 @@ def diff_phase(
             # Pre-populate cached properties to avoid re-normalizing
             change.__dict__["normalized_current"] = norm_current
             change.__dict__["normalized_desired"] = norm_desired
-            plan.changes.append(change)
+            changes.append(change)
 
-    # Reorder detection (same set of refs, but different order).
-    # Note: when allow_unmanaged=True, current may contain extra refs not in
-    # desired, so the set comparison will be False and reorder is not detected
-    # for the managed subset. This is a known limitation.
-    desired_order = _ref_order(desired)
+    # Reorder detection (same set of refs, but different order)
+    desired_order = _ref_order(desired_rules)
     current_order = _ref_order(current_rules)
     if set(desired_order) == set(current_order) and desired_order != current_order:
-        plan.changes.append(
+        changes.append(
             RuleChange(
                 change_type=ChangeType.REORDER,
                 ref="*",
@@ -347,6 +348,21 @@ def diff_phase(
             )
         )
 
+    return changes
+
+
+def diff_phase(
+    phase: Phase,
+    desired_rules: list[dict],
+    current_rules: list[dict],
+    *,
+    allow_unmanaged: bool = False,
+) -> PhasePlan:
+    """Compute the diff for a single phase."""
+    plan = PhasePlan(phase=phase)
+    desired = prepare_desired_rules(desired_rules, phase)
+    plan.prepared_rules = desired
+    plan.changes = _diff_rules(phase, desired, current_rules, allow_unmanaged=allow_unmanaged)
     return plan
 
 
@@ -407,6 +423,12 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
         raise RuleValidationError(f"custom_rulesets[{index}] is missing required 'name' field")
     if "phase" not in entry:
         raise RuleValidationError(f"custom_rulesets[{index}] is missing required 'phase' field")
+    phase = entry["phase"]
+    if phase not in PHASE_BY_CF:
+        raise RuleValidationError(
+            f"custom_rulesets[{index}] has invalid 'phase' {phase!r}."
+            f" Use a valid CF phase ID (e.g. 'http_request_firewall_custom')"
+        )
     rules = entry.get("rules", [])
     if not isinstance(rules, list):
         raise RuleValidationError(f"custom_rulesets[{index}] 'rules' must be a list")
@@ -452,8 +474,6 @@ def _make_synthetic_phase(ruleset_name: str, cf_phase: str) -> Phase:
     )
 
 
-# TODO: diff_custom_ruleset and diff_phase share ~80 lines of nearly identical
-# add/remove/modify/reorder logic. Extract a shared _diff_rules() helper.
 def diff_custom_ruleset(
     ruleset_id: str,
     ruleset_name: str,
@@ -468,7 +488,7 @@ def diff_custom_ruleset(
         phase=phase,
     )
 
-    # Prepare desired rules: default enabled to True, require action
+    # Prepare desired rules: default enabled to True
     prepared = []
     for rule in desired_rules:
         rule = rule.copy()
@@ -478,62 +498,7 @@ def diff_custom_ruleset(
     plan.prepared_rules = prepared
 
     synthetic_phase = _make_synthetic_phase(ruleset_name, phase)
-    desired_by_ref = _rules_by_ref(prepared)
-    current_by_ref = _rules_by_ref(current_rules)
-
-    desired_refs = set(desired_by_ref.keys())
-    current_refs = set(current_by_ref.keys())
-
-    # Additions
-    for ref in desired_refs - current_refs:
-        plan.changes.append(
-            RuleChange(
-                change_type=ChangeType.ADD,
-                ref=ref,
-                phase=synthetic_phase,
-                desired=desired_by_ref[ref],
-            )
-        )
-
-    # Removals
-    for ref in current_refs - desired_refs:
-        plan.changes.append(
-            RuleChange(
-                change_type=ChangeType.REMOVE,
-                ref=ref,
-                phase=synthetic_phase,
-                current=current_by_ref[ref],
-            )
-        )
-
-    # Modifications
-    for ref in desired_refs & current_refs:
-        norm_desired = normalize_rule(desired_by_ref[ref])
-        norm_current = normalize_rule(current_by_ref[ref])
-        if norm_desired != norm_current:
-            change = RuleChange(
-                change_type=ChangeType.MODIFY,
-                ref=ref,
-                phase=synthetic_phase,
-                current=current_by_ref[ref],
-                desired=desired_by_ref[ref],
-            )
-            change.__dict__["normalized_current"] = norm_current
-            change.__dict__["normalized_desired"] = norm_desired
-            plan.changes.append(change)
-
-    # Reorder detection
-    desired_order = _ref_order(prepared)
-    current_order = _ref_order(current_rules)
-    if set(desired_order) == set(current_order) and desired_order != current_order:
-        plan.changes.append(
-            RuleChange(
-                change_type=ChangeType.REORDER,
-                ref="*",
-                phase=synthetic_phase,
-            )
-        )
-
+    plan.changes = _diff_rules(synthetic_phase, prepared, current_rules)
     return plan
 
 

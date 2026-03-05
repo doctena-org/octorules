@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from octorules.linter.expression_bridge import (
     WIREFILTER_AVAILABLE,
     _parse_with_regex,
+    _parse_with_wirefilter,
     parse_expression,
 )
 
@@ -179,3 +182,124 @@ class TestWirefilterBridge:
         )
         assert info.parse_error == ""
         assert "http.request.uri.path" in info.fields_used
+
+
+class TestWirefilterFFICrashFallback:
+    """Tests for FFI crash → regex fallback with logged warning."""
+
+    def test_ffi_crash_falls_back_to_regex(self, monkeypatch):
+        """When the FFI call raises, fall back to regex and preserve error."""
+
+        def _boom(expr, phase=None):
+            raise RuntimeError("segfault in FFI")
+
+        monkeypatch.setattr("octorules.linter.expression_bridge._wf_parse", _boom)
+        info = _parse_with_wirefilter('http.host eq "example.com"')
+        # Should have fallen back to regex extraction
+        assert "http.host" in info.fields_used
+        # parse_error should include the exception type
+        assert "RuntimeError" in info.parse_error
+        assert "segfault in FFI" in info.parse_error
+        assert info.parse_error_type == "wirefilter_crash"
+
+    def test_ffi_crash_logs_warning(self, monkeypatch, caplog):
+        """FFI crash should produce a warning log with exc_info."""
+
+        def _boom(expr, phase=None):
+            raise ValueError("bad input")
+
+        monkeypatch.setattr("octorules.linter.expression_bridge._wf_parse", _boom)
+        with caplog.at_level(logging.WARNING, logger="octorules.linter"):
+            _parse_with_wirefilter('http.host eq "test"')
+        assert any("Wirefilter FFI crashed" in r.message for r in caplog.records)
+        assert any(
+            r.exc_info is not None for r in caplog.records if "Wirefilter FFI crashed" in r.message
+        )
+
+    def test_wirefilter_error_dict_falls_back_to_regex(self, monkeypatch):
+        """When wirefilter returns {error: ...}, fall back to regex with parse_error."""
+
+        def _return_error(expr, phase=None):
+            return {"error": "unknown field `bogus`"}
+
+        monkeypatch.setattr("octorules.linter.expression_bridge._wf_parse", _return_error)
+        info = _parse_with_wirefilter('http.host eq "example.com"')
+        assert "http.host" in info.fields_used  # regex fallback extracted the field
+        assert info.parse_error == "unknown field `bogus`"
+        assert info.parse_error_type == "wirefilter_parse"
+
+
+class TestParseErrorType:
+    """Tests for the parse_error_type classification field."""
+
+    def test_regex_fallback_when_wirefilter_unavailable(self, monkeypatch):
+        monkeypatch.setattr("octorules.linter.expression_bridge.WIREFILTER_AVAILABLE", False)
+        info = parse_expression('http.host eq "example.com"')
+        assert info.parse_error_type == "regex_fallback"
+        assert info.parse_error == ""
+
+    @pytest.mark.skipif(not WIREFILTER_AVAILABLE, reason="octorules-wirefilter not installed")
+    def test_success_via_wirefilter(self):
+        info = parse_expression('http.host eq "example.com"')
+        assert info.parse_error_type == ""
+        assert info.parse_error == ""
+
+    def test_wirefilter_parse_error_type(self, monkeypatch):
+        def _return_error(expr, phase=None):
+            return {"error": "unknown field `bogus`"}
+
+        monkeypatch.setattr("octorules.linter.expression_bridge._wf_parse", _return_error)
+        info = _parse_with_wirefilter('http.host eq "example.com"')
+        assert info.parse_error_type == "wirefilter_parse"
+
+    def test_wirefilter_crash_type(self, monkeypatch):
+        def _boom(expr, phase=None):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("octorules.linter.expression_bridge._wf_parse", _boom)
+        info = _parse_with_wirefilter('http.host eq "example.com"')
+        assert info.parse_error_type == "wirefilter_crash"
+
+    def test_regex_only_has_no_error_type(self):
+        """Direct _parse_with_regex call returns empty parse_error_type."""
+        info = _parse_with_regex('http.host eq "example.com"')
+        assert info.parse_error_type == ""
+        assert info.parse_error == ""
+
+
+class TestRegexParserEdgeCases:
+    """Edge case tests for the regex expression parser."""
+
+    def test_unicode_in_string_literal(self):
+        info = _parse_with_regex('http.host eq "café.example.com"')
+        assert "café.example.com" in info.string_literals
+
+    def test_escaped_quotes_in_string_literal(self):
+        info = _parse_with_regex(r'http.host eq "say \"hello\""')
+        assert r"say \"hello\"" in info.string_literals
+
+    def test_very_long_expression(self):
+        """Parser should handle expressions up to 4096 chars without error."""
+        # Build a long OR chain: http.host eq "aaa..." or http.host eq "bbb..."
+        parts = [f'http.host eq "{"x" * 50}_{i}"' for i in range(60)]
+        expr = " or ".join(parts)
+        assert len(expr) > 4000
+        info = _parse_with_regex(expr)
+        assert "http.host" in info.fields_used
+        assert "or" in info.operators_used
+        assert len(info.string_literals) == 60
+
+    def test_full_form_ipv6(self):
+        info = _parse_with_regex("ip.src eq 2001:0db8:0000:0000:0000:0000:0000:0001")
+        assert "2001:0db8:0000:0000:0000:0000:0000:0001" in info.ip_literals
+
+    def test_empty_set_literal(self):
+        """Empty set {} should not crash the parser."""
+        info = _parse_with_regex("http.host in {}")
+        assert info.fields_used == ["http.host"]
+        assert "in" in info.operators_used
+
+    def test_integer_only_expression(self):
+        info = _parse_with_regex("cf.threat_score gt 50")
+        assert 50 in info.int_literals
+        assert "cf.threat_score" in info.fields_used

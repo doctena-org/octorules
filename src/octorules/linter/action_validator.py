@@ -2,6 +2,10 @@
 
 Validates that actions are valid for their phase and that action_parameters
 match the expected schema.
+
+Error handling convention: structural errors (wrong type, missing required
+container) early-return to skip further checks; value errors (bad enum,
+missing sub-field) continue so multiple issues are reported at once.
 """
 
 from __future__ import annotations
