@@ -58,10 +58,10 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
     Uses a SafeLoader subclass directly (instead of yaml.load) to support
     the custom !include constructor while keeping safe YAML parsing.
     """
-    path = path.resolve()
     path_str = str(path)
     if ".." in path_str or "~" in path_str:
         raise ConfigError(f"Potentially unsafe file path: {path}")
+    path = path.resolve()
     if visited is None:
         visited = set()
     visited = visited | {path}
@@ -190,7 +190,7 @@ def _parse_plan_outputs(raw_dict: dict, context: str) -> dict[str, PlanOutput]:
 
 @dataclass
 class Config:
-    token: str
+    token: str = field(repr=False)
     rules_dir: Path
     lists_dir: Path | None = None
     zones: dict[str, ZoneConfig] = field(default_factory=dict)

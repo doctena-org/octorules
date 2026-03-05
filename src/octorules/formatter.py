@@ -245,6 +245,9 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
 
     Only zones with changes are included in the output.
     """
+    # TODO: extract _change_to_dict() helper — change-to-dict conversion is
+    # repeated 4 times below (phase_plans, custom_rulesets, lists, page_shield).
+    # Same applies to format_plan_markdown/html with change rendering.
     total_changes = _total_changes(zone_plans)
     zones = []
     for zp in zone_plans:

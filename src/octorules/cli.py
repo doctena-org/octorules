@@ -21,7 +21,13 @@ from octorules import __version__
 from octorules.config import Config, ConfigError, ZoneConfig, resolve_zone_ids, slugify
 from octorules.dumper import dump_zone_rules
 from octorules.formatter import build_report_data, print_report
-from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME, get_phase, unknown_phase_message
+from octorules.phases import (
+    KNOWN_NON_PHASE_KEYS,
+    PHASE_BY_CF,
+    PHASE_BY_NAME,
+    get_phase,
+    unknown_phase_message,
+)
 from octorules.plan_output import PlanText
 from octorules.planner import (
     RuleValidationError,
@@ -181,6 +187,49 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report output format (default: csv)",
     )
 
+    lint_parser = sub.add_parser(
+        "lint", parents=[shared], help="Lint rules files for errors and warnings"
+    )
+    lint_parser.add_argument(
+        "--format",
+        dest="lint_format",
+        choices=["text", "json", "sarif"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    lint_parser.add_argument(
+        "--severity",
+        dest="lint_severity",
+        choices=["error", "warning", "info"],
+        default="info",
+        help="Minimum severity to report (default: info)",
+    )
+    lint_parser.add_argument(
+        "--rule",
+        action="append",
+        dest="lint_rules",
+        help="Only check specific rule ID(s); can be repeated",
+    )
+    lint_parser.add_argument(
+        "--plan",
+        dest="lint_plan",
+        choices=["free", "pro", "business", "enterprise"],
+        default=None,
+        help="Cloudflare plan tier override for entitlement checks. "
+        "When omitted, auto-detected from the Cloudflare API per zone.",
+    )
+    lint_parser.add_argument(
+        "--output",
+        dest="lint_output",
+        help="Write lint results to a file",
+    )
+    lint_parser.add_argument(
+        "--exit-code",
+        action="store_true",
+        dest="lint_exit_code",
+        help="Exit with 1 when errors are found, 2 when warnings are found (useful for CI)",
+    )
+
     sub.add_parser("versions", parents=[shared], help="Show versions of octorules and dependencies")
 
     # Provide defaults for subcommand-specific attributes so getattr is never needed
@@ -191,6 +240,12 @@ def build_parser() -> argparse.ArgumentParser:
         output_dir=None,
         report_format="csv",
         scope="all",
+        lint_format="text",
+        lint_severity="info",
+        lint_rules=None,
+        lint_plan="enterprise",
+        lint_output=None,
+        lint_exit_code=False,
     )
 
     return parser
@@ -237,12 +292,12 @@ def _filter_current_by_phase(
 
 def _write_output_file(path: str, write_fn: Callable[[IO[str]], None]) -> bool:
     """Write output to a file. Returns True on success, False on error."""
-    resolved = str(Path(path).resolve())
-    if ".." in resolved or "~" in resolved:
+    raw = str(Path(path))
+    if ".." in raw or "~" in raw:
         log.error("Potentially unsafe output path: %s", path)
         return False
     try:
-        with open(resolved, "w", encoding="utf-8") as f:
+        with open(Path(path).resolve(), "w", encoding="utf-8") as f:
             write_fn(f)
         return True
     except OSError as e:
@@ -1291,6 +1346,98 @@ def _cmd_sync_inner(
     )
 
 
+def cmd_lint(
+    config: Config,
+    zone_filter: list[str] | None,
+    phase_filter: list[str] | None = None,
+    lint_format: str = "text",
+    lint_severity: str = "info",
+    lint_rules: list[str] | None = None,
+    lint_plan: str | None = None,
+    zone_plans: dict[str, str] | None = None,
+    output_file: str | None = None,
+    exit_code: bool = False,
+) -> int:
+    """Lint rules files for errors and warnings. Returns exit code."""
+    from octorules.linter.engine import Severity, lint_zone_file
+    from octorules.linter.report import FORMATTERS
+    from octorules.linter.suppressions import parse_suppressions
+
+    severity_map = {"error": Severity.ERROR, "warning": Severity.WARNING, "info": Severity.INFO}
+    severity = severity_map[lint_severity]
+    formatter = FORMATTERS[lint_format]
+
+    zone_names = _get_zones(config, zone_filter)
+    all_results: list = []
+    has_errors = False
+    has_warnings = False
+
+    for zone_name in zone_names:
+        desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
+        if not desired:
+            log.info("%s: no rules file (skipped)", zone_name)
+            continue
+
+        rules_file = config.rules_dir / f"{zone_name}.yaml"
+        # Resolve plan tier: explicit --plan > API-detected > "enterprise"
+        if lint_plan is not None:
+            plan_tier = lint_plan
+        elif zone_plans and zone_name in zone_plans:
+            plan_tier = zone_plans[zone_name]
+        else:
+            plan_tier = "enterprise"
+
+        suppressions = parse_suppressions(rules_file)
+
+        ctx = lint_zone_file(
+            desired,
+            file_path=str(rules_file),
+            zone_name=zone_name,
+            plan_tier=plan_tier,
+            severity_filter=severity,
+            phase_filter=phase_filter,
+            rule_filter=lint_rules,
+            suppressions=suppressions,
+        )
+
+        if ctx.results:
+            output = formatter(ctx)
+            if output:
+                print(output, end="")
+            all_results.extend(ctx.results)
+            if ctx.has_errors:
+                has_errors = True
+            if ctx.warnings:
+                has_warnings = True
+        else:
+            log.info("  %s: no issues found", zone_name)
+
+    if output_file and all_results:
+        # Re-create a combined context for file output
+        from octorules.linter.engine import LintContext
+
+        combined = LintContext(
+            file_path=output_file,
+            zone_name=", ".join(zone_names),
+            plan_tier=lint_plan or "auto",
+        )
+        combined.results = all_results
+        if not _write_output_file(output_file, lambda f: formatter(combined, f)):
+            return 1
+
+    if not all_results:
+        log.info("No lint issues found.")
+
+    if exit_code:
+        if has_errors:
+            return 1
+        if has_warnings:
+            return 2
+    elif has_errors:
+        return 1
+    return 0
+
+
 def cmd_validate(
     config: Config,
     zone_filter: list[str] | None,
@@ -1306,7 +1453,7 @@ def cmd_validate(
     for zone_name in zone_names:
         desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
         if not desired:
-            msg = f"  {zone_name}: no rules file (skipped)"
+            msg = f"{zone_name}: no rules file (skipped)"
             log.info("%s", msg)
             lines.append(msg)
             continue
@@ -1314,7 +1461,7 @@ def cmd_validate(
         warn_unknown_phase_keys(desired, zone_name)
 
         for friendly_name, rules in desired.items():
-            if friendly_name in ("custom_rulesets", "lists", "page_shield_policies"):
+            if friendly_name in KNOWN_NON_PHASE_KEYS:
                 continue  # validated separately below
             try:
                 phase = get_phase(friendly_name)
@@ -1656,6 +1803,31 @@ def main(argv: list[str] | None = None) -> None:
                     phase_filter=phase_filter,
                     report_format=args.report_format,
                     scope_filter=args.scope,
+                )
+            )
+        elif args.command == "lint":
+            zone_plans: dict[str, str] = {}
+            if args.lint_plan is None:
+                try:
+                    provider = _init_provider(config)
+                    zone_plans = provider.zone_plans
+                except Exception:
+                    log.warning(
+                        "Could not resolve zone plans from Cloudflare API; "
+                        "using 'enterprise' as default. Pass --plan to set explicitly."
+                    )
+            sys.exit(
+                cmd_lint(
+                    config,
+                    args.zones,
+                    phase_filter=phase_filter,
+                    lint_format=args.lint_format,
+                    lint_severity=args.lint_severity,
+                    lint_rules=args.lint_rules,
+                    lint_plan=args.lint_plan,
+                    zone_plans=zone_plans,
+                    output_file=args.lint_output,
+                    exit_code=args.lint_exit_code,
                 )
             )
         elif args.command == "validate":

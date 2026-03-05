@@ -1,0 +1,190 @@
+"""Lint engine — orchestrates all linter modules and produces a unified report."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from enum import IntEnum
+from typing import Any
+
+from octorules.linter.suppressions import is_suppressed
+from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
+
+log = logging.getLogger("octorules.linter")
+
+# Expressions that are always true or always false (shared by yaml_validator and page_shield_linter)
+ALWAYS_TRUE_EXPRESSIONS = frozenset({"true", "(true)", "((true))"})
+ALWAYS_FALSE_EXPRESSIONS = frozenset({"false", "(false)", "((false))"})
+
+
+class Severity(IntEnum):
+    """Lint result severity levels, ordered by importance."""
+
+    ERROR = 1
+    WARNING = 2
+    INFO = 3
+
+
+@dataclass(frozen=True)
+class LintResult:
+    """A single lint finding."""
+
+    rule_id: str  # e.g. "M001", "C003"
+    severity: Severity
+    message: str
+    phase: str = ""  # friendly phase name, empty for file-level
+    ref: str = ""  # rule ref, empty for phase-level
+    field: str = ""  # specific field path, e.g. "action_parameters.edge_ttl.default"
+    suggestion: str = ""  # optional fix suggestion
+
+    def __str__(self) -> str:
+        parts = [f"[{self.severity.name}]", self.rule_id]
+        if self.phase:
+            parts.append(f"({self.phase}")
+            if self.ref:
+                parts.append(f"/ {self.ref}")
+            parts[-1] += ")"
+        parts.append(self.message)
+        if self.suggestion:
+            parts.append(f"[fix: {self.suggestion}]")
+        return " ".join(parts)
+
+
+@dataclass
+class LintContext:
+    """Context passed through linter modules during a lint run."""
+
+    file_path: str = ""
+    zone_name: str = ""
+    plan_tier: str = "enterprise"  # free, pro, business, enterprise
+    severity_filter: Severity = Severity.INFO  # show this severity and above
+    phase_filter: list[str] | None = None
+    rule_filter: list[str] | None = None  # specific rule IDs to check
+    suppressions: dict[str, set[str]] = field(default_factory=dict)
+    results: list[LintResult] = field(default_factory=list)
+    suppressed_count: int = 0
+
+    def add(self, result: LintResult) -> None:
+        """Add a result if it passes filters and is not suppressed."""
+        if result.severity > self.severity_filter:
+            return
+        if self.rule_filter and result.rule_id not in self.rule_filter:
+            return
+        if self.phase_filter and result.phase and result.phase not in self.phase_filter:
+            return
+        if self.suppressions and is_suppressed(self.suppressions, result.ref, result.rule_id):
+            self.suppressed_count += 1
+            return
+        self.results.append(result)
+
+    @property
+    def errors(self) -> list[LintResult]:
+        return [r for r in self.results if r.severity == Severity.ERROR]
+
+    @property
+    def warnings(self) -> list[LintResult]:
+        return [r for r in self.results if r.severity == Severity.WARNING]
+
+    @property
+    def has_errors(self) -> bool:
+        return any(r.severity == Severity.ERROR for r in self.results)
+
+
+def lint_zone_file(
+    rules_data: dict[str, Any],
+    *,
+    file_path: str = "",
+    zone_name: str = "",
+    plan_tier: str = "enterprise",
+    severity_filter: Severity = Severity.INFO,
+    phase_filter: list[str] | None = None,
+    rule_filter: list[str] | None = None,
+    suppressions: dict[str, set[str]] | None = None,
+) -> LintContext:
+    """Run all lint checks on a zone rules file.
+
+    Args:
+        rules_data: Parsed YAML data (dict of phase_name → rules list).
+        file_path: Path to the source file (for reporting).
+        zone_name: Zone name (for reporting).
+        plan_tier: Cloudflare plan tier for entitlement checks.
+        severity_filter: Minimum severity to report.
+        phase_filter: Only lint these phases.
+        rule_filter: Only check these rule IDs.
+        suppressions: Map of ref (or ``"*"``) to suppressed rule IDs,
+            typically from ``parse_suppressions()``.
+
+    Returns:
+        LintContext with all findings.
+    """
+    from octorules.linter.action_validator import lint_actions
+    from octorules.linter.ast_linter import lint_expressions
+    from octorules.linter.cross_rule_linter import lint_cross_rules
+    from octorules.linter.phase_linter import lint_phase_restrictions
+    from octorules.linter.plan_linter import lint_plan_tier
+    from octorules.linter.yaml_validator import lint_yaml_structure
+
+    ctx = LintContext(
+        file_path=file_path,
+        zone_name=zone_name,
+        plan_tier=plan_tier,
+        severity_filter=severity_filter,
+        phase_filter=phase_filter,
+        rule_filter=rule_filter,
+        suppressions=suppressions or {},
+    )
+
+    # Stage 1: YAML structure validation
+    lint_yaml_structure(rules_data, ctx)
+
+    # Stage 2: Per-phase, per-rule checks
+    for phase_name, rules in rules_data.items():
+        if phase_name in KNOWN_NON_PHASE_KEYS:
+            continue
+        if phase_name not in PHASE_BY_NAME:
+            continue  # already flagged by yaml_validator
+        if phase_filter and phase_name not in phase_filter:
+            continue
+        if not isinstance(rules, list):
+            continue
+
+        phase = PHASE_BY_NAME[phase_name]
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+
+            # Action validation
+            lint_actions(rule, phase, ctx)
+
+            # Expression-level analysis
+            lint_expressions(rule, phase, ctx)
+
+            # Phase restriction checks
+            lint_phase_restrictions(rule, phase, ctx)
+
+    # Stage 2b: Custom ruleset rules (use waf_custom_rules phase for validation)
+    custom_rulesets = rules_data.get("custom_rulesets")
+    if isinstance(custom_rulesets, list):
+        waf_phase = PHASE_BY_NAME.get("waf_custom_rules")
+        if waf_phase and (not phase_filter or "custom_rulesets" in phase_filter):
+            for entry in custom_rulesets:
+                if not isinstance(entry, dict):
+                    continue
+                for rule in entry.get("rules", []):
+                    if not isinstance(rule, dict):
+                        continue
+                    lint_actions(rule, waf_phase, ctx)
+                    lint_expressions(rule, waf_phase, ctx)
+
+    # Stage 2c: Page Shield policy checks
+    from octorules.linter.page_shield_linter import lint_page_shield_policies
+
+    lint_page_shield_policies(rules_data, ctx)
+
+    # Stage 3: Plan-tier checks
+    lint_plan_tier(rules_data, ctx)
+
+    # Stage 4: Cross-rule analysis
+    lint_cross_rules(rules_data, ctx)
+
+    return ctx

@@ -118,6 +118,16 @@ ALL_CF_PHASES: list[str] = [p.cf_phase for p in PHASES]
 ZONE_CF_PHASES: list[str] = [p.cf_phase for p in PHASES if p.zone_level]
 ACCOUNT_CF_PHASES: list[str] = [p.cf_phase for p in PHASES if p.account_level]
 
+# Top-level YAML keys that are valid but are not phase names.
+KNOWN_NON_PHASE_KEYS: frozenset[str] = frozenset(
+    {"custom_rulesets", "lists", "page_shield_policies"}
+)
+
+# Phase names that were renamed — old name → current friendly name.
+RENAMED_PHASES: dict[str, str] = {
+    "waf_managed_exceptions": "waf_managed_rules",
+}
+
 # Fields injected by the CF API that should be stripped when processing rules.
 # Note: 'ref' is NOT included — it's user-defined and needed for identification.
 CF_API_FIELDS: frozenset[str] = frozenset(
