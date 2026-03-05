@@ -1067,6 +1067,53 @@ class TestResolveZoneId:
         assert "example.com" not in provider.zone_plans
 
 
+class TestConcurrentResolveZoneId:
+    """Tests for concurrent resolve_zone_id shared state consistency."""
+
+    def test_concurrent_resolution_populates_all_zone_plans(self, mock_cf_client):
+        """Concurrent resolve_zone_id calls should populate zone_plans for all zones."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        zones = {}
+        for name in ["a.com", "b.com", "c.com"]:
+            zone = MagicMock()
+            zone.name = name
+            zone.id = f"id-{name}"
+            zone.plan.name = "Enterprise"
+            zone.account.id = "acct-1"
+            zone.account.name = "Test Account"
+            zones[name] = zone
+
+        def mock_list(name):
+            return [zones[name]]
+
+        mock_cf_client.zones.list.side_effect = mock_list
+        provider = CloudflareProvider("token", client=mock_cf_client)
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(provider.resolve_zone_id, name): name for name in zones}
+            results = {}
+            for future in as_completed(futures):
+                name = futures[future]
+                results[name] = future.result()
+
+        # All zone IDs resolved correctly
+        assert results == {"a.com": "id-a.com", "b.com": "id-b.com", "c.com": "id-c.com"}
+        # All zone plans populated
+        assert len(provider.zone_plans) == 3
+        for name in zones:
+            assert provider.zone_plans[name] == "enterprise"
+        # Account info stashed from one of the resolutions
+        assert provider.account_id == "acct-1"
+
+    def test_lock_protects_shared_state(self, mock_cf_client):
+        """The lock should serialize writes to _account_id and _zone_plans."""
+        import threading
+
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        assert isinstance(provider._lock, type(threading.Lock()))
+
+
 class TestNormalizePlanName:
     @pytest.mark.parametrize(
         "raw, expected",

@@ -189,12 +189,12 @@ class TestValidateCustomRuleset:
         validate_custom_ruleset(entry, 0)  # Should not raise
 
     def test_missing_id(self):
-        entry = {"name": "Block", "phase": "p", "rules": []}
+        entry = {"name": "Block", "phase": "http_request_firewall_custom", "rules": []}
         with pytest.raises(RuleValidationError, match="missing required 'id'"):
             validate_custom_ruleset(entry, 0)
 
     def test_missing_name(self):
-        entry = {"id": "rs1", "phase": "p", "rules": []}
+        entry = {"id": "rs1", "phase": "http_request_firewall_custom", "rules": []}
         with pytest.raises(RuleValidationError, match="missing required 'name'"):
             validate_custom_ruleset(entry, 0)
 
@@ -207,7 +207,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "p",
+            "phase": "http_request_firewall_custom",
             "rules": [{"expression": "true", "action": "block"}],
         }
         with pytest.raises(RuleValidationError, match="missing required 'ref'"):
@@ -217,7 +217,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "p",
+            "phase": "http_request_firewall_custom",
             "rules": [{"ref": "r1", "action": "block"}],
         }
         with pytest.raises(RuleValidationError, match="missing required 'expression'"):
@@ -227,7 +227,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "p",
+            "phase": "http_request_firewall_custom",
             "rules": [{"ref": "r1", "expression": "true"}],
         }
         with pytest.raises(RuleValidationError, match="must specify an 'action'"):
@@ -237,7 +237,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "p",
+            "phase": "http_request_firewall_custom",
             "rules": [
                 {"ref": "r1", "expression": "a", "action": "block"},
                 {"ref": "r1", "expression": "b", "action": "log"},
@@ -247,11 +247,11 @@ class TestValidateCustomRuleset:
             validate_custom_ruleset(entry, 0)
 
     def test_empty_rules_ok(self):
-        entry = {"id": "rs1", "name": "X", "phase": "p", "rules": []}
+        entry = {"id": "rs1", "name": "X", "phase": "http_request_firewall_custom", "rules": []}
         validate_custom_ruleset(entry, 0)
 
     def test_no_rules_key_ok(self):
-        entry = {"id": "rs1", "name": "X", "phase": "p"}
+        entry = {"id": "rs1", "name": "X", "phase": "http_request_firewall_custom"}
         validate_custom_ruleset(entry, 0)
 
 

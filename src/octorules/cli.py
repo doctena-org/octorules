@@ -1360,8 +1360,16 @@ def cmd_lint(
 ) -> int:
     """Lint rules files for errors and warnings. Returns exit code."""
     from octorules.linter.engine import Severity, lint_zone_file
+    from octorules.linter.expression_bridge import WIREFILTER_AVAILABLE
     from octorules.linter.report import FORMATTERS
     from octorules.linter.suppressions import parse_suppressions
+
+    if WIREFILTER_AVAILABLE:
+        log.info("Expression parser: wirefilter")
+    else:
+        log.info(
+            "Expression parser: regex fallback (install octorules-wirefilter for full parsing)"
+        )
 
     severity_map = {"error": Severity.ERROR, "warning": Severity.WARNING, "info": Severity.INFO}
     severity = severity_map[lint_severity]
@@ -1811,10 +1819,11 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     provider = _init_provider(config)
                     zone_plans = provider.zone_plans
-                except Exception:
+                except (APIError, APIConnectionError) as e:
                     log.warning(
-                        "Could not resolve zone plans from Cloudflare API; "
-                        "using 'enterprise' as default. Pass --plan to set explicitly."
+                        "Could not resolve zone plans from Cloudflare API (%s); "
+                        "using 'enterprise' as default. Pass --plan to set explicitly.",
+                        _format_api_error(e),
                     )
             sys.exit(
                 cmd_lint(

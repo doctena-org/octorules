@@ -48,63 +48,44 @@ _TRANSFORM_AND_REDIRECT_PHASES = frozenset(
     }
 )
 
-# String functions
+# --- BEGIN GENERATED FUNCTIONS --- #
+_fn("any")
+_fn("all")
+_fn("concat")
 _fn("lower")
 _fn("upper")
-_fn("concat")
-_fn("to_string", restricted_phases=_TRANSFORM_AND_REDIRECT_PHASES)
-_fn("len")
-_fn("ends_with")
+_fn("url_decode")
+_fn("uuidv4", restricted_phases=_TRANSFORM_PHASES)
 _fn("starts_with")
+_fn("ends_with")
 _fn("contains")
+_fn("len")
 _fn("substring")
 _fn("regex_replace", restricted_phases=_TRANSFORM_AND_REDIRECT_PHASES)
 _fn("remove_bytes")
-_fn("url_decode")
-_fn("uuidv4", restricted_phases=_TRANSFORM_PHASES)
-_fn("any")
-_fn("all")
+_fn("to_string", restricted_phases=_TRANSFORM_AND_REDIRECT_PHASES)
 _fn("lookup_json_string")
 _fn("lookup_json_integer")
-
-# Hash functions
 _fn("sha256", restricted_phases=_TRANSFORM_PHASES)
 _fn("sha512")
 _fn("hmac")
-
-# Transform-specific functions (only in transform phases)
-_fn("http.request.uri.path", restricted_phases=_TRANSFORM_PHASES)
-
-# Threat/security functions
 _fn("is_timed_hmac_valid_v0")
-
-# Hostname / wildcard
-_fn("wildcard")
-
-# IP
 _fn("ip_in_range")
-_fn("cidr")
-_fn("cidr6")
-
-# Encoding
+_fn("wildcard")
 _fn("encode_base64", restricted_phases=_TRANSFORM_PHASES)
 _fn("decode_base64")
-
-# Array / Map
+_fn("cidr")
+_fn("cidr6")
 _fn("join")
 _fn("split")
 _fn("has_key")
 _fn("has_value")
-
-# String replacement / query manipulation
-_fn("wildcard_replace", restricted_phases=_TRANSFORM_AND_REDIRECT_PHASES)
 _fn("remove_query_args", restricted_phases=_TRANSFORM_PHASES)
-
-# Network firewall
 _fn("bit_slice")
-
-# Bot management
+_fn("wildcard_replace", restricted_phases=_TRANSFORM_AND_REDIRECT_PHASES)
+_fn("http.request.uri.path", restricted_phases=_TRANSFORM_PHASES)
 _fn("cf.bot_management.score", requires_plan="enterprise")
+# --- END GENERATED FUNCTIONS --- #
 
 
 def get_function(name: str) -> FunctionDef | None:

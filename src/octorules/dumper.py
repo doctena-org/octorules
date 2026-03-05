@@ -15,6 +15,9 @@ from octorules.phases import (
     PHASE_BY_CF,
 )
 
+# Maximum YAML width — effectively disables line wrapping for expressions.
+_YAML_NO_WRAP_WIDTH = 2147483647
+
 log = logging.getLogger("octorules")
 
 
@@ -68,7 +71,7 @@ def _write_list_file(output_dir: Path, lists_dir: Path, list_name: str, entry: d
             default_flow_style=False,
             sort_keys=False,
             allow_unicode=True,
-            width=2147483647,
+            width=_YAML_NO_WRAP_WIDTH,
         )
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(text)
@@ -178,7 +181,7 @@ def dump_zone_rules(
                     default_flow_style=False,
                     sort_keys=False,
                     allow_unicode=True,
-                    width=2147483647,
+                    width=_YAML_NO_WRAP_WIDTH,
                     explicit_start=True,
                 )
                 f.write(_add_blank_lines(text))
@@ -253,4 +256,6 @@ def _clean_rule(rule: dict, default_action: str | None) -> dict:
 
 def _clean_list_item(item: dict) -> dict:
     """Remove API-only fields from a list item and apply _literalize."""
+    if not isinstance(item, dict):
+        return {}
     return {k: _literalize(v) for k, v in item.items() if k not in LIST_ITEM_API_FIELDS}

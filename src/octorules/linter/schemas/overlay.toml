@@ -1,0 +1,94 @@
+# Python-only metadata not present in wirefilter.
+# Only entries that differ from defaults are listed.
+# Defaults: requires_plan = "", is_response = false, restricted_phases = []
+
+[fields]
+"cf.api_gateway.auth_id_present" = { requires_plan = "enterprise" }
+"cf.bot_management.corporate_proxy" = { requires_plan = "enterprise" }
+"cf.bot_management.detection_ids" = { requires_plan = "enterprise" }
+"cf.bot_management.ja3_hash" = { requires_plan = "enterprise" }
+"cf.bot_management.ja4" = { requires_plan = "enterprise" }
+"cf.bot_management.js_detection.passed" = { requires_plan = "enterprise" }
+"cf.bot_management.score" = { requires_plan = "enterprise" }
+"cf.bot_management.static_resource" = { requires_plan = "enterprise" }
+"cf.bot_management.verified_bot" = { requires_plan = "enterprise" }
+"cf.llm.prompt.detected" = { requires_plan = "enterprise" }
+"cf.llm.prompt.injection_score" = { requires_plan = "enterprise" }
+"cf.llm.prompt.pii_categories" = { requires_plan = "enterprise" }
+"cf.llm.prompt.pii_detected" = { requires_plan = "enterprise" }
+"cf.llm.prompt.unsafe_topic_categories" = { requires_plan = "enterprise" }
+"cf.llm.prompt.unsafe_topic_detected" = { requires_plan = "enterprise" }
+"cf.response.1xxx_code" = { is_response = true }
+"cf.response.error_type" = { is_response = true }
+"cf.waf.auth_detected" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.has_failed" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.has_malicious_obj" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.has_obj" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.num_malicious_obj" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.num_obj" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.obj_results" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.obj_sizes" = { requires_plan = "enterprise" }
+"cf.waf.content_scan.obj_types" = { requires_plan = "enterprise" }
+"cf.waf.credential_check.username_and_password_leaked" = { requires_plan = "pro" }
+"cf.waf.credential_check.username_leaked" = { requires_plan = "enterprise" }
+"cf.waf.credential_check.username_password_similar" = { requires_plan = "enterprise" }
+"cf.waf.score" = { requires_plan = "enterprise" }
+"cf.waf.score.class" = { requires_plan = "business" }
+"cf.waf.score.rce" = { requires_plan = "enterprise" }
+"cf.waf.score.sqli" = { requires_plan = "enterprise" }
+"cf.waf.score.xss" = { requires_plan = "enterprise" }
+"http.request.body.form" = { requires_plan = "enterprise" }
+"http.request.body.form.names" = { requires_plan = "enterprise" }
+"http.request.body.form.values" = { requires_plan = "enterprise" }
+"http.request.body.multipart" = { requires_plan = "enterprise" }
+"http.request.body.multipart.content_dispositions" = { requires_plan = "enterprise" }
+"http.request.body.multipart.content_transfer_encodings" = { requires_plan = "enterprise" }
+"http.request.body.multipart.content_types" = { requires_plan = "enterprise" }
+"http.request.body.multipart.filenames" = { requires_plan = "enterprise" }
+"http.request.body.multipart.names" = { requires_plan = "enterprise" }
+"http.request.body.multipart.values" = { requires_plan = "enterprise" }
+"http.request.body.raw" = { requires_plan = "enterprise" }
+"http.request.body.size" = { requires_plan = "enterprise" }
+"http.request.body.truncated" = { requires_plan = "enterprise" }
+"http.request.cookies" = { requires_plan = "pro" }
+"http.request.jwt.claims.aud" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.aud.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.aud.values" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.iat.sec" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.iat.sec.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.iat.sec.values" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.iss" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.iss.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.iss.values" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.jti" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.jti.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.jti.values" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.nbf.sec" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.nbf.sec.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.nbf.sec.values" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.sub" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.sub.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.sub.values" = { requires_plan = "enterprise" }
+"http.response.code" = { is_response = true }
+"http.response.content_type.media_type" = { is_response = true }
+"http.response.headers" = { is_response = true }
+"http.response.headers.names" = { is_response = true }
+"http.response.headers.truncated" = { is_response = true }
+"http.response.headers.values" = { is_response = true }
+"ip.src.is_in_european_union" = { requires_plan = "business" }
+"ip.src.subdivision_1_iso_code" = { requires_plan = "business" }
+"ip.src.subdivision_2_iso_code" = { requires_plan = "business" }
+"raw.http.response.headers" = { is_response = true }
+"raw.http.response.headers.names" = { is_response = true }
+"raw.http.response.headers.values" = { is_response = true }
+
+[functions]
+"to_string" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "redirect_rules"] }
+"regex_replace" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "redirect_rules"] }
+"uuidv4" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"sha256" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"http.request.uri.path" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"encode_base64" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"wildcard_replace" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "redirect_rules"] }
+"remove_query_args" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"cf.bot_management.score" = { requires_plan = "enterprise" }

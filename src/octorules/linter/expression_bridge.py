@@ -37,7 +37,21 @@ class ExpressionInfo:
     ip_literals: list[str] = field(default_factory=list)
     int_literals: list[int] = field(default_factory=list)
     has_regex: bool = False
-    parse_error: str = ""  # non-empty if parsing failed
+    parse_error: str = ""
+    """Empty on success.  On wirefilter parse failure, contains the error
+    message (e.g. ``"unknown field `bogus`"``).  On FFI crash, contains
+    ``"ExceptionType: message"`` and the linter fields are regex-extracted."""
+    parse_error_type: str = ""
+    """Classifies the parse result source:
+
+    - ``""`` — success (wirefilter or regex, no error).
+    - ``"wirefilter_parse"`` — wirefilter rejected the expression (semantic
+      error); fields are regex-extracted as fallback.
+    - ``"wirefilter_crash"`` — FFI call raised an exception; fields are
+      regex-extracted as fallback.
+    - ``"regex_fallback"`` — wirefilter not installed; fields are
+      regex-extracted (no error, best-effort mode).
+    """
 
 
 # --- Regex patterns for best-effort expression analysis ---
@@ -110,7 +124,9 @@ def parse_expression(expr: str, phase: str | None = None) -> ExpressionInfo:
     """
     if WIREFILTER_AVAILABLE:
         return _parse_with_wirefilter(expr, phase=phase)
-    return _parse_with_regex(expr)
+    info = _parse_with_regex(expr)
+    info.parse_error_type = "regex_fallback"
+    return info
 
 
 def _parse_with_wirefilter(expr: str, *, phase: str | None = None) -> ExpressionInfo:
@@ -138,8 +154,10 @@ def _parse_with_wirefilter(expr: str, *, phase: str | None = None) -> Expression
                 # Wirefilter rejected the expression — fall back to regex
                 # so the linter still gets fields/operators to analyze.
                 # See docstring above for rationale.
+                log.warning("Wirefilter parse error, falling back to regex: %s", result["error"])
                 info = _parse_with_regex(expr)
                 info.parse_error = result["error"]
+                info.parse_error_type = "wirefilter_parse"
                 return info
             info.fields_used = result.get("fields", [])
             info.functions_used = result.get("functions", [])
@@ -151,8 +169,10 @@ def _parse_with_wirefilter(expr: str, *, phase: str | None = None) -> Expression
             info.has_regex = bool(info.regex_literals)
     except Exception as e:
         # FFI call crashed — fall back to regex extraction.
+        log.warning("Wirefilter FFI crashed, falling back to regex: %s", e, exc_info=True)
         info = _parse_with_regex(expr)
-        info.parse_error = str(e)
+        info.parse_error = f"{type(e).__name__}: {e}"
+        info.parse_error_type = "wirefilter_crash"
     return info
 
 

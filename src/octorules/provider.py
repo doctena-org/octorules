@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -129,6 +130,7 @@ class CloudflareProvider:
                 )
             self._client = cloudflare.Cloudflare(**kwargs)
         self._max_workers = max_workers
+        self._lock = threading.Lock()
         self._account_id: str | None = None
         self._account_name: str | None = None
         self._zone_plans: dict[str, str] = {}
@@ -157,9 +159,8 @@ class CloudflareProvider:
         Raises ConfigError if zero or more than one zone matches.
         Also stashes account info from the first successful resolution.
 
-        Note: called concurrently from ThreadPoolExecutor. Writes to
-        _account_id/_account_name/_zone_plans are safe under CPython's GIL
-        but not guaranteed by the language spec.
+        Called concurrently from ThreadPoolExecutor. Shared state writes
+        are protected by ``_lock``.
         """
         result = self._client.zones.list(name=zone_name)
         matches = [z for z in result if z.name == zone_name]
@@ -168,11 +169,12 @@ class CloudflareProvider:
         if len(matches) > 1:
             raise ConfigError(f"Multiple zones found for {zone_name!r}")
         zone = matches[0]
-        if getattr(zone, "account", None) and not self._account_id:
-            self._account_id = zone.account.id
-            self._account_name = zone.account.name
-        if getattr(zone, "plan", None) and getattr(zone.plan, "name", None):
-            self._zone_plans[zone_name] = _normalize_plan_name(zone.plan.name)
+        with self._lock:
+            if getattr(zone, "account", None) and not self._account_id:
+                self._account_id = zone.account.id
+                self._account_name = zone.account.name
+            if getattr(zone, "plan", None) and getattr(zone.plan, "name", None):
+                self._zone_plans[zone_name] = _normalize_plan_name(zone.plan.name)
         return zone.id
 
     def get_phase_rules(self, scope: Scope, cf_phase: str) -> list[dict]:

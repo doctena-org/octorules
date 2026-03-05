@@ -19,7 +19,9 @@ a Rust-based FFI bridge to Cloudflare's actual wirefilter engine. This enables
 authoritative expression parsing and unlocks the full linter rule set. Without
 it, a regex-based fallback parser is used (fewer lint rules, no type checking).
 
-If prebuilt wheels are not available for your platform, you can install without it:
+Prebuilt wheels are available for Linux (x86_64, aarch64), macOS (x86_64, ARM64),
+and Windows (x86_64). If wheels are not available for your platform, you can
+install without it:
 
 ```bash
 pip install octorules    # regex-based expression parser only
@@ -340,6 +342,8 @@ See [docs/lint-rules/README.md](docs/lint-rules/README.md#suppressing-rules) for
 ### Expression parsing
 
 When the `wirefilter` extra is installed (see [Installation](#installation)), expressions are parsed by Cloudflare's actual wirefilter engine via [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter), providing authoritative phase-aware type checking and context-dependent schemes for transform phases. Without it, a regex-based fallback parser extracts fields, functions, operators, and literals but cannot perform type checking.
+
+The linter logs which parser is active at startup (`Expression parser: wirefilter` or `Expression parser: regex fallback`). If wirefilter rejects a specific expression, it falls back to regex for that expression with a warning.
 
 ## CLI reference
 

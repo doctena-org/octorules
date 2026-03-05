@@ -8,6 +8,7 @@ import json
 from octorules.formatter import (
     GREEN,
     RESET,
+    _change_to_dict,
     _color,
     _rule_detail_pairs,
     _supports_color,
@@ -852,3 +853,32 @@ class TestRuleDetailPairs:
         keys = [k for k, _ in pairs]
         # priority keys first, then beta, zone_name alphabetically
         assert keys == ["action", "expression", "beta", "zone_name"]
+
+
+class TestChangeToDictHelper:
+    def test_with_current_and_desired(self):
+        change = RuleChange(
+            ChangeType.MODIFY,
+            "r1",
+            REDIRECT_PHASE,
+            current={"expression": "old", "action": "redirect"},
+            desired={"expression": "new", "action": "redirect"},
+        )
+        d = _change_to_dict(change)
+        assert d["type"] == "modify"
+        assert d["ref"] == "r1"
+        assert "current" in d
+        assert "desired" in d
+
+    def test_add_only_desired(self):
+        change = RuleChange(
+            ChangeType.ADD,
+            "r1",
+            REDIRECT_PHASE,
+            desired={"expression": "true", "action": "redirect"},
+        )
+        d = _change_to_dict(change)
+        assert d["type"] == "add"
+        assert d["ref"] == "r1"
+        assert "desired" in d
+        assert "current" not in d

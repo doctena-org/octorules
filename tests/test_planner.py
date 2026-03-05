@@ -14,12 +14,14 @@ from octorules.planner import (
     RuleChange,
     RuleValidationError,
     ZonePlan,
+    _diff_rules,
     check_safety,
     compute_checksum,
     diff_phase,
     normalize_rule,
     plan_zone,
     prepare_desired_rules,
+    validate_custom_ruleset,
     validate_rules,
     warn_unknown_phase_keys,
 )
@@ -1366,3 +1368,123 @@ class TestNormalizeRuleCaching:
         assert change.change_type == ChangeType.ADD
         # Not pre-populated -- will be computed lazily if accessed
         assert "normalized_desired" not in change.__dict__
+
+
+class TestDiffRulesHelper:
+    """Tests for the extracted _diff_rules() helper."""
+
+    def test_basic_add_remove_modify(self):
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "new_expr", "action": "redirect", "enabled": True},
+            {"ref": "r3", "expression": "added", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r1", "expression": "old_expr", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "removed", "action": "redirect", "enabled": True},
+        ]
+        changes = _diff_rules(phase, desired, current)
+        types = {c.change_type for c in changes}
+        assert ChangeType.ADD in types
+        assert ChangeType.REMOVE in types
+        assert ChangeType.MODIFY in types
+        # Verify refs
+        refs_by_type = {
+            c.change_type: c.ref for c in changes if c.change_type != ChangeType.REORDER
+        }
+        assert refs_by_type[ChangeType.ADD] == "r3"
+        assert refs_by_type[ChangeType.REMOVE] == "r2"
+        assert refs_by_type[ChangeType.MODIFY] == "r1"
+
+    def test_allow_unmanaged_skips_remove(self):
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "unmanaged", "action": "redirect", "enabled": True},
+        ]
+        changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
+        assert not any(c.change_type == ChangeType.REMOVE for c in changes)
+
+    def test_reorder_detection(self):
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        changes = _diff_rules(phase, desired, current)
+        assert any(c.change_type == ChangeType.REORDER for c in changes)
+
+
+class TestValidateCustomRuleset:
+    """Tests for validate_custom_ruleset()."""
+
+    def _valid_entry(self, **overrides):
+        entry = {
+            "id": "rs-1",
+            "name": "My Ruleset",
+            "phase": "http_request_firewall_custom",
+            "rules": [
+                {"ref": "r1", "expression": "true", "action": "block"},
+            ],
+        }
+        entry.update(overrides)
+        return entry
+
+    def test_valid_entry_passes(self):
+        validate_custom_ruleset(self._valid_entry(), 0)
+
+    def test_missing_id(self):
+        entry = self._valid_entry()
+        del entry["id"]
+        with pytest.raises(RuleValidationError, match="missing required 'id'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_missing_name(self):
+        entry = self._valid_entry()
+        del entry["name"]
+        with pytest.raises(RuleValidationError, match="missing required 'name'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_missing_phase(self):
+        entry = self._valid_entry()
+        del entry["phase"]
+        with pytest.raises(RuleValidationError, match="missing required 'phase'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_invalid_phase(self):
+        entry = self._valid_entry(phase="waf_custom")
+        with pytest.raises(RuleValidationError, match="invalid 'phase' 'waf_custom'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_friendly_name_rejected_as_phase(self):
+        """Phase field must be a CF phase ID, not the friendly name."""
+        entry = self._valid_entry(phase="waf_custom_rules")
+        with pytest.raises(RuleValidationError, match="invalid 'phase'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_missing_rule_ref(self):
+        entry = self._valid_entry(rules=[{"expression": "true", "action": "block"}])
+        with pytest.raises(RuleValidationError, match="missing required 'ref'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_missing_rule_action(self):
+        entry = self._valid_entry(rules=[{"ref": "r1", "expression": "true"}])
+        with pytest.raises(RuleValidationError, match="must specify an 'action'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_duplicate_ref(self):
+        entry = self._valid_entry(
+            rules=[
+                {"ref": "r1", "expression": "a", "action": "block"},
+                {"ref": "r1", "expression": "b", "action": "block"},
+            ]
+        )
+        with pytest.raises(RuleValidationError, match="Duplicate ref 'r1'"):
+            validate_custom_ruleset(entry, 0)
