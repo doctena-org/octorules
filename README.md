@@ -12,6 +12,9 @@ In the vein of [infrastructure as code](https://en.wikipedia.org/wiki/Infrastruc
 
 ```bash
 pip install octorules
+
+# Optional: Rust-based wirefilter expression parser for authoritative linting
+pip install octorules[wirefilter]
 ```
 
 ### Configuration
@@ -91,39 +94,30 @@ octorules validate --config config.yaml
 
 # Export existing rules to YAML
 octorules dump --config config.yaml
+
+# Lint rules files offline (105 rules, text/JSON/SARIF output)
+octorules lint --config config.yaml
 ```
 
 ## Supported phases
 
-| YAML Key | Cloudflare Phase | Default Action | Zone | Account |
-|---|---|---|---|---|
-| `redirect_rules` | `http_request_dynamic_redirect` | `redirect` | Yes | — |
-| `url_rewrite_rules` | `http_request_transform` | `rewrite` | Yes | — |
-| `request_header_rules` | `http_request_late_transform` | `rewrite` | Yes | — |
-| `response_header_rules` | `http_response_headers_transform` | `rewrite` | Yes | — |
-| `config_rules` | `http_config_settings` | `set_config` | Yes | — |
-| `origin_rules` | `http_request_origin` | `route` | Yes | — |
-| `cache_rules` | `http_request_cache_settings` | `set_cache_settings` | Yes | — |
-| `compression_rules` | `http_response_compression` | `compress_response` | Yes | — |
-| `custom_error_rules` | `http_custom_errors` | `serve_error` | Yes | Yes |
-| `waf_custom_rules` | `http_request_firewall_custom` | *(must specify)* | Yes | Yes |
-| `waf_managed_rules` | `http_request_firewall_managed` | *(must specify)* | Yes | Yes |
-| `rate_limiting_rules` | `http_ratelimit` | *(must specify)* | Yes | Yes |
-| `bot_fight_rules` | `http_request_sbfm` | *(must specify)* | Yes | — |
-| `sensitive_data_detection` | `http_response_firewall_managed` | *(must specify)* | Yes | — |
-| `http_ddos_rules` | `ddos_l7` | *(must specify)* | Yes | Yes |
-| `bulk_redirect_rules` | `http_request_redirect` | `redirect` | — | Yes |
-| `log_custom_fields` | `http_log_custom_fields` | `log_custom_field` | Yes | — |
-| `network_ddos_rules` | `ddos_l4` | *(must specify)* | — | Yes |
-| `network_firewall_rules` | `magic_transit` | *(must specify)* | — | Yes |
-| `network_firewall_managed` | `magic_transit_managed` | *(must specify)* | — | Yes |
-| `network_firewall_ratelimit` | `magic_transit_ratelimit` | *(must specify)* | — | Yes |
-| `network_firewall_ids` | `magic_transit_ids_managed` | *(must specify)* | — | Yes |
-| `url_normalization` | `http_request_sanitize` | *(must specify)* | Yes | — |
+octorules supports **23 Cloudflare phases** — 18 HTTP request/response phases and 5 network-level (Magic Transit) phases. Phases execute in a fixed order: URL normalization and redirects first, then transforms, then WAF/rate limiting, then origin fetch, then response-side phases.
 
-Phases with a default action don't need `action` in the YAML — it's injected automatically. For phases without a default action, you must specify `action` explicitly (e.g., `block`, `challenge`, `log`).
+```
+Request  ─▸ url_normalization ─▸ redirect_rules ─▸ url_rewrite_rules ─▸ request_header_rules
+         ─▸ origin_rules ─▸ config_rules ─▸ cache_rules
+         ─▸ waf_custom_rules ─▸ waf_managed_rules ─▸ rate_limiting_rules
+         ─▸ bot_fight_rules ─▸ http_ddos_rules
+         ─▸▸ Origin fetch ◂◂─
+         ─▸ custom_error_rules ─▸ response_header_rules ─▸ compression_rules
+         ─▸ sensitive_data_detection ─▸ log_custom_fields ─▸ Response
+```
 
-Phases marked with both Zone and Account support work at either scope. Account-only phases are skipped for zone scopes, and zone-only phases are skipped for account scopes, eliminating wasted API calls.
+Phases with a default action (e.g., `redirect_rules` → `redirect`) don't need `action` in the YAML — it's injected automatically. For phases without a default (e.g., `waf_custom_rules`), you must specify `action` explicitly.
+
+Phases marked as both Zone and Account work at either scope. Account-only phases are skipped for zone scopes and vice versa, eliminating wasted API calls.
+
+For the full phase reference — execution order diagram, valid actions per phase, field/function availability, and key behaviors — see [docs/lint-rules/README.md § Cloudflare Phases Reference](docs/lint-rules/README.md#cloudflare-phases-reference).
 
 > **Note:** `waf_managed_exceptions` was renamed to `waf_managed_rules`. The old name still works as an alias but is deprecated — update your YAML files to use the new name.
 
@@ -266,6 +260,85 @@ Each policy entry requires:
 - During sync, policies are applied **after** lists and **before** custom rulesets and phases.
 - Use `octorules dump` to export existing Page Shield policies to YAML.
 
+## Linting
+
+`octorules lint` runs offline static analysis on your rules files — no API calls, no credentials needed. It catches structural errors, invalid actions, expression mistakes, plan-tier violations, and cross-rule issues before you push to Cloudflare.
+
+```bash
+# Lint all zones (text output)
+octorules lint
+
+# JSON output, only errors and warnings
+octorules lint --format json --severity warning
+
+# SARIF for GitHub Code Scanning
+octorules lint --format sarif --output results.sarif
+
+# Check against Free plan limits
+octorules lint --plan free
+
+# CI mode: exit 1 on errors, 2 on warnings
+octorules lint --exit-code
+```
+
+### Pipeline
+
+The linter runs 4 stages in order:
+
+| Stage | What it checks | Rule categories |
+|-------|---------------|-----------------|
+| 1. YAML structure | Required fields, types, duplicates, unknown keys | M (15 rules) |
+| 2. Per-rule checks | Actions, expressions, phase restrictions | A, C, D, I, J, K, L, N, B, E, F, G, O (79 rules) |
+| 2b. Page Shield policies | Policy structure, expressions, catch-all detection | S (4 rules) |
+| 3. Plan-tier limits | Regex availability, rule count limits | H (3 rules) |
+| 4. Cross-rule analysis | Duplicate expressions, unreachable rules, list references | P (4 rules) |
+
+### Rule categories
+
+| Prefix | Category | Rules |
+|--------|----------|-------|
+| A | Parse / syntax errors | 1 |
+| M | Structure | 15 |
+| C | Action validation | 14 |
+| D | Rate limiting | 6 |
+| I | Cache rules | 4 |
+| J | Config rules | 4 |
+| K | Redirect rules | 2 |
+| L | Transform rules | 5 |
+| N | Origin rules | 1 |
+| B | Phase restrictions | 3 |
+| E | Function constraints | 6 |
+| F | Type system | 2 |
+| G | Value constraints | 25 |
+| H | Plan/entitlement | 3 |
+| S | Page Shield structure | 4 |
+| O | Best practice / style | 6 |
+| P | Cross-rule | 4 |
+
+**105 rules total.** See [docs/lint-rules/README.md](docs/lint-rules/README.md) for the full reference (index with quick-reference table + per-stage detail files).
+
+### Suppressing lint rules
+
+Add a YAML comment to suppress specific rules (like shellcheck):
+
+```yaml
+  # octorules:disable=M013
+  - ref: add-security-headers
+    expression: (true)
+```
+
+See [docs/lint-rules/README.md](docs/lint-rules/README.md#suppressing-rules) for file-level suppression and multi-rule syntax.
+
+### Expression parsing
+
+Expressions are analyzed using a regex-based parser that extracts fields, functions, operators, and literals. For authoritative phase-aware parsing using Cloudflare's actual wirefilter engine (with context-dependent schemes for transform phases), install the optional FFI package:
+
+```bash
+pip install octorules[wirefilter]
+```
+
+See [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter) for details on the Rust FFI bridge.
+
 ## CLI reference
 
 ### `octorules plan`
@@ -316,6 +389,23 @@ Exports existing Cloudflare rules to YAML files. Useful for bootstrapping or imp
 octorules dump [--zone example.com] [--output-dir ./rules]
 ```
 
+### `octorules lint`
+
+Lint rules files offline for errors, warnings, and style issues. Supports text, JSON, and SARIF output.
+
+```bash
+octorules lint [--format text|json|sarif] [--severity error|warning|info] [--plan free|pro|business|enterprise] [--rule RULE_ID] [--output PATH] [--exit-code]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--format` | Output format: `text` (default), `json`, `sarif` |
+| `--severity` | Minimum severity to report (default: `info`) |
+| `--plan` | Cloudflare plan tier for entitlement checks (default: auto-detect from API) |
+| `--rule` | Only check specific rule ID(s); can be repeated |
+| `--output` | Write results to a file instead of stdout |
+| `--exit-code` | Exit with 1 on errors, 2 on warnings (for CI) |
+
 ### Common flags
 
 | Flag | Description |
@@ -331,8 +421,8 @@ octorules dump [--zone example.com] [--output-dir ./rules]
 | Code | Meaning |
 |------|---------|
 | 0 | Success / no changes |
-| 1 | Error |
-| 2 | Changes detected (`plan`) |
+| 1 | Error (or lint errors found with `--exit-code`) |
+| 2 | Changes detected (`plan`) / lint warnings found (`lint --exit-code`) |
 
 ## Config reference
 
@@ -399,6 +489,7 @@ Safety features:
 ## CI/CD integration
 
 For GitHub Actions, see [octorules-sync](https://github.com/doctena-org/octorules-sync) — a ready-made action that runs plan on PRs and sync on merge to main.
+
 
 ## Development
 

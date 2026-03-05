@@ -11,6 +11,7 @@ from octorules.provider import (
     CloudflareProvider,
     PhaseRulesResult,
     Scope,
+    _normalize_plan_name,
     _rule_to_dict,
 )
 
@@ -1019,6 +1020,67 @@ class TestResolveZoneId:
         provider.resolve_zone_id("example.com")
         assert provider.account_id is None
         assert provider.account_name is None
+
+    def test_stashes_zone_plan(self, mock_cf_client):
+        """resolve_zone_id should stash the normalized plan tier."""
+        zone = MagicMock()
+        zone.name = "example.com"
+        zone.id = "aabbccdd" * 4
+        zone.plan.name = "Business Website"
+        mock_cf_client.zones.list.return_value = [zone]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("example.com")
+        assert provider.zone_plans["example.com"] == "business"
+
+    def test_stashes_zone_plan_free(self, mock_cf_client):
+        zone = MagicMock()
+        zone.name = "example.com"
+        zone.id = "aabbccdd" * 4
+        zone.plan.name = "Free Website"
+        mock_cf_client.zones.list.return_value = [zone]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("example.com")
+        assert provider.zone_plans["example.com"] == "free"
+
+    def test_stashes_zone_plan_enterprise(self, mock_cf_client):
+        zone = MagicMock()
+        zone.name = "example.com"
+        zone.id = "aabbccdd" * 4
+        zone.plan.name = "Enterprise"
+        mock_cf_client.zones.list.return_value = [zone]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("example.com")
+        assert provider.zone_plans["example.com"] == "enterprise"
+
+    def test_zone_plans_empty_initially(self, mock_cf_client):
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        assert provider.zone_plans == {}
+
+    def test_no_plan_attribute_does_not_crash(self, mock_cf_client):
+        """Zone without plan attribute should not crash or populate zone_plans."""
+        zone = MagicMock(spec=["name", "id"])
+        zone.name = "example.com"
+        zone.id = "aabbccdd" * 4
+        mock_cf_client.zones.list.return_value = [zone]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        provider.resolve_zone_id("example.com")
+        assert "example.com" not in provider.zone_plans
+
+
+class TestNormalizePlanName:
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("Free Website", "free"),
+            ("Pro Website", "pro"),
+            ("Business Website", "business"),
+            ("Enterprise Website", "enterprise"),
+            ("enterprise", "enterprise"),
+            ("Free", "free"),
+        ],
+    )
+    def test_normalize(self, raw, expected):
+        assert _normalize_plan_name(raw) == expected
 
 
 class TestScopeApiKwargsCache:

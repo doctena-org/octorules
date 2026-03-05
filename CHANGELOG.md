@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] - 2026-03-05
+
+### Added
+- **Linter** (`octorules lint`): offline static analysis with 105 rules across
+  17 categories (A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, S). 4-stage
+  pipeline, text/JSON/SARIF output, `--plan` tier awareness, `--exit-code` for
+  CI. See [docs/lint-rules/](docs/lint-rules/README.md) for full rule reference.
+- **Inline suppression** (`# octorules:disable=RULE`): shellcheck-style
+  comments to suppress specific lint rules per-rule or per-file.
+- **Page Shield policy linting** (Category S): S001–S004 for structure,
+  actions, types, and duplicate detection.
+- **Wirefilter FFI** ([octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter)):
+  optional Rust bindings for Cloudflare's wirefilter parser with phase-aware
+  schemes. Falls back to regex extraction when unavailable.
+- **Scheme generator** (`scripts/generate_fields.py`): auto-generates field
+  registrations from the Cloudflare docs YAML (170 fields).
+- Lint engine now validates `custom_rulesets` rules (expressions and actions)
+  using the `waf_custom_rules` phase schema.
+
+### Fixed
+- Path traversal check in `_write_output_file` now inspects the raw path
+  before `resolve()`, preventing `..` from being silently normalized away.
+- Path traversal check in `config.py` similarly checks raw path before resolve.
+- Deduplicated `_is_suppressed()` in lint engine — now reuses
+  `suppressions.is_suppressed()` instead of maintaining an identical copy.
+- Dead action validation: `network_ddos_rules` and `network_firewall_rules`
+  action schemas now use friendly phase names (was using CF identifiers
+  `ddos_l4`, `ddos_l7`, `magic_transit` which never matched).
+- Token field in config dataclass now uses `repr=False` to prevent accidental
+  leakage in logs/tracebacks.
+
+### Changed
+- Centralized `KNOWN_NON_PHASE_KEYS` and `RENAMED_PHASES` constants in
+  `phases.py` — removed duplicate definitions from planner and ensured all
+  linter modules import from the canonical source.
+- Centralized `ALWAYS_TRUE_EXPRESSIONS` and `ALWAYS_FALSE_EXPRESSIONS` in
+  `linter/engine.py`.
+- Moved `_VALID_HEADER_OPERATIONS` to module level in `action_validator.py`
+  (was re-created on every call).
+
 ## [0.10.1] - 2026-02-19
 
 ### Changed

@@ -12,10 +12,12 @@ from typing import TYPE_CHECKING
 
 from octorules.phases import (
     CF_API_FIELDS,
+    KNOWN_NON_PHASE_KEYS,
     LIST_ITEM_API_FIELDS,
     PAGE_SHIELD_POLICY_API_FIELDS,
     PHASE_BY_CF,
     PHASE_BY_NAME,
+    RENAMED_PHASES,
     Phase,
     get_phase,
     unknown_phase_message,
@@ -217,18 +219,11 @@ def validate_rules(rules: list[dict], phase: Phase) -> None:
         seen_refs.add(ref)
 
 
-_RENAMED_PHASES: dict[str, str] = {"waf_managed_exceptions": "waf_managed_rules"}
-
-_KNOWN_NON_PHASE_KEYS: frozenset[str] = frozenset(
-    {"custom_rulesets", "lists", "page_shield_policies"}
-)
-
-
 def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
     """Warn about unknown top-level keys in a zone rules file."""
     # Warn about renamed phases (they still work via aliases but are deprecated)
-    for key in sorted(set(rules_data.keys()) & _RENAMED_PHASES.keys()):
-        new_name = _RENAMED_PHASES[key]
+    for key in sorted(set(rules_data.keys()) & RENAMED_PHASES.keys()):
+        new_name = RENAMED_PHASES[key]
         log.warning(
             "Phase %r has been renamed to %r in rules for %s. "
             "Please update your YAML file. The old name still works but is deprecated.",
@@ -237,7 +232,7 @@ def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
             zone_name,
         )
     # Warn about truly unknown phases
-    unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys() - _KNOWN_NON_PHASE_KEYS
+    unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys() - KNOWN_NON_PHASE_KEYS
     for key in sorted(unknown):
         log.warning("%s in rules for %s", unknown_phase_message(key), zone_name)
 
@@ -337,7 +332,10 @@ def diff_phase(
             change.__dict__["normalized_desired"] = norm_desired
             plan.changes.append(change)
 
-    # Reorder detection (same set of refs, but different order)
+    # Reorder detection (same set of refs, but different order).
+    # Note: when allow_unmanaged=True, current may contain extra refs not in
+    # desired, so the set comparison will be False and reorder is not detected
+    # for the managed subset. This is a known limitation.
     desired_order = _ref_order(desired)
     current_order = _ref_order(current_rules)
     if set(desired_order) == set(current_order) and desired_order != current_order:
@@ -454,6 +452,8 @@ def _make_synthetic_phase(ruleset_name: str, cf_phase: str) -> Phase:
     )
 
 
+# TODO: diff_custom_ruleset and diff_phase share ~80 lines of nearly identical
+# add/remove/modify/reorder logic. Extract a shared _diff_rules() helper.
 def diff_custom_ruleset(
     ruleset_id: str,
     ruleset_name: str,

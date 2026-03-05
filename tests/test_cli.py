@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -2129,19 +2128,13 @@ class TestWriteOutputFile:
         assert result is False
         assert "unsafe output path" in caplog.text.lower()
 
-    def test_dotdot_normalized_by_resolve(self, tmp_path):
-        """Path.resolve() normalizes '..' away so it won't trigger the guard.
-
-        This documents the actual behavior: the guard checks the *resolved*
-        path, and resolve() removes '..' components.
-        """
-        # ../escaped.txt resolves to a sibling of tmp_path — the guard
-        # does not block it because '..' is gone after resolve().
+    def test_dotdot_blocked_before_resolve(self, tmp_path, caplog):
+        """Paths with '..' are blocked before resolve() can normalize them."""
         unsafe_path = str(tmp_path / ".." / "escaped.txt")
-        result = _write_output_file(unsafe_path, lambda f: f.write("data"))
-        # The write succeeds because resolve() removed the '..'
-        assert result is True
-        Path(tmp_path / ".." / "escaped.txt").resolve().unlink()
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(unsafe_path, lambda f: f.write("data"))
+        assert result is False
+        assert "unsafe output path" in caplog.text.lower()
 
     def test_accepts_safe_path(self, tmp_path):
         """Normal paths are accepted and file is written."""

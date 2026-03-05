@@ -34,6 +34,21 @@ _ACCOUNT_PHASE_SET: frozenset[str] = frozenset(ACCOUNT_CF_PHASES)
 
 log = logging.getLogger("octorules")
 
+_KNOWN_PLANS = {"free", "pro", "business", "enterprise"}
+
+
+def _normalize_plan_name(raw: str) -> str:
+    """Normalize a Cloudflare API plan name to an octorules tier.
+
+    The API returns names like "Free Website", "Pro Website",
+    "Business Website", "Enterprise Website" or just "Free", etc.
+    """
+    lower = raw.lower()
+    for plan in _KNOWN_PLANS:
+        if plan in lower:
+            return plan
+    return lower
+
 
 @dataclass
 class Scope:
@@ -116,6 +131,7 @@ class CloudflareProvider:
         self._max_workers = max_workers
         self._account_id: str | None = None
         self._account_name: str | None = None
+        self._zone_plans: dict[str, str] = {}
 
     @property
     def max_workers(self) -> int:
@@ -130,11 +146,20 @@ class CloudflareProvider:
     def account_name(self) -> str | None:
         return self._account_name
 
+    @property
+    def zone_plans(self) -> dict[str, str]:
+        """Zone name → normalized plan tier, populated during resolve_zone_id."""
+        return self._zone_plans
+
     def resolve_zone_id(self, zone_name: str) -> str:
         """Resolve a zone name to its Cloudflare zone ID.
 
         Raises ConfigError if zero or more than one zone matches.
         Also stashes account info from the first successful resolution.
+
+        Note: called concurrently from ThreadPoolExecutor. Writes to
+        _account_id/_account_name/_zone_plans are safe under CPython's GIL
+        but not guaranteed by the language spec.
         """
         result = self._client.zones.list(name=zone_name)
         matches = [z for z in result if z.name == zone_name]
@@ -146,6 +171,8 @@ class CloudflareProvider:
         if getattr(zone, "account", None) and not self._account_id:
             self._account_id = zone.account.id
             self._account_name = zone.account.name
+        if getattr(zone, "plan", None) and getattr(zone.plan, "name", None):
+            self._zone_plans[zone_name] = _normalize_plan_name(zone.plan.name)
         return zone.id
 
     def get_phase_rules(self, scope: Scope, cf_phase: str) -> list[dict]:
