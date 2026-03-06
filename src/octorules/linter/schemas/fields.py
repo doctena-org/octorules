@@ -171,6 +171,9 @@ _f("http.request.headers.values", FieldType.ARRAY_STRING)
 _f("http.request.jwt.claims.aud", FieldType.MAP_ARRAY_STRING, requires_plan="enterprise")
 _f("http.request.jwt.claims.aud.names", FieldType.ARRAY_STRING, requires_plan="enterprise")
 _f("http.request.jwt.claims.aud.values", FieldType.ARRAY_STRING, requires_plan="enterprise")
+_f("http.request.jwt.claims.exp.sec", FieldType.MAP_ARRAY_INT, requires_plan="enterprise")
+_f("http.request.jwt.claims.exp.sec.names", FieldType.ARRAY_STRING, requires_plan="enterprise")
+_f("http.request.jwt.claims.exp.sec.values", FieldType.ARRAY_INT, requires_plan="enterprise")
 _f("http.request.jwt.claims.iat.sec", FieldType.MAP_ARRAY_INT, requires_plan="enterprise")
 _f("http.request.jwt.claims.iat.sec.names", FieldType.ARRAY_STRING, requires_plan="enterprise")
 _f("http.request.jwt.claims.iat.sec.values", FieldType.ARRAY_INT, requires_plan="enterprise")
@@ -233,11 +236,34 @@ _f("raw.http.response.headers.values", FieldType.ARRAY_STRING, is_response=True)
 _f("ssl", FieldType.BOOL)
 # --- END GENERATED FIELDS --- #
 
-# Scheme-specific: http.request.uri.path is a field in default scheme,
-# a function in transform phases. Not in generated block.
+# --- Fields NOT in the generated block above --- #
+# These are intentionally kept outside the generated block because they are not
+# returned by wirefilter's get_schema_info(). DO NOT remove them — each serves
+# a specific purpose documented below.
+
+# http.request.uri.path — present in the wirefilter scheme as a field, but
+# excluded from the generated block because it is scheme-specific: in transform
+# phases Cloudflare treats it as a callable function. The wirefilter side always
+# registers it as a field; transform-phase handling is on the Python side.
 _f("http.request.uri.path", FieldType.STRING)
 
-# Deprecated fields — still registered so the linter can flag them with G010.
+# http.response.headers.truncated — real Cloudflare field indicating whether
+# response headers were truncated. Present in the wirefilter scheme but not
+# listed on the CF docs reference page. Removing it would cause false-positive
+# F002 "unknown field" warnings on valid expressions.
+# (Already registered above in the generated block — included in wirefilter.)
+
+# JWT exp claim fields — standard JWT "expiration time" claim. Added based on
+# Cloudflare JWT validation documentation. Same pattern as iat/nbf (Map<Array>
+# with .names/.values sub-fields). Not yet on the main CF fields reference page
+# but accepted by the API and registered in the wirefilter scheme.
+# (Already registered above in the generated block.)
+
+# Deprecated ip.geoip.* fields — Cloudflare replaced these with ip.src.*
+# equivalents. We keep them registered so the linter can detect usage and emit
+# G010 "deprecated field — use replacement" warnings. If removed, users would
+# get F002 "unknown field" instead of the more helpful G010 with a suggested
+# replacement.
 _f("ip.geoip.asnum", FieldType.INT)
 _f("ip.geoip.continent", FieldType.STRING)
 _f("ip.geoip.country", FieldType.STRING)
@@ -245,7 +271,10 @@ _f("ip.geoip.subdivision_1_iso_code", FieldType.STRING)
 _f("ip.geoip.subdivision_2_iso_code", FieldType.STRING)
 _f("ip.geoip.is_in_european_union", FieldType.BOOL)
 
-# Account-level zone fields (not in CF docs YAML)
+# Account-level zone fields — used in account-level rulesets (e.g. WAF custom
+# rules deployed at account scope can match on cf.zone.name). Not in the
+# per-zone CF docs reference page because they only apply to account-level
+# expressions. Removing them would cause false-positive F002 warnings.
 _f("cf.zone.name", FieldType.STRING)
 _f("cf.zone.plan", FieldType.STRING)
 

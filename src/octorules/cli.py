@@ -487,7 +487,7 @@ def _plan_single_zone(
         return (zone_name, zp, desired, current)
     finally:
         if bg is not None:
-            bg.shutdown(wait=False)
+            bg.shutdown(wait=True)
 
 
 def _plan_single_zone_safe(
@@ -661,7 +661,7 @@ def _plan_account(
         return zp, desired, current
     finally:
         if bg is not None:
-            bg.shutdown(wait=False)
+            bg.shutdown(wait=True)
 
 
 def _cmd_plan_or_compare(
@@ -1255,7 +1255,7 @@ def cmd_sync(
         )
     finally:
         if shared_ex is not None:
-            shared_ex.shutdown(wait=False)
+            shared_ex.shutdown(wait=True)
 
 
 def _cmd_sync_inner(
@@ -1578,10 +1578,9 @@ def cmd_dump(
         scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
 
         # Start page shield fetch concurrently with phase rules
-        bg = ThreadPoolExecutor(max_workers=1)
-        ps_future = bg.submit(provider.get_all_page_shield_policies, scope)
+        with ThreadPoolExecutor(max_workers=1) as bg:
+            ps_future = bg.submit(provider.get_all_page_shield_policies, scope)
 
-        try:
             try:
                 rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
             except (AuthenticationError, PermissionDeniedError):
@@ -1610,19 +1609,16 @@ def cmd_dump(
                 lists_dir=lists_dir,
             )
             return zone_name, result, None
-        finally:
-            bg.shutdown(wait=False)
 
     def _dump_account() -> tuple[bool, str | None]:
         account_label = slugify(provider.account_name)
         scope = Scope(account_id=provider.account_id, label=provider.account_name)
 
         # Start secondary fetches concurrently with phase rules
-        bg = ThreadPoolExecutor(max_workers=2)
-        cr_future = bg.submit(provider.get_all_custom_rulesets, scope)
-        lists_future = bg.submit(provider.get_all_lists, scope)
+        with ThreadPoolExecutor(max_workers=2) as bg:
+            cr_future = bg.submit(provider.get_all_custom_rulesets, scope)
+            lists_future = bg.submit(provider.get_all_lists, scope)
 
-        try:
             try:
                 rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
             except (AuthenticationError, PermissionDeniedError):
@@ -1672,8 +1668,6 @@ def cmd_dump(
             if result:
                 log.info("Dumped account %s → %s", provider.account_name, result)
             return False, result
-        finally:
-            bg.shutdown(wait=False)
 
     if do_zones and do_account:
         # Run account dump concurrently with zone dumps

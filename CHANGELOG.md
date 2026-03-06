@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.5] - 2026-03-06
+
+### Added
+- **C015**: Block response validation — `status_code` must be 400–499, `content_type`
+  and `content` must be strings.
+- **E007**: Function source argument must be a field reference, not a string literal.
+  Checks `decode_base64`, `url_decode`, `starts_with`, `ends_with`, `wildcard_replace`.
+- **F003**: Array `[*]` unpacking used on multiple distinct arrays in the same
+  expression. Cloudflare only allows `[*]` on one array per expression.
+- **G026**: `bit_slice()` offset (0–2040) and size (1–32) range validation.
+- **B003** now also checks function plan tier requirements (previously field-only).
+  `sha256` requires Enterprise, `is_timed_hmac_valid_v0` requires Pro.
+- Function phase restrictions: `decode_base64` (transform + WAF + rate limiting),
+  `split` (response transform + custom error), `join` (transform + WAF + custom
+  error), `cidr`/`cidr6` (WAF + rate limiting), `bit_slice` (network phases only).
+- 3 JWT `exp` claim fields: `http.request.jwt.claims.exp.sec`,
+  `http.request.jwt.claims.exp.sec.names`, `http.request.jwt.claims.exp.sec.values`.
+- Documentation for 12 extra fields in `fields.py` and 7 extra functions in
+  `functions.py` that are intentionally kept outside the generated blocks
+  (deprecated `ip.geoip.*` aliases, account-level zone fields,
+  wirefilter-internal functions like `contains`, `sha512`, `hmac`).
+
+### Fixed
+- G018 (invalid `**` in wildcard pattern) now correctly detects `strict wildcard`
+  expressions when wirefilter is installed. The wirefilter visitor emits
+  `strict_wildcard` as the operator name; the regex fallback and AST linter
+  previously checked for `strict`, causing the primary detection path to silently
+  skip strict wildcard patterns.
+- Regex fallback parser now correctly extracts raw string literals (`r"..."`,
+  `r#"..."#`) as `regex_literals` instead of misclassifying them as
+  `string_literals`. Fixes G001 (max 64 regex) undercounting and G023 (regex
+  validation) missing raw-string patterns when wirefilter is not installed.
+- Removed spurious `~~` from regex fallback operator set (not a valid wirefilter
+  or Cloudflare operator).
+- `_strip_outer_parens()` helper for consistent always-true/always-false detection
+  across `is_always_true()` and `is_always_false()` engine functions.
+- `ThreadPoolExecutor` in `cli.py` now uses `with` statement for proper shutdown.
+- Unused imports removed from `cli.py`, `cross_rule_linter.py`, `config.py`,
+  `page_shield_linter.py`, `yaml_validator.py`.
+
 ## [0.12.4] - 2026-03-06
 
 ### Fixed

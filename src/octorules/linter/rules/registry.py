@@ -67,6 +67,7 @@ C011 = RuleMeta("C011", "action", "Invalid skip phases value", Severity.WARNING)
 C012 = RuleMeta("C012", "action", "Invalid skip products value", Severity.WARNING)
 C013 = RuleMeta("C013", "action", "Invalid compress_response algorithm", Severity.ERROR)
 C014 = RuleMeta("C014", "action", "Invalid rate limit characteristic", Severity.WARNING)
+C015 = RuleMeta("C015", "action", "Invalid block response parameter", Severity.ERROR)
 
 # Category D — Rate Limiting Specific
 D001 = RuleMeta("D001", "rate_limit", "Invalid rate limiting period", Severity.ERROR)
@@ -131,10 +132,16 @@ E003 = RuleMeta(
 E004 = RuleMeta("E004", "function", "Invalid encode_base64 flags", Severity.WARNING)
 E005 = RuleMeta("E005", "function", "Invalid url_decode options", Severity.WARNING)
 E006 = RuleMeta("E006", "function", "Invalid wildcard_replace flags", Severity.WARNING)
+E007 = RuleMeta(
+    "E007", "function", "Function source argument must be a field, not literal", Severity.WARNING
+)
 
 # Category F — Type System / Semantic Checks
 F001 = RuleMeta("F001", "type", "Operator-type incompatibility", Severity.ERROR)
 F002 = RuleMeta("F002", "type", "Unknown field name in expression", Severity.WARNING)
+F003 = RuleMeta(
+    "F003", "type", "Array [*] unpacking used on multiple distinct arrays", Severity.WARNING
+)
 
 # Category G — Value Constraint Warnings
 G001 = RuleMeta("G001", "value", "HTTP method should be uppercase", Severity.WARNING)
@@ -168,6 +175,7 @@ G022 = RuleMeta(
 G023 = RuleMeta("G023", "value", "Invalid regex pattern in matches operator", Severity.WARNING)
 G024 = RuleMeta("G024", "value", "substring() index out of bounds or inverted", Severity.WARNING)
 G025 = RuleMeta("G025", "value", "lookup_json path should start with /", Severity.WARNING)
+G026 = RuleMeta("G026", "value", "bit_slice offset or size out of range", Severity.WARNING)
 
 # Category O — Best Practice / Style
 O001 = RuleMeta(

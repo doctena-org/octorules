@@ -10,11 +10,11 @@ from typing import Any
 
 from octorules.expression import normalize_expression
 from octorules.linter.engine import (
-    ALWAYS_FALSE_EXPRESSIONS,
-    ALWAYS_TRUE_EXPRESSIONS,
     LintContext,
     LintResult,
     Severity,
+    is_always_false,
+    is_always_true,
 )
 from octorules.phases import (
     KNOWN_NON_PHASE_KEYS,
@@ -239,7 +239,7 @@ def _check_rule_fields(phase_name: str, rule: dict, index: int, ctx: LintContext
     expr = rule.get("expression")
     if isinstance(expr, str):
         normalized_expr = normalize_expression(expr).lower()
-        if normalized_expr in ALWAYS_TRUE_EXPRESSIONS:
+        if is_always_true(normalized_expr):
             ctx.add(
                 LintResult(
                     rule_id="M013",
@@ -251,7 +251,7 @@ def _check_rule_fields(phase_name: str, rule: dict, index: int, ctx: LintContext
                     suggestion="Verify this is intentional (catch-all rules affect all traffic)",
                 )
             )
-        elif normalized_expr in ALWAYS_FALSE_EXPRESSIONS:
+        elif is_always_false(normalized_expr):
             ctx.add(
                 LintResult(
                     rule_id="M014",

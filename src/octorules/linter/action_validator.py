@@ -16,6 +16,7 @@ from octorules.linter.engine import LintContext, LintResult, Severity
 from octorules.linter.schemas.actions import (
     ACTION_SCHEMAS,
     VALID_ACTIONS_BY_PHASE,
+    VALID_BLOCK_RESPONSE_STATUS_CODES,
     VALID_BROWSER_TTL_MODES,
     VALID_COMPRESSION_ALGORITHMS,
     VALID_EDGE_TTL_MODES,
@@ -162,6 +163,8 @@ def lint_actions(rule: dict[str, Any], phase: Phase, ctx: LintContext) -> None:
     # Action-specific validation (cross-phase)
     if action == "skip":
         _lint_skip_params(action_params, phase_name, ref, ctx)
+    elif action == "block":
+        _lint_block_response_params(action_params, phase_name, ref, ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -813,3 +816,56 @@ def _lint_compress_response_params(
                         field="action_parameters.algorithms",
                     )
                 )
+
+
+def _lint_block_response_params(params: dict, phase_name: str, ref: str, ctx: LintContext) -> None:
+    """Validate block action response parameters (C015)."""
+    response = params.get("response")
+    if not isinstance(response, dict):
+        return
+
+    # C015: Invalid block response status_code (must be 400-499)
+    status_code = response.get("status_code")
+    if status_code is not None and isinstance(status_code, int):
+        if status_code not in VALID_BLOCK_RESPONSE_STATUS_CODES:
+            ctx.add(
+                LintResult(
+                    rule_id="C015",
+                    severity=Severity.ERROR,
+                    message=(f"Block response status_code {status_code} must be 400-499"),
+                    phase=phase_name,
+                    ref=ref,
+                    field="action_parameters.response.status_code",
+                )
+            )
+
+    # C015: content_type must be a string
+    content_type = response.get("content_type")
+    if content_type is not None and not isinstance(content_type, str):
+        ctx.add(
+            LintResult(
+                rule_id="C015",
+                severity=Severity.ERROR,
+                message=(
+                    f"Block response content_type must be a string,"
+                    f" got {type(content_type).__name__}"
+                ),
+                phase=phase_name,
+                ref=ref,
+                field="action_parameters.response.content_type",
+            )
+        )
+
+    # C015: content must be a string
+    content = response.get("content")
+    if content is not None and not isinstance(content, str):
+        ctx.add(
+            LintResult(
+                rule_id="C015",
+                severity=Severity.ERROR,
+                message=(f"Block response content must be a string, got {type(content).__name__}"),
+                phase=phase_name,
+                ref=ref,
+                field="action_parameters.response.content",
+            )
+        )

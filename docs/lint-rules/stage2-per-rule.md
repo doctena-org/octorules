@@ -246,6 +246,31 @@ rate_limiting_rules:
 
 Fix: Use valid characteristics: `ip.src`, `cf.colo.id`, `cf.unique_visitor_id`, `ip.geoip.country`, `ip.geoip.asnum`, `ip.src.country`, `ip.src.asnum`, or header references like `http.request.headers["x-api-key"]`.
 
+### C015 — Invalid block response parameter
+
+| Severity | Category |
+|----------|----------|
+| ERROR | action |
+
+Triggers when a `block` action's `action_parameters.response` contains invalid values:
+- `status_code` must be an integer in the 400–499 range.
+- `content_type` must be a string.
+- `content` must be a string.
+
+```yaml
+waf_custom_rules:
+  - ref: block-with-response
+    action: block
+    expression: 'ip.src in {1.2.3.4}'
+    action_parameters:
+      response:
+        status_code: 503   # must be 400-499
+        content_type: text/html
+        content: "<h1>Blocked</h1>"
+```
+
+Fix: Use a status code in the 400–499 range. Cloudflare only allows 4xx responses for block actions.
+
 ---
 
 ## Category D — Rate Limiting (6 rules)
@@ -618,9 +643,27 @@ Triggers when `wildcard_replace()` is called with an invalid flag (4th argument)
 
 Fix: Use `s` for case-sensitive matching or omit the flag argument.
 
+### E007 — Function source argument must be field
+
+| Severity | Category |
+|----------|----------|
+| WARNING | function |
+
+Triggers when certain functions receive a string literal instead of a field reference as their first (source) argument. Affected functions: `decode_base64`, `url_decode`, `starts_with`, `ends_with`, `wildcard_replace`.
+
+```yaml
+expression: 'starts_with("example.com", "/api")'
+```
+
+Fix: Pass a field reference as the first argument:
+
+```yaml
+expression: 'starts_with(http.request.uri.path, "/api")'
+```
+
 ---
 
-## Category F — Type System (2 rules)
+## Category F — Type System (3 rules)
 
 ### F001 — Operator-type incompatibility
 
@@ -662,9 +705,23 @@ expression: 'http.hoost eq "example.com"'
 
 Fix: Correct the field name. Check for typos.
 
+### F003 — Array [*] unpacking on multiple arrays
+
+| Severity | Category |
+|----------|----------|
+| WARNING | type |
+
+Triggers when `[*]` (array unpacking) is used on more than one distinct array field in the same expression. Cloudflare only allows `[*]` to be applied to a single array within one expression.
+
+```yaml
+expression: 'any(http.request.headers.names[*] eq "x-custom") and any(http.request.cookies.names[*] eq "session")'
+```
+
+Fix: Split into separate rules, or restructure the expression to only unpack one array.
+
 ---
 
-## Category G — Value Constraints (25 rules)
+## Category G — Value Constraints (26 rules)
 
 ### G001 — HTTP method should be uppercase
 
@@ -1046,6 +1103,22 @@ Fix:
 expression: 'lookup_json_string(http.request.body.raw, "/name") eq "test"'
 ```
 
+### G026 — bit_slice offset or size out of range
+
+| Severity | Category |
+|----------|----------|
+| WARNING | value |
+
+Triggers when `bit_slice()` is called with an offset or size outside the valid range. The offset must be between 0 and 2040, and the size must be between 1 and 32. `bit_slice` is only available in network (Magic Transit) phases.
+
+```yaml
+network_firewall_rules:
+  - ref: bad-bit-slice
+    expression: 'bit_slice(ip.hdr, 3000, 8) eq 0x45'   # offset > 2040
+```
+
+Fix: Use valid offset (0–2040) and size (1–32) values.
+
 ---
 
 ## Category B — Phase Restrictions (3 rules)
@@ -1070,15 +1143,17 @@ Triggers when a `http.request.body.*` field is used in a phase that doesn't have
 
 Fix: Move the rule to a phase with body access.
 
-### B003 — Field requires higher plan tier
+### B003 — Field/function requires higher plan tier
 
 | Severity | Category |
 |----------|----------|
 | WARNING | phase |
 
-Triggers when a field requires a plan tier higher than the configured `--plan` tier (e.g., `cf.bot_management.score` requires Enterprise).
+Triggers when a field or function requires a plan tier higher than the configured `--plan` tier. Examples:
+- **Fields**: `cf.bot_management.score` requires Enterprise, `cf.waf.score` requires Enterprise.
+- **Functions**: `sha256` requires Enterprise, `is_timed_hmac_valid_v0` requires Pro.
 
-Fix: Upgrade to the required plan tier, or use an alternative field.
+Fix: Upgrade to the required plan tier, or use an alternative field/function.
 
 ---
 

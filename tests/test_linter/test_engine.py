@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import textwrap
 
-from octorules.linter.engine import LintContext, LintResult, Severity, lint_zone_file
+from octorules.linter.engine import (
+    LintContext,
+    LintResult,
+    Severity,
+    is_always_false,
+    is_always_true,
+    lint_zone_file,
+)
 from octorules.linter.suppressions import parse_suppressions
 
 
@@ -285,3 +292,56 @@ class TestSuppressions:
     def test_missing_file_returns_empty(self):
         suppressions = parse_suppressions("/nonexistent/path.yaml")
         assert suppressions == {}
+
+
+class TestIsAlwaysTrue:
+    def test_bare_true(self):
+        assert is_always_true("true")
+
+    def test_single_paren(self):
+        assert is_always_true("(true)")
+
+    def test_double_paren(self):
+        assert is_always_true("((true))")
+
+    def test_triple_paren(self):
+        assert is_always_true("(((true)))")
+
+    def test_many_parens(self):
+        assert is_always_true("(((((true)))))")
+
+    def test_not_true(self):
+        assert not is_always_true("false")
+        assert not is_always_true("(false)")
+
+    def test_expression_not_always_true(self):
+        assert not is_always_true('http.host eq "example.com"')
+
+    def test_unbalanced_parens_not_stripped(self):
+        assert not is_always_true("(true) and (true)")
+
+    def test_empty(self):
+        assert not is_always_true("")
+
+
+class TestIsAlwaysFalse:
+    def test_bare_false(self):
+        assert is_always_false("false")
+
+    def test_single_paren(self):
+        assert is_always_false("(false)")
+
+    def test_double_paren(self):
+        assert is_always_false("((false))")
+
+    def test_triple_paren(self):
+        assert is_always_false("(((false)))")
+
+    def test_many_parens(self):
+        assert is_always_false("(((((false)))))")
+
+    def test_not_false(self):
+        assert not is_always_false("true")
+
+    def test_expression_not_always_false(self):
+        assert not is_always_false('http.host eq "example.com"')

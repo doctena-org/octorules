@@ -1,6 +1,6 @@
 # Lint Rule Reference
 
-`octorules lint` performs offline static analysis of your rules files. **105 rules** across **17 categories**, organized into a 4-stage pipeline.
+`octorules lint` performs offline static analysis of your rules files. **109 rules** across **17 categories**, organized into a 4-stage pipeline.
 
 ### Suppressing rules
 
@@ -53,7 +53,7 @@ Suppressed findings are excluded from the report but counted in the summary line
 | Stage | What it checks | Categories | Rules | Details |
 |-------|---------------|------------|-------|---------|
 | 1. YAML structure | Required fields, types, duplicates, unknown keys | M | 15 | [stage1-yaml-structure.md](stage1-yaml-structure.md) |
-| 2. Per-rule checks | Actions, expressions, phase restrictions, values, style | A, C, D, I, J, K, L, N, E, F, G, B, O | 79 | [stage2-per-rule.md](stage2-per-rule.md) |
+| 2. Per-rule checks | Actions, expressions, phase restrictions, values, style | A, C, D, I, J, K, L, N, E, F, G, B, O | 83 | [stage2-per-rule.md](stage2-per-rule.md) |
 | 2b. Page Shield | Policy structure, expressions, catch-all detection | S | 4 | [stage2b-page-shield.md](stage2b-page-shield.md) |
 | 3. Plan-tier limits | Regex availability, rule count limits | H | 3 | [stage3-plan-tier.md](stage3-plan-tier.md) |
 | 4. Cross-rule analysis | Duplicates, unreachable rules, list references | P | 4 | [stage4-cross-rule.md](stage4-cross-rule.md) |
@@ -64,16 +64,16 @@ Suppressed findings are excluded from the report but counted in the summary line
 |--------|----------|-------|
 | A | Parse / syntax errors | 1 |
 | M | Structure | 15 |
-| C | Action validation | 14 |
+| C | Action validation | 15 |
 | D | Rate limiting | 6 |
 | I | Cache rules | 4 |
 | J | Config rules | 4 |
 | K | Redirect rules | 2 |
 | L | Transform rules | 5 |
 | N | Origin rules | 1 |
-| E | Function constraints | 6 |
-| F | Type system | 2 |
-| G | Value constraints | 25 |
+| E | Function constraints | 7 |
+| F | Type system | 3 |
+| G | Value constraints | 26 |
 | B | Phase restrictions | 3 |
 | O | Best practice / style | 6 |
 | H | Plan/entitlement | 3 |
@@ -160,7 +160,8 @@ Not all fields are available in all phases. The linter checks these restrictions
 | **Request fields** (`http.request.*`, `http.host`, `ip.src.*`, `cf.*`, `ssl`) | All phases | — |
 | **Response fields** (`http.response.*`, `cf.response.*`) | Phases 14–18 (after origin fetch): `custom_error_rules`, `response_header_rules`, `compression_rules`, `sensitive_data_detection`, `log_custom_fields` | [B001](stage2-per-rule.md#b001--response-field-used-in-request-phase) |
 | **Request body fields** (`http.request.body.*`) | `waf_custom_rules`, `waf_managed_rules`, `rate_limiting_rules`, `custom_error_rules` | [B002](stage2-per-rule.md#b002--request-body-field-in-phase-without-body-access) |
-| **Plan-gated fields** (`cf.bot_management.*`, `cf.waf.*`, etc.) | Depend on plan tier (Free/Pro/Business/Enterprise) | [B003](stage2-per-rule.md#b003--field-requires-higher-plan-tier) |
+| **Plan-gated fields** (`cf.bot_management.*`, `cf.waf.*`, etc.) | Depend on plan tier (Free/Pro/Business/Enterprise) | [B003](stage2-per-rule.md#b003--fieldfunction-requires-higher-plan-tier) |
+| **Plan-gated functions** (`sha256` Enterprise, `is_timed_hmac_valid_v0` Pro) | Depend on plan tier | [B003](stage2-per-rule.md#b003--fieldfunction-requires-higher-plan-tier) |
 
 ### Function availability by phase
 
@@ -170,6 +171,11 @@ Some functions are restricted to specific phases. The linter checks this via rul
 |-----------|-------------|
 | `regex_replace`, `wildcard_replace`, `to_string` | Transform + redirect phases: `url_rewrite_rules`, `request_header_rules`, `response_header_rules`, `redirect_rules` |
 | `uuidv4`, `sha256`, `encode_base64`, `remove_query_args` | Transform phases only: `url_rewrite_rules`, `request_header_rules`, `response_header_rules` |
+| `decode_base64` | Transform + WAF + rate limiting: `url_rewrite_rules`, `request_header_rules`, `response_header_rules`, `waf_custom_rules`, `rate_limiting_rules` |
+| `split` | Response transform + custom error phases: `response_header_rules`, `custom_error_rules` |
+| `join` | Transform + WAF + custom error phases: `url_rewrite_rules`, `request_header_rules`, `response_header_rules`, `waf_custom_rules`, `custom_error_rules` |
+| `cidr`, `cidr6` | WAF + rate limiting phases: `waf_custom_rules`, `rate_limiting_rules` |
+| `bit_slice` | Network phases only: `network_firewall_rules`, `network_ddos_rules`, `network_firewall_managed`, `network_firewall_ratelimit`, `network_firewall_ids` |
 | All other functions (`lower`, `upper`, `len`, `contains`, `starts_with`, `ends_with`, `any`, `all`, etc.) | All phases |
 
 ### Key behaviors
@@ -220,6 +226,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [C012](stage2-per-rule.md#c012--invalid-skip-products-value) | Invalid skip products value | WARNING |
 | [C013](stage2-per-rule.md#c013--invalid-compress_response-algorithm) | Invalid compress_response algorithm | ERROR |
 | [C014](stage2-per-rule.md#c014--invalid-rate-limit-characteristic) | Invalid rate limit characteristic | WARNING |
+| [C015](stage2-per-rule.md#c015--invalid-block-response-parameter) | Invalid block response parameter | ERROR |
 | [D001](stage2-per-rule.md#d001--invalid-rate-limiting-period) | Invalid rate limiting period | ERROR |
 | [D002](stage2-per-rule.md#d002--missing-rate-limiting-characteristics) | Missing rate limiting characteristics | WARNING |
 | [D003](stage2-per-rule.md#d003--missing-requests_per_period-threshold) | Missing requests_per_period threshold | ERROR |
@@ -244,15 +251,17 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [N001](stage2-per-rule.md#n001--port-number-out-of-range) | Port number out of range (1-65535) | ERROR |
 | [B001](stage2-per-rule.md#b001--response-field-used-in-request-phase) | Response field used in request phase | WARNING |
 | [B002](stage2-per-rule.md#b002--request-body-field-in-phase-without-body-access) | Request body field in phase without body access | WARNING |
-| [B003](stage2-per-rule.md#b003--field-requires-higher-plan-tier) | Field requires higher plan tier | WARNING |
+| [B003](stage2-per-rule.md#b003--fieldfunction-requires-higher-plan-tier) | Field/function requires higher plan tier | WARNING |
 | [E001](stage2-per-rule.md#e001--unknown-function-in-expression) | Unknown function in expression | WARNING |
 | [E002](stage2-per-rule.md#e002--function-not-available-in-this-phase) | Function not available in this phase | WARNING |
 | [E003](stage2-per-rule.md#e003--regex_replacewildcard_replace-usage-limit) | regex_replace/wildcard_replace usage limit | ERROR |
 | [E004](stage2-per-rule.md#e004--invalid-encode_base64-flags) | Invalid encode_base64 flags | WARNING |
 | [E005](stage2-per-rule.md#e005--invalid-url_decode-options) | Invalid url_decode options | WARNING |
 | [E006](stage2-per-rule.md#e006--invalid-wildcard_replace-flags) | Invalid wildcard_replace flags | WARNING |
+| [E007](stage2-per-rule.md#e007--function-source-argument-must-be-field) | Function source argument must be field | WARNING |
 | [F001](stage2-per-rule.md#f001--operator-type-incompatibility) | Operator-type incompatibility | ERROR |
 | [F002](stage2-per-rule.md#f002--unknown-field-name-in-expression) | Unknown field name in expression | WARNING |
+| [F003](stage2-per-rule.md#f003--array-star-unpacking-on-multiple-arrays) | Array [*] unpacking on multiple arrays | WARNING |
 | [G001](stage2-per-rule.md#g001--http-method-should-be-uppercase) | HTTP method should be uppercase | WARNING |
 | [G002](stage2-per-rule.md#g002--uri-path-should-start-with-) | URI path should start with / | WARNING |
 | [G003](stage2-per-rule.md#g003--regex-anchor-in-literal-value) | Regex anchor in literal value | WARNING |
@@ -278,6 +287,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [G023](stage2-per-rule.md#g023--invalid-regex-pattern-in-matches-operator) | Invalid regex pattern in matches operator | WARNING |
 | [G024](stage2-per-rule.md#g024--substring-index-out-of-bounds-or-inverted) | substring() index out of bounds or inverted | WARNING |
 | [G025](stage2-per-rule.md#g025--lookup_json-path-should-start-with-) | lookup_json path should start with / | WARNING |
+| [G026](stage2-per-rule.md#g026--bit_slice-offset-or-size-out-of-range) | bit_slice offset or size out of range | WARNING |
 | [H001](stage3-plan-tier.md#h001--regex-operator-not-available-on-free-plan) | Regex not available on Free plan | WARNING |
 | [H002](stage3-plan-tier.md#h002--rule-count-exceeds-plan-limit-for-phase) | Rule count exceeds plan limit | WARNING |
 | [H003](stage3-plan-tier.md#h003--expression-exceeds-64-regex-pattern-limit) | Expression exceeds 64 regex limit | WARNING |

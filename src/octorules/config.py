@@ -6,6 +6,7 @@ import logging
 import os
 import re
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -427,8 +428,6 @@ def resolve_zone_ids(
         for zone_name, zone_cfg in to_resolve.items():
             zone_cfg.zone_id = resolve_fn(zone_name)
         return
-
-    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     with ThreadPoolExecutor(max_workers=min(workers, len(to_resolve))) as executor:
         futures = {executor.submit(resolve_fn, name): name for name in to_resolve}
