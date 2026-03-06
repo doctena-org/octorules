@@ -114,23 +114,46 @@ _IPV6_CANDIDATE_PATTERN = re.compile(
 _SET_LITERAL_PATTERN = re.compile(r"\{([^}]*)\}")
 
 
-def parse_expression(expr: str, phase: str | None = None) -> ExpressionInfo:
+def parse_expression(
+    expr: str,
+    phase: str | None = None,
+    *,
+    expect_parse_error: bool = False,
+) -> ExpressionInfo:
     """Parse a Cloudflare ruleset expression and extract components.
 
     Uses wirefilter FFI when available, falls back to regex analysis.
-    The optional *phase* selects the appropriate wirefilter scheme so
-    that transform-phase functions (e.g. ``http.request.uri.path``) are
-    recognised as callable rather than as plain fields.
+    The *phase* parameter is accepted for API compatibility but currently
+    unused — all expressions are parsed against the default wirefilter
+    scheme where ``http.request.uri.path`` is a field.  Cloudflare's
+    transform-phase function-call syntax (where ``http.request.uri.path``
+    is callable) is not used in practice and would require a scheme that
+    registers the name as both field and function, which wirefilter
+    doesn't support.
+
+    Set *expect_parse_error* when the expression is known to be a value
+    expression (e.g. ``regex_replace(...)`` in action_parameters) that
+    wirefilter cannot parse.  Fallback to regex is logged at INFO instead
+    of WARNING.
     """
+    from octorules.expression import normalize_expression
+
+    expr = normalize_expression(expr)
+
+    # Cloudflare accepts standalone 'true'/'false' as valid expressions
+    # but wirefilter does not — handle them directly.
+    if expr.strip("() ").lower() in ("true", "false"):
+        return ExpressionInfo(raw=expr)
+
     if WIREFILTER_AVAILABLE:
-        return _parse_with_wirefilter(expr, phase=phase)
+        return _parse_with_wirefilter(expr, expect_parse_error=expect_parse_error)
     info = _parse_with_regex(expr)
     info.parse_error_type = "regex_fallback"
     return info
 
 
-def _parse_with_wirefilter(expr: str, *, phase: str | None = None) -> ExpressionInfo:
-    """Parse using the wirefilter FFI bindings.
+def _parse_with_wirefilter(expr: str, *, expect_parse_error: bool = False) -> ExpressionInfo:
+    """Parse using the wirefilter FFI bindings (default scheme).
 
     On parse failure, falls back to regex extraction so the linter's
     semantic rules (F001, E001, etc.) still fire on the expression.
@@ -148,13 +171,17 @@ def _parse_with_wirefilter(expr: str, *, phase: str | None = None) -> Expression
     """
     info = ExpressionInfo(raw=expr)
     try:
-        result = _wf_parse(expr, phase=phase)
+        result = _wf_parse(expr)
         if isinstance(result, dict):
             if "error" in result:
                 # Wirefilter rejected the expression — fall back to regex
                 # so the linter still gets fields/operators to analyze.
                 # See docstring above for rationale.
-                log.warning("Wirefilter parse error, falling back to regex: %s", result["error"])
+                err = result["error"]
+                if expect_parse_error:
+                    log.debug("Wirefilter cannot parse value expression: %s", err)
+                else:
+                    log.warning("Wirefilter parse error, falling back to regex: %s", err)
                 info = _parse_with_regex(expr)
                 info.parse_error = result["error"]
                 info.parse_error_type = "wirefilter_parse"

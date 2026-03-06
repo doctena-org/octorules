@@ -527,8 +527,10 @@ def _lint_rate_limit_params(params: dict, phase_name: str, ref: str, ctx: LintCo
 
     # D006: lint counting_expression content
     if isinstance(counting_expr, str) and counting_expr.strip():
+        from octorules.expression import normalize_expression
         from octorules.linter.expression_bridge import parse_expression
 
+        counting_expr = normalize_expression(counting_expr)
         ce_info = parse_expression(counting_expr)
         if ce_info.parse_error:
             ctx.add(
@@ -691,7 +693,7 @@ def _lint_transform_expression(
 
     from octorules.linter.expression_bridge import parse_expression
 
-    info = parse_expression(expr, phase=phase_name)
+    info = parse_expression(expr, phase=phase_name, expect_parse_error=True)
     if info.parse_error:
         # Suppress known false positives: transform expressions routinely use
         # function-call syntax (regex_replace, wildcard_replace, concat,

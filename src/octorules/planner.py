@@ -10,6 +10,7 @@ from enum import Enum
 from functools import cached_property
 from typing import TYPE_CHECKING
 
+from octorules.expression import normalize_expression
 from octorules.phases import (
     CF_API_FIELDS,
     KNOWN_NON_PHASE_KEYS,
@@ -173,9 +174,9 @@ class RuleValidationError(Exception):
 
 
 def _normalize_value(v: object) -> object:
-    """Normalize a value for comparison: strip trailing whitespace from multiline strings."""
-    if isinstance(v, str) and "\n" in v:
-        return "\n".join(line.rstrip() for line in v.split("\n"))
+    """Normalize a value for comparison: normalize expression whitespace for strings."""
+    if isinstance(v, str):
+        return normalize_expression(v)
     return v
 
 
@@ -259,6 +260,14 @@ def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
     prepared = []
     for rule in rules:
         rule = rule.copy()
+        # Normalize expression whitespace (multi-line YAML → single line)
+        rule["expression"] = normalize_expression(rule["expression"])
+        # Normalize counting_expression if present
+        ap = rule.get("action_parameters")
+        if isinstance(ap, dict) and isinstance(ap.get("counting_expression"), str):
+            ap = ap.copy()
+            ap["counting_expression"] = normalize_expression(ap["counting_expression"])
+            rule["action_parameters"] = ap
         # Default enabled to true
         if "enabled" not in rule:
             rule["enabled"] = True
@@ -488,10 +497,11 @@ def diff_custom_ruleset(
         phase=phase,
     )
 
-    # Prepare desired rules: default enabled to True
+    # Prepare desired rules: normalize expressions, default enabled to True
     prepared = []
     for rule in desired_rules:
         rule = rule.copy()
+        rule["expression"] = normalize_expression(rule["expression"])
         if "enabled" not in rule:
             rule["enabled"] = True
         prepared.append(rule)
@@ -1074,6 +1084,9 @@ def diff_page_shield_policies(
 
     # Desired policies
     for entry in desired_policies:
+        entry = entry.copy()
+        if isinstance(entry.get("expression"), str):
+            entry["expression"] = normalize_expression(entry["expression"])
         desc = entry["description"]
         desired_descs.add(desc)
         current = current_by_desc.get(desc)

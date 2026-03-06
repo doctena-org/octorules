@@ -17,6 +17,7 @@ from octorules.planner import (
     _diff_rules,
     check_safety,
     compute_checksum,
+    diff_custom_ruleset,
     diff_phase,
     normalize_rule,
     plan_zone,
@@ -1488,3 +1489,108 @@ class TestValidateCustomRuleset:
         )
         with pytest.raises(RuleValidationError, match="Duplicate ref 'r1'"):
             validate_custom_ruleset(entry, 0)
+
+
+# ---------------------------------------------------------------------------
+# Expression normalization integration tests
+# ---------------------------------------------------------------------------
+
+RATE_LIMIT_PHASE = get_phase("rate_limiting_rules")
+
+
+class TestExpressionNormalizationIntegration:
+    """Tests that multi-line expressions are normalized in planner functions."""
+
+    def test_prepare_desired_rules_normalizes_expression(self):
+        rules = [
+            {
+                "ref": "r1",
+                "expression": '(http.host eq "example.com")\n  and (ip.src in {1.2.3.4})\n',
+            }
+        ]
+        prepared = prepare_desired_rules(rules, REDIRECT_PHASE)
+        assert prepared[0]["expression"] == (
+            '(http.host eq "example.com") and (ip.src in {1.2.3.4})'
+        )
+
+    def test_prepare_desired_rules_normalizes_counting_expression(self):
+        rules = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {
+                    "requests_per_period": 100,
+                    "period": 60,
+                    "counting_expression": '(http.host eq "example.com")\n  and true\n',
+                },
+            }
+        ]
+        prepared = prepare_desired_rules(rules, RATE_LIMIT_PHASE)
+        assert prepared[0]["action_parameters"]["counting_expression"] == (
+            '(http.host eq "example.com") and true'
+        )
+
+    def test_prepare_does_not_mutate_original(self):
+        original_ap = {
+            "requests_per_period": 100,
+            "period": 60,
+            "counting_expression": "a\nb",
+        }
+        rules = [
+            {
+                "ref": "r1",
+                "expression": "a\nb",
+                "action": "block",
+                "action_parameters": original_ap,
+            }
+        ]
+        prepare_desired_rules(rules, RATE_LIMIT_PHASE)
+        # Original should be untouched
+        assert rules[0]["expression"] == "a\nb"
+        assert original_ap["counting_expression"] == "a\nb"
+
+    def test_diff_phase_no_modify_when_normalized_matches(self):
+        """Multi-line desired matching single-line current should produce no MODIFY."""
+        desired = [
+            {
+                "ref": "r1",
+                "expression": '(http.host eq "example.com")\n  and (ip.src in {1.2.3.4})\n',
+                "action": "redirect",
+                "enabled": True,
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": '(http.host eq "example.com") and (ip.src in {1.2.3.4})',
+                "action": "redirect",
+                "enabled": True,
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        modify_changes = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
+        assert len(modify_changes) == 0
+
+    def test_diff_custom_ruleset_normalizes_expressions(self):
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true\n",
+                "action": "block",
+                "enabled": True,
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "block",
+                "enabled": True,
+            }
+        ]
+        plan = diff_custom_ruleset(
+            "rs-1", "test-ruleset", "http_request_firewall_custom", desired, current
+        )
+        modify_changes = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
+        assert len(modify_changes) == 0

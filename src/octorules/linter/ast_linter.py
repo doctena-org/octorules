@@ -238,29 +238,24 @@ def lint_expressions(
     ref = ref_override or rule.get("ref", "")
     phase_name = phase.friendly_name
 
-    # Parse the expression (phase selects the appropriate wirefilter scheme)
-    info = parse_expression(expr, phase=phase_name)
+    # Parse the filter expression using the default scheme — filter
+    # expressions always use http.request.uri.path as a field, even in
+    # transform phases.  The transform scheme (where it's a function) is
+    # only needed for action_parameters expressions.
+    info = parse_expression(expr)
 
-    # A001: Surface wirefilter parse errors (unknown fields, bad syntax, type mismatches, etc.)
-    # Suppress known false positives from wirefilter limitations:
-    #  - 'true'/'false' literals (already covered by M013/M014)
-    #  - starts_with()/ends_with() function-call syntax (wirefilter only
-    #    supports the operator form; Cloudflare accepts both)
+    # A001: Surface wirefilter parse errors (unknown fields, bad syntax, etc.)
     if info.parse_error:
-        _stripped = expr.strip().strip("()")
-        _is_bool_literal = _stripped.lower() in ("true", "false")
-        _has_func_call_operator = bool(re.search(r"\b(?:starts_with|ends_with)\s*\(", expr))
-        if not _is_bool_literal and not _has_func_call_operator:
-            ctx.add(
-                LintResult(
-                    rule_id="A001",
-                    severity=Severity.WARNING,
-                    message=f"Expression parse error: {info.parse_error}",
-                    phase=phase_name,
-                    ref=ref,
-                    field="expression",
-                )
+        ctx.add(
+            LintResult(
+                rule_id="A001",
+                severity=Severity.WARNING,
+                message=f"Expression parse error: {info.parse_error}",
+                phase=phase_name,
+                ref=ref,
+                field="expression",
             )
+        )
 
     # Category G — Value constraints
     _lint_value_constraints(info, phase_name, ref, ctx)

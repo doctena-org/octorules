@@ -121,6 +121,23 @@ class TestDumpPageShieldPolicies:
         assert "|-" in text or "|" in text
         assert "\\n" not in text
 
+    def test_dump_value_with_single_quotes_uses_double_quoted_style(self, tmp_path):
+        """Strings containing single quotes should use YAML double-quoted style, not ''."""
+        policies = [
+            {
+                "description": "CSP",
+                "action": "allow",
+                "expression": "true",
+                "enabled": True,
+                "value": "script-src 'self' 'unsafe-inline'",
+            }
+        ]
+        result = dump_zone_rules("example.com", {}, tmp_path, page_shield_policies=policies)
+        text = result.read_text()
+        # Must use double-quoted style, not single-quoted with '' escapes
+        assert "''self''" not in text
+        assert "\"script-src 'self' 'unsafe-inline'\"" in text
+
     def test_round_trip_page_shield_policies(self, tmp_path):
         """Dumped policies should round-trip through diff with no changes."""
         from octorules.planner import diff_page_shield_policies

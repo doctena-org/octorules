@@ -40,7 +40,15 @@ def _include_representer(dumper: yaml.Dumper, data: _IncludeTag) -> yaml.ScalarN
     return dumper.represent_scalar("!include", data.path, style="")
 
 
+def _str_representer(dumper: yaml.Dumper, data: str) -> yaml.ScalarNode:
+    """Use double-quoted style for strings containing single quotes."""
+    if "'" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
 _Dumper = type("_Dumper", (yaml.SafeDumper,), {})
+_Dumper.add_representer(str, _str_representer)
 _Dumper.add_representer(_LiteralStr, _literal_representer)
 _Dumper.add_representer(_IncludeTag, _include_representer)
 
@@ -220,7 +228,7 @@ def _strip_trailing_whitespace(s: str) -> str:
 def _literalize(value: object) -> object:
     """Recursively convert multiline strings to _LiteralStr for block style."""
     if isinstance(value, str) and "\n" in value:
-        return _LiteralStr(_strip_trailing_whitespace(value))
+        return _LiteralStr(_strip_trailing_whitespace(value).strip("\n"))
     if isinstance(value, dict):
         return {k: _literalize(v) for k, v in value.items()}
     if isinstance(value, list):

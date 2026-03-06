@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.1] - 2026-03-06
+
+### Added
+- Expression whitespace normalization: multi-line YAML block scalars (`|`, `|-`)
+  are collapsed to single-line expressions before sending to Cloudflare and
+  before linting. Quoted string contents are preserved verbatim. Whitespace
+  after `{` and before `}` is stripped to match Cloudflare's canonical form
+  (e.g. `{"a" "b"}` not `{ "a" "b" }`).
+
+### Fixed
+- `octorules lint`: zone status lines (`no issues found`, `no rules file`)
+  now use consistent two-space indent in text output.
+- `octorules dump`: multiline strings now use `|-` (strip) block scalar style
+  instead of `|` (keep), preventing spurious trailing newlines in dumped
+  expressions.
+- `octorules dump`: strings containing single quotes (e.g. CSP values with
+  `'self'`, `'unsafe-inline'`) now use YAML double-quoted style instead of
+  single-quoted style with `''` escapes.
+- Wirefilter parsing: filter expressions now always use the default scheme
+  (where `http.request.uri.path` is a field). Previously, transform phases
+  (`url_rewrite_rules`, `request_header_rules`, `response_header_rules`) used
+  a transform scheme where `http.request.uri.path` was registered as a function,
+  causing spurious parse errors on common expressions like
+  `starts_with(http.request.uri.path, "/api")`.
+- Wirefilter parsing: standalone `true`/`false` expressions (including
+  parenthesized forms like `(true)`) are now handled directly instead of
+  being sent to wirefilter, which rejects them as unknown identifiers.
+- Wirefilter parse error logging: expected failures on action_parameters
+  value expressions (e.g. `regex_replace(...)`) are logged at DEBUG instead
+  of WARNING. Unexpected failures on filter expressions remain WARNING.
+  Removed the now-unnecessary A001 suppressions for `starts_with`/`ends_with`
+  and `true`/`false`.
+
 ## [0.12.0] - 2026-03-05
 
 ### Added
@@ -14,8 +47,8 @@ All notable changes to this project will be documented in this file.
 - Generated markers in `functions.py` (`BEGIN/END GENERATED FUNCTIONS`).
 - `octorules lint` now logs which expression parser is active at startup
   (`wirefilter` or `regex fallback`), so users can confirm at a glance.
-- Per-expression wirefilter parse errors now emit a WARNING-level log before
-  falling back to regex extraction (previously only visible at DEBUG level).
+- Per-expression wirefilter parse errors now emit a log before falling back
+  to regex extraction.
 
 ### Fixed
 - `_clean_list_item` in `dumper.py` now guards against non-dict items instead
