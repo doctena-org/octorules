@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.2] - 2026-03-06
+
+### Added
+- Expression display formatting in plan output: long expressions in diffs are
+  now broken at `and`/`or` operators and set literal boundaries (`{…}`) with
+  indentation reflecting nesting depth. Applies to all output formats (HTML,
+  markdown, text). Short expressions (≤ 80 chars) are unchanged.
+
 ## [0.12.1] - 2026-03-06
 
 ### Added

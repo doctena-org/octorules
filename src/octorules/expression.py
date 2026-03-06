@@ -1,8 +1,11 @@
-"""Expression whitespace normalization.
+"""Expression whitespace normalization and display formatting.
 
 Collapses whitespace outside double-quoted strings to single spaces,
 allowing users to write readable multi-line YAML block scalars that
 get normalized before sending to Cloudflare and before linting.
+
+Also provides a display formatter that reverses the collapse for
+human-readable plan output.
 """
 
 from __future__ import annotations
@@ -79,3 +82,161 @@ def normalize_expression(expr: str) -> str:
             result.append(ch)
 
     return "".join(result).strip()
+
+
+# ---------------------------------------------------------------------------
+# Display formatting (reverse of normalization — for plan output readability)
+# ---------------------------------------------------------------------------
+
+
+def _find_closing_brace(expr: str, start: int) -> int:
+    """Return index of ``}`` matching the ``{`` at *start*, or -1."""
+    in_quote = False
+    escaped = False
+    for i in range(start + 1, len(expr)):
+        ch = expr[i]
+        if escaped:
+            escaped = False
+            continue
+        if in_quote:
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quote = False
+            continue
+        if ch == '"':
+            in_quote = True
+            continue
+        if ch == "}":
+            return i
+    return -1
+
+
+def _split_set_items(content: str) -> list[str]:
+    """Split set content into items, preserving quoted strings."""
+    items: list[str] = []
+    current: list[str] = []
+    in_quote = False
+    escaped = False
+    for ch in content:
+        if escaped:
+            current.append(ch)
+            escaped = False
+            continue
+        if in_quote:
+            current.append(ch)
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quote = False
+            continue
+        if ch == '"':
+            in_quote = True
+            current.append(ch)
+            continue
+        if ch == " ":
+            if current:
+                items.append("".join(current))
+                current = []
+            continue
+        current.append(ch)
+    if current:
+        items.append("".join(current))
+    return items
+
+
+def format_expression_display(expr: str, max_line: int = 80) -> str:
+    """Format a normalized expression for human-readable multi-line display.
+
+    Short expressions (≤ *max_line* chars) are returned unchanged.  Long
+    expressions are broken before ``and``/``or`` operators and at set
+    literal boundaries (``{…}``), with indentation reflecting paren depth.
+    """
+    if len(expr) <= max_line:
+        return expr
+
+    out: list[str] = []
+    in_quote = False
+    escaped = False
+    depth = 0
+    i = 0
+    n = len(expr)
+
+    while i < n:
+        ch = expr[i]
+
+        if escaped:
+            out.append(ch)
+            escaped = False
+            i += 1
+            continue
+
+        if in_quote:
+            out.append(ch)
+            if ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_quote = False
+            i += 1
+            continue
+
+        if ch == '"':
+            in_quote = True
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "(":
+            out.append(ch)
+            depth += 1
+            i += 1
+            continue
+
+        if ch == ")":
+            depth = max(0, depth - 1)
+            out.append(ch)
+            i += 1
+            continue
+
+        # Set literal — format items one-per-line if the set is long
+        if ch == "{":
+            end = _find_closing_brace(expr, i)
+            if end != -1 and end - i > max_line // 2:
+                items = _split_set_items(expr[i + 1 : end])
+                if len(items) > 1:
+                    item_indent = "  " * (depth + 1)
+                    close_indent = "  " * depth
+                    out.append("{\n")
+                    for item in items:
+                        out.append(f"{item_indent}{item}\n")
+                    out.append(f"{close_indent}}}")
+                    i = end + 1
+                    continue
+            out.append(ch)
+            i += 1
+            continue
+
+        if ch == "}":
+            out.append(ch)
+            i += 1
+            continue
+
+        # Break before `and` / `or` operators
+        if expr[i : i + 5] == " and ":
+            out.append("\n")
+            out.append("  " * depth)
+            out.append("and ")
+            i += 5
+            continue
+
+        if expr[i : i + 4] == " or ":
+            out.append("\n")
+            out.append("  " * depth)
+            out.append("or ")
+            i += 4
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return "".join(out)

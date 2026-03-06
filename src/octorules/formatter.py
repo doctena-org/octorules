@@ -9,6 +9,7 @@ import sys
 from html import escape as html_escape
 from typing import IO
 
+from octorules.expression import format_expression_display
 from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME
 from octorules.planner import (
     ChangeType,
@@ -118,16 +119,38 @@ def _format_add_remove_details(rule: dict | None, use_color: bool) -> list[str]:
     return details
 
 
+def _format_diff_value(
+    key: str, val: object, prefix: str, color_code: str, use_color: bool
+) -> list[str]:
+    """Format a single diff value, pretty-printing long expression strings.
+
+    Returns one or more lines.  The first line includes the key; continuation
+    lines are indented and prefixed with the same ``prefix`` character.
+    """
+    if isinstance(val, str) and len(val) > 80:
+        formatted = format_expression_display(val)
+        if "\n" in formatted:
+            flines = formatted.split("\n")
+            pad = " " * (len(prefix) + 1)
+            result = [
+                _color(f"    {prefix} {key}: ", DIM, use_color)
+                + _color(flines[0], color_code, use_color)
+            ]
+            for fl in flines[1:]:
+                result.append(
+                    _color(f"    {pad}", DIM, use_color) + _color(fl, color_code, use_color)
+                )
+            return result
+    label = _color(f"    {prefix} {key}: ", DIM, use_color)
+    return [label + _color(f"{val!r}", color_code, use_color)]
+
+
 def _format_modify_details(change: RuleChange, use_color: bool) -> list[str]:
     """Format field-level diffs for a MODIFY change."""
     details = []
     for key, old_val, new_val in _compute_field_diffs(change):
-        details.append(
-            _color(f"    − {key}: ", DIM, use_color) + _color(f"{old_val!r}", RED, use_color)
-        )
-        details.append(
-            _color(f"    + {key}: ", DIM, use_color) + _color(f"{new_val!r}", GREEN, use_color)
-        )
+        details.extend(_format_diff_value(key, old_val, "−", RED, use_color))
+        details.extend(_format_diff_value(key, new_val, "+", GREEN, use_color))
     return details
 
 
@@ -362,6 +385,23 @@ def _md_change_row(
     return f"| {op} | {escaped_phase} | {ref} | {details} |"
 
 
+def _md_diff_value(key: str, val: object, prefix: str) -> list[str]:
+    """Format a diff value for a markdown ``diff`` code block.
+
+    Long expression strings are pretty-printed with each continuation line
+    prefixed so GitHub renders the whole block in the correct colour.
+    """
+    if isinstance(val, str) and len(val) > 80:
+        formatted = format_expression_display(val)
+        if "\n" in formatted:
+            flines = formatted.split("\n")
+            result = [f"{prefix} {key}: {flines[0]}"]
+            for fl in flines[1:]:
+                result.append(f"{prefix} {fl}")
+            return result
+    return [f"{prefix} {key}: {val!r}"]
+
+
 def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
     """Format the plan as markdown for PR comments.
 
@@ -410,8 +450,8 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
             lines.append("")
             lines.append("```diff")
             for key, old_val, new_val in diff_group:
-                lines.append(f"- {key}: {old_val!r}")
-                lines.append(f"+ {key}: {new_val!r}")
+                lines.extend(_md_diff_value(key, old_val, "-"))
+                lines.extend(_md_diff_value(key, new_val, "+"))
             lines.append("```")
         lines.append("")
 
@@ -433,6 +473,20 @@ _HTML_OP_NAMES: dict[ChangeType, str] = {
 def _html_op_name(change_type: ChangeType) -> str:
     """Human-readable operation name for HTML output."""
     return _HTML_OP_NAMES[change_type]
+
+
+def _html_diff_value(key: str, val: object, prefix: str) -> str:
+    """Format a diff value for an HTML table cell.
+
+    Long expression strings are pretty-printed inside ``<pre>`` so that
+    GitHub renders them with preserved whitespace and indentation.
+    """
+    e = html_escape
+    if isinstance(val, str) and len(val) > 80:
+        formatted = format_expression_display(val)
+        if "\n" in formatted:
+            return f"{prefix}&ensp;<code>{e(key)}</code>:<pre>{e(formatted)}</pre>"
+    return f"{prefix}&ensp;<code>{e(key)}</code>: {e(str(val))}"
 
 
 def _html_render_changes(
@@ -483,11 +537,11 @@ def _html_render_changes(
                 else:
                     lines.append("  <tr>")
                     lines.append("    <td colspan=2></td>")
-                lines.append(f"    <td>&minus;&ensp;<code>{e(key)}</code>: {e(str(old_val))}</td>")
+                lines.append(f"    <td>{_html_diff_value(key, old_val, '&minus;')}</td>")
                 lines.append("  </tr>")
                 lines.append("  <tr>")
                 lines.append("    <td colspan=2></td>")
-                lines.append(f"    <td>+&ensp;<code>{e(key)}</code>: {e(str(new_val))}</td>")
+                lines.append(f"    <td>{_html_diff_value(key, new_val, '+')}</td>")
                 lines.append("  </tr>")
             if not diffs:
                 lines.append("  <tr>")
