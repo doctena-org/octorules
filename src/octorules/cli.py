@@ -1383,7 +1383,7 @@ def cmd_lint(
     for zone_name in zone_names:
         desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
         if not desired:
-            log.info("%s: no rules file (skipped)", zone_name)
+            log.info("  %s: no rules file (skipped)", zone_name)
             continue
 
         rules_file = config.rules_dir / f"{zone_name}.yaml"

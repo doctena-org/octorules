@@ -90,6 +90,30 @@ cache_rules:
 
 Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** ([Cloudflare ruleset expression](https://developers.cloudflare.com/ruleset-engine/rules-language/expressions/)). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`.
 
+#### Multi-line expressions
+
+Complex expressions can use YAML block scalars (`|-`) for readability. octorules normalizes whitespace (collapsing newlines and indentation to single spaces outside quoted strings) before sending to Cloudflare and before linting, so formatting is purely cosmetic:
+
+```yaml
+waf_custom_rules:
+  - ref: geo-block
+    description: Block by country outside active regions
+    action: block
+    expression: |-
+      (ip.geoip.asnum in {
+        9009
+        64080
+      }
+        and not ip.geoip.country in {
+          "AT"
+          "BE"
+          "DE"
+          "FR"
+        })
+```
+
+This is equivalent to the single-line form `(ip.geoip.asnum in {9009 64080} and not ip.geoip.country in {"AT" "BE" "DE" "FR"})`. Use `|-` (strip trailing newline) rather than `|` (preserves trailing newline).
+
 ### Usage
 
 ```bash
@@ -341,9 +365,9 @@ See [docs/lint-rules/README.md](docs/lint-rules/README.md#suppressing-rules) for
 
 ### Expression parsing
 
-When the `wirefilter` extra is installed (see [Installation](#installation)), expressions are parsed by Cloudflare's actual wirefilter engine via [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter), providing authoritative phase-aware type checking and context-dependent schemes for transform phases. Without it, a regex-based fallback parser extracts fields, functions, operators, and literals but cannot perform type checking.
+When the `wirefilter` extra is installed (see [Installation](#installation)), expressions are parsed by Cloudflare's actual wirefilter engine via [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter), providing authoritative type checking, field validation, and syntax verification. Without it, a regex-based fallback parser extracts fields, functions, operators, and literals but cannot perform type checking.
 
-The linter logs which parser is active at startup (`Expression parser: wirefilter` or `Expression parser: regex fallback`). If wirefilter rejects a specific expression, it falls back to regex for that expression with a warning.
+The linter logs which parser is active at startup (`Expression parser: wirefilter` or `Expression parser: regex fallback`). If wirefilter rejects a specific expression, it falls back to regex for that expression with a warning. Standalone `true`/`false` expressions and value expressions in `action_parameters` (e.g. `regex_replace(...)`) are handled separately since wirefilter only parses boolean filter expressions.
 
 ## CLI reference
 

@@ -12,7 +12,7 @@ Runs four sub-checks for each rule in each phase: action validation, expression 
 
 Triggers when the wirefilter FFI parser rejects the rule's expression. Catches unknown fields, invalid syntax, type mismatches, unbalanced parentheses, and other errors that Cloudflare would reject.
 
-Requires the optional `octorules[wirefilter]` package. Known wirefilter limitations are suppressed (e.g. `true`/`false` literals, `starts_with()`/`ends_with()` function-call syntax).
+Requires the optional `octorules[wirefilter]` package. Standalone `true`/`false` expressions are handled before wirefilter and will not trigger this rule. Value expressions in `action_parameters` (e.g. `regex_replace(...)`) are also excluded since wirefilter only parses boolean filter expressions.
 
 ```yaml
 waf_custom_rules:

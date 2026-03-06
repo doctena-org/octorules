@@ -165,23 +165,29 @@ class TestWirefilterBridge:
         assert info.parse_error == ""
         assert "http.request.uri.path" in info.fields_used
 
-    def test_transform_scheme_uri_path_as_function(self):
-        """In a transform phase, http.request.uri.path is a function."""
+    def test_default_scheme_always_used(self):
+        """All expressions use the default scheme where uri.path is a field.
+
+        The transform scheme (where uri.path is a callable function) is not
+        used because wirefilter can't register a name as both field and
+        function, and field usage is overwhelmingly more common.
+        """
         info = parse_expression(
-            'http.request.uri.path(http.request.uri) eq "/rewritten"',
+            'http.request.uri.path eq "/test"',
             phase="url_rewrite_rules",
         )
         assert info.parse_error == ""
-        assert "http.request.uri.path" in info.functions_used
+        assert "http.request.uri.path" in info.fields_used
 
-    def test_non_transform_phase_uses_default(self):
-        """A non-transform phase still uses the default scheme."""
+    def test_transform_phase_uri_path_field_in_starts_with(self):
+        """starts_with(http.request.uri.path, ...) works in transform phases."""
         info = parse_expression(
-            'http.request.uri.path eq "/test"',
-            phase="http_request_firewall_custom",
+            'starts_with(http.request.uri.path, "/api")',
+            phase="request_header_rules",
         )
         assert info.parse_error == ""
         assert "http.request.uri.path" in info.fields_used
+        assert "starts_with" in info.functions_used
 
 
 class TestWirefilterFFICrashFallback:
