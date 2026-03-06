@@ -33,7 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 wirefilter = [
-    "octorules-wirefilter>=0.2.0",
+    "octorules-wirefilter>=0.3.0",
 ]
 dev = [
     "pytest>=7.0",
