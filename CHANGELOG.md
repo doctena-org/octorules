@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.3] - 2026-03-06
+
+### Changed
+- Python 3.14 added to CI test matrix.
+- `octorules-wirefilter` optional dependency bumped to `>=0.3.0` (PyO3 0.28,
+  Python 3.14 wheel support).
+
 ## [0.12.2] - 2026-03-06
 
 ### Added
