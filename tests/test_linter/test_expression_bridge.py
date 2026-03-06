@@ -102,12 +102,40 @@ class TestRegexOperatorExtraction:
 
     def test_extracts_strict_wildcard(self):
         info = _parse_with_regex('http.host strict wildcard "*.example.com"')
-        assert "strict" in info.operators_used
-        assert "wildcard" in info.operators_used
+        assert "strict_wildcard" in info.operators_used
 
     def test_extracts_bitwise_and(self):
         info = _parse_with_regex("cf.waf.score bitwise_and 0x01 eq 0x01")
         assert "bitwise_and" in info.operators_used
+
+
+class TestRawStringExtraction:
+    """Test raw string (r"...", r#"..."#) handling in regex fallback."""
+
+    def test_raw_string_regex_matches(self):
+        info = _parse_with_regex('http.request.uri.path matches r"^/api/v[0-9]+"')
+        assert "^/api/v[0-9]+" in info.regex_literals
+        assert "^/api/v[0-9]+" not in info.string_literals
+
+    def test_raw_string_hash_regex_matches(self):
+        info = _parse_with_regex('http.request.uri.path matches r#"^/api"#')
+        assert "^/api" in info.regex_literals
+        assert "^/api" not in info.string_literals
+
+    def test_raw_string_tilde(self):
+        info = _parse_with_regex('http.request.uri.path ~ r#"^/test"#')
+        assert "^/test" in info.regex_literals
+
+    def test_raw_string_not_in_string_literals(self):
+        info = _parse_with_regex('http.host eq "test" and http.request.uri.path matches r#"^/api"#')
+        assert "test" in info.string_literals
+        assert "^/api" in info.regex_literals
+        assert "^/api" not in info.string_literals
+
+    def test_regular_string_still_works(self):
+        info = _parse_with_regex('http.host eq "example.com"')
+        assert "example.com" in info.string_literals
+        assert info.regex_literals == []
 
 
 @pytest.mark.skipif(not WIREFILTER_AVAILABLE, reason="octorules-wirefilter not installed")
@@ -145,6 +173,12 @@ class TestWirefilterBridge:
         info = parse_expression('http.request.uri.path matches "^/api/.*"')
         assert info.has_regex
         assert "^/api/.*" in info.regex_literals
+
+    def test_raw_string_regex_via_wirefilter(self):
+        info = parse_expression('http.request.uri.path matches r#"^/api/v[0-9]+"#')
+        assert info.has_regex
+        assert "^/api/v[0-9]+" in info.regex_literals
+        assert "^/api/v[0-9]+" not in info.string_literals
 
     def test_ip_literals_via_wirefilter(self):
         info = parse_expression("ip.src in {1.2.3.4 10.0.0.0/8}")

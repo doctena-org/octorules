@@ -17,6 +17,37 @@ ALWAYS_TRUE_EXPRESSIONS = frozenset({"true", "(true)", "((true))"})
 ALWAYS_FALSE_EXPRESSIONS = frozenset({"false", "(false)", "((false))"})
 
 
+def _strip_outer_parens(expr: str) -> str:
+    """Strip balanced outer parentheses: '(((true)))' → 'true'."""
+    while len(expr) >= 2 and expr[0] == "(" and expr[-1] == ")":
+        # Verify the inner parens are balanced (the outer pair actually matches)
+        depth = 0
+        balanced = True
+        for ch in expr[1:-1]:
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth < 0:
+                    balanced = False
+                    break
+        if balanced and depth == 0:
+            expr = expr[1:-1]
+        else:
+            break
+    return expr
+
+
+def is_always_true(normalized_lower_expr: str) -> bool:
+    """Check if a normalized, lowercased expression is always true (any paren depth)."""
+    return _strip_outer_parens(normalized_lower_expr) == "true"
+
+
+def is_always_false(normalized_lower_expr: str) -> bool:
+    """Check if a normalized, lowercased expression is always false (any paren depth)."""
+    return _strip_outer_parens(normalized_lower_expr) == "false"
+
+
 class Severity(IntEnum):
     """Lint result severity levels, ordered by importance."""
 

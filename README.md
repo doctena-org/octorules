@@ -128,7 +128,7 @@ octorules validate --config config.yaml
 # Export existing rules to YAML
 octorules dump --config config.yaml
 
-# Lint rules files offline (105 rules, text/JSON/SARIF output)
+# Lint rules files offline (109 rules, text/JSON/SARIF output)
 octorules lint --config config.yaml
 ```
 
@@ -321,7 +321,7 @@ The linter runs 4 stages in order:
 | Stage | What it checks | Rule categories |
 |-------|---------------|-----------------|
 | 1. YAML structure | Required fields, types, duplicates, unknown keys | M (15 rules) |
-| 2. Per-rule checks | Actions, expressions, phase restrictions | A, C, D, I, J, K, L, N, B, E, F, G, O (79 rules) |
+| 2. Per-rule checks | Actions, expressions, phase restrictions | A, C, D, I, J, K, L, N, B, E, F, G, O (83 rules) |
 | 2b. Page Shield policies | Policy structure, expressions, catch-all detection | S (4 rules) |
 | 3. Plan-tier limits | Regex availability, rule count limits | H (3 rules) |
 | 4. Cross-rule analysis | Duplicate expressions, unreachable rules, list references | P (4 rules) |
@@ -332,7 +332,7 @@ The linter runs 4 stages in order:
 |--------|----------|-------|
 | A | Parse / syntax errors | 1 |
 | M | Structure | 15 |
-| C | Action validation | 14 |
+| C | Action validation | 15 |
 | D | Rate limiting | 6 |
 | I | Cache rules | 4 |
 | J | Config rules | 4 |
@@ -340,15 +340,15 @@ The linter runs 4 stages in order:
 | L | Transform rules | 5 |
 | N | Origin rules | 1 |
 | B | Phase restrictions | 3 |
-| E | Function constraints | 6 |
-| F | Type system | 2 |
-| G | Value constraints | 25 |
+| E | Function constraints | 7 |
+| F | Type system | 3 |
+| G | Value constraints | 26 |
 | H | Plan/entitlement | 3 |
 | S | Page Shield structure | 4 |
 | O | Best practice / style | 6 |
 | P | Cross-rule | 4 |
 
-**105 rules total.** See [docs/lint-rules/README.md](docs/lint-rules/README.md) for the full reference (index with quick-reference table + per-stage detail files).
+**109 rules total.** See [docs/lint-rules/README.md](docs/lint-rules/README.md) for the full reference (index with quick-reference table + per-stage detail files).
 
 ### Suppressing lint rules
 

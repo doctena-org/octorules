@@ -1012,6 +1012,14 @@ class TestF002UnknownField:
         f002 = [r for r in ctx.results if r.rule_id == "F002"]
         assert "ip.src" in (f002[0].suggestion or "")
 
+    def test_f002_jwt_exp_field_known(self):
+        """JWT exp claim fields should be recognized (not trigger F002)."""
+        from octorules.linter.schemas.fields import get_field
+
+        assert get_field("http.request.jwt.claims.exp.sec") is not None
+        assert get_field("http.request.jwt.claims.exp.sec.names") is not None
+        assert get_field("http.request.jwt.claims.exp.sec.values") is not None
+
 
 class TestF001ArrayMapFields:
     def test_f001_array_string_eq(self):
@@ -1223,3 +1231,201 @@ class TestG025LookupJsonPath:
     def test_g025_nested_path(self):
         ctx = _lint('lookup_json_string(http.request.body.raw, "/data/name") eq "test"')
         assert "G025" not in _ids(ctx)
+
+
+class TestG026BitSlice:
+    """Tests for G026 — bit_slice offset/size validation."""
+
+    def test_g026_valid_bit_slice(self):
+        ctx = _lint("bit_slice(raw.http.request.body.raw, 0, 16) eq 1234", "network_firewall_rules")
+        assert "G026" not in _ids(ctx)
+
+    def test_g026_offset_too_large(self):
+        ctx = _lint(
+            "bit_slice(raw.http.request.body.raw, 2048, 16) eq 1234", "network_firewall_rules"
+        )
+        assert "G026" in _ids(ctx)
+        g026 = [r for r in ctx.results if r.rule_id == "G026"]
+        assert "offset" in g026[0].message
+
+    def test_g026_size_too_large(self):
+        ctx = _lint("bit_slice(raw.http.request.body.raw, 0, 64) eq 1234", "network_firewall_rules")
+        assert "G026" in _ids(ctx)
+        g026 = [r for r in ctx.results if r.rule_id == "G026"]
+        assert "size" in g026[0].message
+
+    def test_g026_size_zero(self):
+        ctx = _lint("bit_slice(raw.http.request.body.raw, 0, 0) eq 1234", "network_firewall_rules")
+        assert "G026" in _ids(ctx)
+
+    def test_g026_max_valid_offset_and_size(self):
+        ctx = _lint(
+            "bit_slice(raw.http.request.body.raw, 2040, 32) eq 1234", "network_firewall_rules"
+        )
+        assert "G026" not in _ids(ctx)
+
+
+class TestE007FunctionSourceMustBeField:
+    """Tests for E007 — function source argument must be a field reference."""
+
+    def test_e007_decode_base64_with_literal(self):
+        ctx = _lint('decode_base64("dGVzdA==") eq "test"')
+        assert "E007" in _ids(ctx)
+
+    def test_e007_decode_base64_with_field(self):
+        ctx = _lint('decode_base64(http.cookie) eq "test"')
+        assert "E007" not in _ids(ctx)
+
+    def test_e007_url_decode_with_literal(self):
+        ctx = _lint('url_decode("hello%20world") eq "hello world"')
+        assert "E007" in _ids(ctx)
+
+    def test_e007_url_decode_with_field(self):
+        ctx = _lint('url_decode(http.request.uri.path) eq "/test"')
+        assert "E007" not in _ids(ctx)
+
+    def test_e007_starts_with_with_literal(self):
+        ctx = _lint('starts_with("hello", "he")')
+        assert "E007" in _ids(ctx)
+
+    def test_e007_starts_with_with_field(self):
+        ctx = _lint('starts_with(http.request.uri.path, "/api")')
+        assert "E007" not in _ids(ctx)
+
+    def test_e007_ends_with_with_literal(self):
+        ctx = _lint('ends_with("hello", "lo")')
+        assert "E007" in _ids(ctx)
+
+    def test_e007_ends_with_with_field(self):
+        ctx = _lint('ends_with(http.request.uri.path, ".js")')
+        assert "E007" not in _ids(ctx)
+
+
+class TestF003ArrayStarUnpacking:
+    """Tests for F003 — array [*] used on multiple distinct arrays."""
+
+    def test_f003_single_array_star_ok(self):
+        ctx = _lint('any(http.request.headers.names[*] eq "x-api-key")')
+        assert "F003" not in _ids(ctx)
+
+    def test_f003_same_array_star_ok(self):
+        ctx = _lint(
+            'any(http.request.headers.names[*] eq "x-api-key")'
+            ' and any(http.request.headers.names[*] eq "authorization")'
+        )
+        assert "F003" not in _ids(ctx)
+
+    def test_f003_different_arrays_flagged(self):
+        ctx = _lint(
+            'any(http.request.headers.names[*] eq "x-api-key")'
+            ' and any(http.request.headers.values[*] eq "secret")'
+        )
+        assert "F003" in _ids(ctx)
+
+    def test_f003_no_star_no_flag(self):
+        ctx = _lint('http.request.headers.names[0] eq "content-type"')
+        assert "F003" not in _ids(ctx)
+
+
+class TestFunctionPhaseRestrictions:
+    """Tests for function phase restrictions added in coverage audit."""
+
+    def test_e002_split_in_wrong_phase(self):
+        ctx = _lint('split(http.cookie, ";", 10)[0] eq "session"', "waf_custom_rules")
+        assert "E002" in _ids(ctx)
+
+    def test_e002_split_in_correct_phase(self):
+        ctx = _lint('split(http.cookie, ";", 10)[0] eq "session"', "response_header_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_split_in_custom_error_phase(self):
+        ctx = _lint('split(http.cookie, ";", 10)[0] eq "session"', "custom_error_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_join_in_wrong_phase(self):
+        ctx = _lint('join(http.request.headers.names, ",") eq "a,b"', "redirect_rules")
+        assert "E002" in _ids(ctx)
+
+    def test_e002_join_in_correct_phase(self):
+        ctx = _lint('join(http.request.headers.names, ",") eq "a,b"', "url_rewrite_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_cidr_in_wrong_phase(self):
+        ctx = _lint("cidr(ip.src, 24, 0) in {192.168.0.0/24}", "redirect_rules")
+        assert "E002" in _ids(ctx)
+
+    def test_e002_cidr_in_correct_phase(self):
+        ctx = _lint("cidr(ip.src, 24, 0) in {192.168.0.0/24}", "waf_custom_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_cidr_in_rate_limiting(self):
+        ctx = _lint("cidr(ip.src, 24, 0) in {192.168.0.0/24}", "rate_limiting_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_bit_slice_in_wrong_phase(self):
+        ctx = _lint("bit_slice(raw.http.request.body.raw, 0, 16) eq 1234", "waf_custom_rules")
+        assert "E002" in _ids(ctx)
+
+    def test_e002_bit_slice_in_correct_phase(self):
+        ctx = _lint("bit_slice(raw.http.request.body.raw, 0, 16) eq 1234", "network_firewall_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_decode_base64_in_wrong_phase(self):
+        ctx = _lint('decode_base64(http.cookie) eq "test"', "redirect_rules")
+        assert "E002" in _ids(ctx)
+
+    def test_e002_decode_base64_in_transform_phase(self):
+        ctx = _lint('decode_base64(http.cookie) eq "test"', "request_header_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_decode_base64_in_waf_phase(self):
+        ctx = _lint('decode_base64(http.cookie) eq "test"', "waf_custom_rules")
+        assert "E002" not in _ids(ctx)
+
+    def test_e002_decode_base64_in_rate_limiting(self):
+        ctx = _lint('decode_base64(http.cookie) eq "test"', "rate_limiting_rules")
+        assert "E002" not in _ids(ctx)
+
+
+class TestFunctionPlanRestrictions:
+    """Tests for B003 — function plan requirement checks."""
+
+    def test_b003_sha256_requires_enterprise(self):
+        ctx = _lint(
+            'sha256(http.request.body.raw) eq "abc"',
+            "request_header_rules",
+        )
+        # Default plan_tier is 'enterprise', so should not fire
+        assert "B003" not in [r.rule_id for r in ctx.results if "sha256" in r.message]
+
+    def test_b003_sha256_on_free_plan(self):
+        rule = {"ref": "test", "expression": 'sha256(http.request.body.raw) eq "abc"'}
+        phase = PHASE_BY_NAME["request_header_rules"]
+        ctx = LintContext(plan_tier="free")
+        lint_expressions(rule, phase, ctx)
+        b003 = [r for r in ctx.results if r.rule_id == "B003" and "sha256" in r.message]
+        assert len(b003) == 1
+        assert "enterprise" in b003[0].message
+
+    def test_b003_is_timed_hmac_requires_pro(self):
+        expr = 'is_timed_hmac_valid_v0(http.request.uri.path, "secret", 300, 0)'
+        rule = {"ref": "test", "expression": expr}
+        phase = PHASE_BY_NAME["waf_custom_rules"]
+        ctx = LintContext(plan_tier="free")
+        lint_expressions(rule, phase, ctx)
+        b003 = [
+            r for r in ctx.results if r.rule_id == "B003" and "is_timed_hmac_valid_v0" in r.message
+        ]
+        assert len(b003) == 1
+        assert "pro" in b003[0].message
+
+    def test_b003_is_timed_hmac_on_pro_ok(self):
+        expr = 'is_timed_hmac_valid_v0(http.request.uri.path, "secret", 300, 0)'
+        rule = {"ref": "test", "expression": expr}
+        phase = PHASE_BY_NAME["waf_custom_rules"]
+        ctx = LintContext(plan_tier="pro")
+        lint_expressions(rule, phase, ctx)
+        b003 = [
+            r for r in ctx.results if r.rule_id == "B003" and "is_timed_hmac_valid_v0" in r.message
+        ]
+        assert len(b003) == 0

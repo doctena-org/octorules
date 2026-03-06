@@ -78,9 +78,8 @@ _OPERATORS = frozenset(
         "==",
         "!=",
         "~",
-        "~~",
         "wildcard",
-        "strict",
+        "strict_wildcard",
         "bitwise_and",
     }
 )
@@ -92,11 +91,25 @@ _OPERATOR_FUNCTIONS = frozenset({"starts_with", "ends_with"})
 # Function call pattern
 _FUNCTION_PATTERN = re.compile(r"\b([a-z_][a-z0-9_]*)\s*\(")
 
-# String literal (double-quoted)
-_STRING_LITERAL_PATTERN = re.compile(r'"((?:[^"\\]|\\.)*)"')
+# String literal (double-quoted, excludes raw strings)
+_STRING_LITERAL_PATTERN = re.compile(r'(?<!r)(?<!#)"((?:[^"\\]|\\.)*)"')
 
 # Regex literal (CF uses ~"pattern" or matches "pattern")
-_REGEX_LITERAL_PATTERN = re.compile(r'(?:~\s*"((?:[^"\\]|\\.)*)"|matches\s+"((?:[^"\\]|\\.)*)")')
+# Supports both regular quoted strings and raw strings (r"...", r#"..."#).
+_REGEX_LITERAL_PATTERN = re.compile(
+    r"(?:"
+    r'~\s*"((?:[^"\\]|\\.)*)"'  # ~"pattern"
+    r'|~\s*r"([^"]*)"'  # ~r"pattern"
+    r"|~\s*r#\"([^\"]*)\"#"  # ~r#"pattern"#
+    r'|matches\s+"((?:[^"\\]|\\.)*)"'  # matches "pattern"
+    r'|matches\s*r"([^"]*)"'  # matches r"pattern"
+    r"|matches\s*r#\"([^\"]*)\"#"  # matches r#"pattern"#
+    r")"
+)
+
+# Raw string literal — captures r"..." and r#"..."# content for exclusion
+# from _STRING_LITERAL_PATTERN matches.
+_RAW_STRING_PATTERN = re.compile(r'r"([^"]*)"|r#"([^"]*)"#')
 
 # Integer literal
 _INT_LITERAL_PATTERN = re.compile(r"\b(\d+)\b")
@@ -218,23 +231,42 @@ def _parse_with_regex(expr: str) -> ExpressionInfo:
     # Extract operators used
     all_ops = _OPERATORS | _OPERATOR_FUNCTIONS
     for op in all_ops:
-        if op in ("and", "or", "not", "xor") or op in _OPERATOR_FUNCTIONS:
+        if op == "strict_wildcard":
+            # Two-word operator: match "strict wildcard" in expression text
+            if re.search(r"\bstrict\s+wildcard\b", expr):
+                info.operators_used.append(op)
+        elif op in ("and", "or", "not", "xor") or op in _OPERATOR_FUNCTIONS:
             if re.search(rf"\b{op}\b", expr):
                 info.operators_used.append(op)
         elif op in expr:
             info.operators_used.append(op)
 
-    # Extract regex literals
+    # Extract regex literals (regular and raw string formats)
     for match in _REGEX_LITERAL_PATTERN.finditer(expr):
-        val = match.group(1) or match.group(2)
+        # Groups: 1=~"", 2=~r"", 3=~r#""#, 4=matches"", 5=matches r"", 6=matches r#""#
+        val = (
+            match.group(1)
+            or match.group(2)
+            or match.group(3)
+            or match.group(4)
+            or match.group(5)
+            or match.group(6)
+        )
         if val:
             info.regex_literals.append(val)
     info.has_regex = bool(info.regex_literals) or "matches" in expr or "~" in expr
 
-    # Extract string literals (excluding those already captured as regex)
+    # Collect raw string contents to exclude from string_literals
+    raw_string_contents: set[str] = set()
+    for match in _RAW_STRING_PATTERN.finditer(expr):
+        val = match.group(1) or match.group(2)
+        if val:
+            raw_string_contents.add(val)
+
+    # Extract string literals (excluding regex literals and raw string contents)
     for match in _STRING_LITERAL_PATTERN.finditer(expr):
         val = match.group(1)
-        if val and val not in info.regex_literals:
+        if val and val not in info.regex_literals and val not in raw_string_contents:
             info.string_literals.append(val)
 
     # Extract IP literals (IPv4 + IPv6)

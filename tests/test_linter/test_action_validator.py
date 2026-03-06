@@ -1185,3 +1185,118 @@ class TestC014RateLimitCharacteristics:
         c014 = [r for r in ctx.results if r.rule_id == "C014"]
         assert len(c014) == 1
         assert "bad.field" in c014[0].message
+
+
+class TestBlockResponseValidation:
+    """Tests for C015 — block action response parameter validation."""
+
+    def test_c015_valid_block_response(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {
+                    "response": {
+                        "status_code": 403,
+                        "content_type": "text/html",
+                        "content": "<h1>Blocked</h1>",
+                    }
+                },
+            },
+            "waf_custom_rules",
+        )
+        assert "C015" not in _ids(ctx)
+
+    def test_c015_invalid_status_code_200(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {"response": {"status_code": 200}},
+            },
+            "waf_custom_rules",
+        )
+        c015 = [r for r in ctx.results if r.rule_id == "C015"]
+        assert len(c015) == 1
+        assert "400-499" in c015[0].message
+
+    def test_c015_invalid_status_code_500(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {"response": {"status_code": 500}},
+            },
+            "waf_custom_rules",
+        )
+        c015 = [r for r in ctx.results if r.rule_id == "C015"]
+        assert len(c015) == 1
+
+    def test_c015_boundary_status_codes(self):
+        # 400 and 499 are valid
+        for code in (400, 499):
+            ctx = _lint_rule(
+                {
+                    "ref": "t",
+                    "expression": "true",
+                    "action": "block",
+                    "action_parameters": {"response": {"status_code": code}},
+                },
+                "waf_custom_rules",
+            )
+            assert "C015" not in _ids(ctx), f"status_code {code} should be valid"
+
+    def test_c015_invalid_content_type(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {"response": {"status_code": 403, "content_type": 123}},
+            },
+            "waf_custom_rules",
+        )
+        c015 = [r for r in ctx.results if r.rule_id == "C015"]
+        assert any("content_type" in r.message for r in c015)
+
+    def test_c015_invalid_content(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {"response": {"status_code": 403, "content": 42}},
+            },
+            "waf_custom_rules",
+        )
+        c015 = [r for r in ctx.results if r.rule_id == "C015"]
+        assert any("content must be a string" in r.message for r in c015)
+
+    def test_c015_no_response_no_error(self):
+        """Block action without response parameter is valid."""
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+            },
+            "waf_custom_rules",
+        )
+        assert "C015" not in _ids(ctx)
+
+    def test_c015_response_not_dict_no_error(self):
+        """response that's not a dict is already caught by C004."""
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "block",
+                "action_parameters": {"response": "text"},
+            },
+            "waf_custom_rules",
+        )
+        # C015 shouldn't fire on non-dict response (silently skips)
+        assert "C015" not in _ids(ctx)

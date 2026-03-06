@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from octorules.expression import normalize_expression
-from octorules.linter.engine import LintContext, LintResult, Severity
+from octorules.linter.engine import LintContext, LintResult, Severity, is_always_true
 from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
 
 # Pattern for list references in expressions: $list_name (including dotted managed list names)
@@ -133,7 +133,7 @@ def _check_unreachable_after_terminating(
         # Check if this rule is always-true with a terminating action
         normalized_expr = normalize_expression(str(expr)).lower()
         if (
-            normalized_expr in ("true", "(true)", "((true))")
+            is_always_true(normalized_expr)
             and isinstance(action, str)
             and action in _TERMINATING_ACTIONS
         ):

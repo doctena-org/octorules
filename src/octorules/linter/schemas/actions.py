@@ -327,6 +327,10 @@ VALID_SKIP_PRODUCTS = frozenset(
     }
 )
 
+# --- Block action response status codes (400-499) ---
+
+VALID_BLOCK_RESPONSE_STATUS_CODES = frozenset(range(400, 500))
+
 # --- Rate limit valid characteristics ---
 
 VALID_RATE_LIMIT_CHARACTERISTICS = frozenset(

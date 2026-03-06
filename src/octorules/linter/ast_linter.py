@@ -851,7 +851,7 @@ def _lint_value_constraints(
             )
 
     # G018: Invalid double-asterisk in wildcard pattern
-    if "wildcard" in info.operators_used or "strict" in info.operators_used:
+    if "wildcard" in info.operators_used or "strict_wildcard" in info.operators_used:
         for lit in info.string_literals:
             if "**" in lit:
                 ctx.add(
@@ -871,7 +871,7 @@ def _lint_value_constraints(
     # Also check raw expression for wildcard "pattern**" syntax
     if re.search(r'\b(?:strict\s+)?wildcard\s+"[^"]*\*\*', expr):
         # Only fire if not already caught above
-        if "wildcard" not in info.operators_used and "strict" not in info.operators_used:
+        if "wildcard" not in info.operators_used and "strict_wildcard" not in info.operators_used:
             ctx.add(
                 LintResult(
                     rule_id="G018",
@@ -1266,6 +1266,27 @@ def _lint_type_constraints(
                     )
                     break
 
+    # F003: Array [*] used on multiple distinct arrays
+    # CF constraint: [*] can only appear on the same array in a single expression.
+    star_pattern = re.compile(r"([a-z][a-z0-9_.]*)\[\*\]")
+    star_arrays = set(star_pattern.findall(expr))
+    if len(star_arrays) > 1:
+        ctx.add(
+            LintResult(
+                rule_id="F003",
+                severity=Severity.WARNING,
+                message=(
+                    f"Array unpacking [*] used on {len(star_arrays)} different arrays:"
+                    f" {', '.join(sorted(star_arrays))}."
+                    " Cloudflare requires [*] to be applied to the same array within"
+                    " an expression"
+                ),
+                phase=phase_name,
+                ref=ref,
+                field="expression",
+            )
+        )
+
 
 def _lint_function_constraints(
     info: ExpressionInfo, phase_name: str, ref: str, ctx: LintContext
@@ -1304,6 +1325,26 @@ def _lint_function_constraints(
                     field="expression",
                 )
             )
+
+        # B003: Function requires a higher plan tier
+        if func_def.requires_plan:
+            _PLAN_TIERS = {"free": 0, "pro": 1, "business": 2, "enterprise": 3}
+            current_level = _PLAN_TIERS.get(ctx.plan_tier, 3)
+            required_level = _PLAN_TIERS.get(func_def.requires_plan, 0)
+            if current_level < required_level:
+                ctx.add(
+                    LintResult(
+                        rule_id="B003",
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Function {func_name!r} requires {func_def.requires_plan!r}"
+                            f" plan, but current plan is {ctx.plan_tier!r}"
+                        ),
+                        phase=phase_name,
+                        ref=ref,
+                        field="expression",
+                    )
+                )
 
     # E003: regex_replace/wildcard_replace usage limits
     expr = info.raw
@@ -1404,6 +1445,68 @@ def _lint_function_constraints(
                         field="expression",
                     )
                 )
+
+    # E007: Function source argument must be a field, not a string literal
+    _SOURCE_MUST_BE_FIELD_FUNCS = (
+        "decode_base64",
+        "url_decode",
+        "starts_with",
+        "ends_with",
+        "wildcard_replace",
+    )
+    for func_name in _SOURCE_MUST_BE_FIELD_FUNCS:
+        for call_args in _extract_function_call_args(expr, func_name):
+            if call_args:
+                first_arg = call_args[0].strip()
+                if first_arg.startswith('"') and first_arg.endswith('"'):
+                    ctx.add(
+                        LintResult(
+                            rule_id="E007",
+                            severity=Severity.WARNING,
+                            message=(
+                                f"{func_name}() source argument must be a field reference,"
+                                f" not a string literal"
+                            ),
+                            phase=phase_name,
+                            ref=ref,
+                            field="expression",
+                        )
+                    )
+
+    # G026: bit_slice value validation
+    for call_args in _extract_function_call_args(expr, "bit_slice"):
+        # bit_slice(field, offset, size) — offset max 2040, size max 32
+        if len(call_args) >= 3:
+            try:
+                offset = int(call_args[1].strip())
+                if offset < 0 or offset > 2040:
+                    ctx.add(
+                        LintResult(
+                            rule_id="G026",
+                            severity=Severity.WARNING,
+                            message=f"bit_slice() offset {offset} is outside valid range (0-2040)",
+                            phase=phase_name,
+                            ref=ref,
+                            field="expression",
+                        )
+                    )
+            except ValueError:
+                pass
+            try:
+                size = int(call_args[2].strip())
+                if size < 1 or size > 32:
+                    ctx.add(
+                        LintResult(
+                            rule_id="G026",
+                            severity=Severity.WARNING,
+                            message=f"bit_slice() size {size} is outside valid range (1-32)",
+                            phase=phase_name,
+                            ref=ref,
+                            field="expression",
+                        )
+                    )
+            except ValueError:
+                pass
 
 
 def _split_top_level(expr: str) -> list[tuple[str, str]]:
