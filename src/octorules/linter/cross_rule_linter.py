@@ -9,6 +9,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from octorules.expression import normalize_expression
 from octorules.linter.engine import LintContext, LintResult, Severity
 from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
 
@@ -80,8 +81,7 @@ def _check_duplicate_expressions(phase_name: str, rules: list[dict], ctx: LintCo
         ap = rule.get("action_parameters")
         ap_id = str(ap.get("id", "")) if isinstance(ap, dict) else ""
 
-        # Normalize whitespace for comparison
-        normalized = " ".join(expr.split())
+        normalized = normalize_expression(expr)
         key = (normalized, action, ap_id)
         if key in seen:
             ctx.add(
@@ -131,7 +131,7 @@ def _check_unreachable_after_terminating(
             continue
 
         # Check if this rule is always-true with a terminating action
-        normalized_expr = " ".join(str(expr).split()).strip().lower()
+        normalized_expr = normalize_expression(str(expr)).lower()
         if (
             normalized_expr in ("true", "(true)", "((true))")
             and isinstance(action, str)

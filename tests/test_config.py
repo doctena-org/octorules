@@ -236,6 +236,12 @@ class TestConfig:
         config = Config.from_file(config_file)
         assert config.zones["example.com"].always_dry_run is False
 
+    def test_always_dry_run_string_raises(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone='    always_dry_run: "yes"\n'))
+        with pytest.raises(ConfigError, match="always_dry_run.*must be a boolean"):
+            Config.from_file(config_file)
+
 
 class TestSourcesValidation:
     """Tests for zone sources validation."""
@@ -661,6 +667,12 @@ class TestAllowUnmanaged:
         config_file.write_text(_cfg(extra_zone="    allow_unmanaged: false\n"))
         config = Config.from_file(config_file)
         assert config.zones["example.com"].allow_unmanaged is False
+
+    def test_allow_unmanaged_string_raises(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone='    allow_unmanaged: "yes"\n'))
+        with pytest.raises(ConfigError, match="allow_unmanaged.*must be a boolean"):
+            Config.from_file(config_file)
 
 
 class TestSafetyThresholds:
