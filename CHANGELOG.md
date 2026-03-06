@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.4] - 2026-03-06
+
+### Fixed
+- P001 duplicate expression detection now uses `normalize_expression()` instead
+  of naive whitespace collapsing. Brace whitespace is stripped to match
+  Cloudflare's canonical form (e.g. `{ "AT" "BE" }` → `{"AT" "BE"}`), improving
+  duplicate detection accuracy for expressions with set literals.
+- M013/M014 always-true/always-false detection in `yaml_validator` and
+  `page_shield_linter` now uses `normalize_expression()` for consistent
+  whitespace handling.
+- Config parser rejects non-boolean values for `always_dry_run` and
+  `allow_unmanaged` (e.g. `"yes"` string) with a clear error message instead
+  of silently coercing via `bool()`.
+- `BadRequestError` and `PermissionDeniedError` when fetching phase rules are
+  now logged at INFO instead of DEBUG, so users see why phases were skipped
+  without enabling debug mode.
+
+### Added
+- PEP 561 `py.typed` marker for type checker integration.
+
 ## [0.12.3] - 2026-03-06
 
 ### Changed

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from octorules.expression import normalize_expression
 from octorules.linter.engine import (
     ALWAYS_FALSE_EXPRESSIONS,
     ALWAYS_TRUE_EXPRESSIONS,
@@ -150,7 +151,7 @@ def _check_policy_structure(
     # M013 / M014: always-true / always-false expressions
     expr = policy.get("expression")
     if isinstance(expr, str):
-        normalized_expr = " ".join(expr.split()).strip().lower()
+        normalized_expr = normalize_expression(expr).lower()
         if normalized_expr in ALWAYS_TRUE_EXPRESSIONS:
             ctx.add(
                 LintResult(

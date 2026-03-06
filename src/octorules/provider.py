@@ -193,13 +193,13 @@ class CloudflareProvider:
             # Cloudflare returns 400 for phases the zone/account doesn't
             # support (e.g. SBFM without the entitlement).  Treat the same
             # as "no ruleset" so callers aren't surprised.
-            log.debug("Phase %s not supported for %s: %s", cf_phase, _fmt_scope(scope), e)
+            log.info("Phase %s not supported for %s: %s", cf_phase, _fmt_scope(scope), e)
             return []
         except PermissionDeniedError as e:
             # Token lacks permission for this specific phase (e.g. ddos_l7,
             # http_log_custom_fields).  Skip rather than aborting the entire
             # operation — the caller can still process other phases.
-            log.debug("Phase %s not permitted for %s: %s", cf_phase, _fmt_scope(scope), e)
+            log.info("Phase %s not permitted for %s: %s", cf_phase, _fmt_scope(scope), e)
             return []
 
     def put_phase_rules(self, scope: Scope, cf_phase: str, rules: list[dict]) -> int:

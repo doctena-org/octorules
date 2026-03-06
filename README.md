@@ -103,13 +103,12 @@ waf_custom_rules:
       (ip.geoip.asnum in {
         9009
         64080
-      }
-        and not ip.geoip.country in {
-          "AT"
-          "BE"
-          "DE"
-          "FR"
-        })
+      } and not ip.geoip.country in {
+        "AT"
+        "BE"
+        "DE"
+        "FR"
+      })
 ```
 
 This is equivalent to the single-line form `(ip.geoip.asnum in {9009 64080} and not ip.geoip.country in {"AT" "BE" "DE" "FR"})`. Use `|-` (strip trailing newline) rather than `|` (preserves trailing newline).

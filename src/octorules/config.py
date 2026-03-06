@@ -142,8 +142,21 @@ def _parse_zone(
             raise ConfigError(f"'zones.{zone_name}.sources' references unknown provider {entry!r}")
         sources.append(entry)
 
-    always_dry_run = bool(zone_data.get("always_dry_run", False))
-    allow_unmanaged = bool(zone_data.get("allow_unmanaged", False))
+    raw_dry_run = zone_data.get("always_dry_run", False)
+    if not isinstance(raw_dry_run, bool):
+        raise ConfigError(
+            f"'zones.{zone_name}.always_dry_run' must be a boolean"
+            f" (got {type(raw_dry_run).__name__})"
+        )
+    always_dry_run = raw_dry_run
+
+    raw_unmanaged = zone_data.get("allow_unmanaged", False)
+    if not isinstance(raw_unmanaged, bool):
+        raise ConfigError(
+            f"'zones.{zone_name}.allow_unmanaged' must be a boolean"
+            f" (got {type(raw_unmanaged).__name__})"
+        )
+    allow_unmanaged = raw_unmanaged
 
     # Per-zone safety overrides
     zone_safety = zone_data.get("safety", {})
