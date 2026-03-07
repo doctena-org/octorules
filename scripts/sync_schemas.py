@@ -21,6 +21,9 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 
 try:
+    import importlib.metadata
+
+    _wf_version = importlib.metadata.version("octorules-wirefilter")
     from octorules_wirefilter import get_schema_info
 except ImportError:
     print(
@@ -35,6 +38,7 @@ SCHEMAS_DIR = Path(__file__).resolve().parent.parent / "src" / "octorules" / "li
 OVERLAY_PATH = SCHEMAS_DIR / "overlay.toml"
 FIELDS_PATH = SCHEMAS_DIR / "fields.py"
 FUNCTIONS_PATH = SCHEMAS_DIR / "functions.py"
+VERSION_PATH = SCHEMAS_DIR / ".wirefilter-version"
 
 BEGIN_FIELDS = "# --- BEGIN GENERATED FIELDS --- #"
 END_FIELDS = "# --- END GENERATED FIELDS --- #"
@@ -175,26 +179,46 @@ def main() -> None:
     )
 
     if args.check:
+        # Warn if installed wirefilter differs from what generated the schemas
+        if VERSION_PATH.exists():
+            expected_version = VERSION_PATH.read_text().strip()
+            if _wf_version != expected_version:
+                print(
+                    f"WARNING: schemas were generated with wirefilter {expected_version}, "
+                    f"but {_wf_version} is installed.",
+                    file=sys.stderr,
+                )
+
         fields_ok = new_fields_content == fields_content
         functions_ok = new_functions_content == functions_content
         if fields_ok and functions_ok:
-            print("OK: schemas are in sync with wirefilter.")
+            print(f"OK: schemas are in sync with wirefilter {_wf_version}.")
             sys.exit(0)
         else:
             if not fields_ok:
                 print(f"DIFF: {FIELDS_PATH} is out of sync.", file=sys.stderr)
             if not functions_ok:
                 print(f"DIFF: {FUNCTIONS_PATH} is out of sync.", file=sys.stderr)
-            print(
-                "Run 'python scripts/sync_schemas.py' to regenerate.",
-                file=sys.stderr,
-            )
+            hint = "Run 'python scripts/sync_schemas.py' to regenerate."
+            if VERSION_PATH.exists():
+                expected_version = VERSION_PATH.read_text().strip()
+                if _wf_version != expected_version:
+                    hint = (
+                        f"Installed wirefilter {_wf_version} differs from "
+                        f"{expected_version} (used to generate schemas).\n"
+                        f"Run: pip install octorules-wirefilter=={expected_version} "
+                        f"&& python scripts/sync_schemas.py\n"
+                        f"Or regenerate with the new version: python scripts/sync_schemas.py"
+                    )
+            print(hint, file=sys.stderr)
             sys.exit(1)
     else:
         FIELDS_PATH.write_text(new_fields_content)
         FUNCTIONS_PATH.write_text(new_functions_content)
+        VERSION_PATH.write_text(_wf_version + "\n")
         print(f"Updated {FIELDS_PATH}")
         print(f"Updated {FUNCTIONS_PATH}")
+        print(f"Recorded wirefilter version: {_wf_version}")
 
 
 if __name__ == "__main__":
