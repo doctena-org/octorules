@@ -54,6 +54,9 @@
 "http.request.jwt.claims.aud" = { requires_plan = "enterprise" }
 "http.request.jwt.claims.aud.names" = { requires_plan = "enterprise" }
 "http.request.jwt.claims.aud.values" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.exp.sec" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.exp.sec.names" = { requires_plan = "enterprise" }
+"http.request.jwt.claims.exp.sec.values" = { requires_plan = "enterprise" }
 "http.request.jwt.claims.iat.sec" = { requires_plan = "enterprise" }
 "http.request.jwt.claims.iat.sec.names" = { requires_plan = "enterprise" }
 "http.request.jwt.claims.iat.sec.values" = { requires_plan = "enterprise" }
@@ -86,9 +89,16 @@
 "to_string" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "redirect_rules"] }
 "regex_replace" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "redirect_rules"] }
 "uuidv4" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
-"sha256" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"sha256" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"], requires_plan = "enterprise" }
 "http.request.uri.path" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
 "encode_base64" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"decode_base64" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "waf_custom_rules", "rate_limiting_rules"] }
 "wildcard_replace" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "redirect_rules"] }
 "remove_query_args" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules"] }
+"cidr" = { restricted_phases = ["waf_custom_rules", "rate_limiting_rules"] }
+"cidr6" = { restricted_phases = ["waf_custom_rules", "rate_limiting_rules"] }
+"join" = { restricted_phases = ["url_rewrite_rules", "request_header_rules", "response_header_rules", "waf_custom_rules", "custom_error_rules"] }
+"split" = { restricted_phases = ["response_header_rules", "custom_error_rules"] }
+"bit_slice" = { restricted_phases = ["network_firewall_rules", "network_ddos_rules", "network_firewall_managed", "network_firewall_ratelimit", "network_firewall_ids"] }
+"is_timed_hmac_valid_v0" = { requires_plan = "pro" }
 "cf.bot_management.score" = { requires_plan = "enterprise" }

@@ -116,12 +116,24 @@ def generate_functions_block(schema: dict, overlay: dict) -> str:
             }:
                 kwargs.append("restricted_phases=_TRANSFORM_PHASES")
             else:
-                phase_str = ", ".join(f'"{p}"' for p in sorted(phases))
-                kwargs.append(f"restricted_phases=frozenset({{{phase_str}}})")
+                phase_items = [f'"{p}"' for p in sorted(phases)]
+                one_line = "frozenset({" + ", ".join(phase_items) + "})"
+                if len(f"    restricted_phases={one_line},") <= 100:
+                    kwargs.append(f"restricted_phases={one_line}")
+                else:
+                    # Match ruff's formatting: frozenset(\n    {\n        items\n    }\n)
+                    inner = "".join(f"\n            {p}," for p in phase_items)
+                    kwargs.append(
+                        f"restricted_phases=frozenset(\n        {{{inner}\n        }}\n    )"
+                    )
         if meta.get("requires_plan"):
             kwargs.append(f'requires_plan="{meta["requires_plan"]}"')
         if kwargs:
-            lines.append(f'_fn("{name}", {", ".join(kwargs)})')
+            line = f'_fn("{name}", {", ".join(kwargs)})'
+            if len(line) > 100:
+                all_args = [f'"{name}"'] + kwargs
+                line = "_fn(\n" + "".join(f"    {a},\n" for a in all_args) + ")"
+            lines.append(line)
         else:
             lines.append(f'_fn("{name}")')
     return "\n".join(lines)
