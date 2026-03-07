@@ -293,6 +293,32 @@ class TestSuppressions:
         suppressions = parse_suppressions("/nonexistent/path.yaml")
         assert suppressions == {}
 
+    def test_unknown_rule_id_warns(self, tmp_path, caplog):
+        """Suppressing an unknown rule ID logs a warning and drops it."""
+        import logging
+
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:disable=X999\n- ref: foo\n  expression: 'true'\n")
+        with caplog.at_level(logging.WARNING, logger="octorules.linter"):
+            suppressions = parse_suppressions(f, known_rules={"M001", "M002"})
+        assert "Unknown rule ID 'X999'" in caplog.text
+        # X999 should not appear in suppressions
+        all_ids = set()
+        for ids in suppressions.values():
+            all_ids |= ids
+        assert "X999" not in all_ids
+
+    def test_known_rule_id_not_warned(self, tmp_path, caplog):
+        """Known rule IDs should not produce warnings."""
+        import logging
+
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:disable=M001\n- ref: foo\n  expression: 'true'\n")
+        with caplog.at_level(logging.WARNING, logger="octorules.linter"):
+            suppressions = parse_suppressions(f, known_rules={"M001", "M002"})
+        assert "Unknown rule ID" not in caplog.text
+        assert "M001" in suppressions.get("foo", set())
+
 
 class TestIsAlwaysTrue:
     def test_bare_true(self):

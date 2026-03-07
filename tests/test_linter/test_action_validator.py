@@ -30,6 +30,9 @@ class TestActionValidity:
     def test_c001_invalid_action_for_phase(self):
         ctx = _lint_rule({"ref": "t", "expression": "true", "action": "block"}, "redirect_rules")
         assert "C001" in _ids(ctx)
+        c001 = [r for r in ctx.results if r.rule_id == "C001"]
+        assert len(c001) == 1
+        assert c001[0].severity == Severity.ERROR
 
     def test_c001_valid_action(self):
         ctx = _lint_rule({"ref": "t", "expression": "true", "action": "redirect"}, "redirect_rules")
@@ -38,6 +41,9 @@ class TestActionValidity:
     def test_c002_missing_action_no_default(self):
         ctx = _lint_rule({"ref": "t", "expression": "true"}, "waf_custom_rules")
         assert "C002" in _ids(ctx)
+        c002 = [r for r in ctx.results if r.rule_id == "C002"]
+        assert len(c002) == 1
+        assert c002[0].severity == Severity.ERROR
 
     def test_c002_no_error_with_default(self):
         # redirect_rules has default action "redirect"
@@ -48,6 +54,7 @@ class TestActionValidity:
         """Non-string action should report C002 instead of silently skipping."""
         ctx = _lint_rule({"ref": "t", "expression": "true", "action": 123}, "waf_custom_rules")
         assert "C002" in _ids(ctx)
+        assert len(ctx.results) == 1
         assert "must be a string" in ctx.results[0].message
 
     def test_c003_missing_action_parameters(self):
@@ -56,6 +63,9 @@ class TestActionValidity:
             "redirect_rules",
         )
         assert "C003" in _ids(ctx)
+        c003 = [r for r in ctx.results if r.rule_id == "C003"]
+        assert len(c003) == 1
+        assert c003[0].severity == Severity.ERROR
 
     def test_c004_unknown_parameter_key(self):
         ctx = _lint_rule(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -256,7 +257,8 @@ def _get_zones(config: Config, zone_filter: list[str] | None) -> list[str]:
     if zone_filter:
         for zone in zone_filter:
             if zone not in config.zones:
-                raise ConfigError(f"Zone {zone!r} not found in config")
+                available = ", ".join(sorted(config.zones))
+                raise ConfigError(f"Zone {zone!r} not found in config. Available: {available}")
         return zone_filter
     return list(config.zones.keys())
 
@@ -1235,6 +1237,9 @@ def _apply_zone_changes(
     return 0
 
 
+_CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
 def cmd_sync(
     config: Config,
     zone_filter: list[str] | None,
@@ -1244,6 +1249,10 @@ def cmd_sync(
     scope_filter: str = "all",
 ) -> int:
     """Run the sync command. Returns exit code."""
+    if checksum is not None and not _CHECKSUM_RE.match(checksum):
+        raise ConfigError(
+            f"Invalid checksum format: {checksum!r} (expected 64-character hex string)"
+        )
     provider = _init_provider(config)
     # Shared executor reused across plan + apply phases
     shared_ex: ThreadPoolExecutor | None = None
@@ -1359,10 +1368,12 @@ def cmd_lint(
     exit_code: bool = False,
 ) -> int:
     """Lint rules files for errors and warnings. Returns exit code."""
-    from octorules.linter.engine import Severity, lint_zone_file
+    from octorules.linter.engine import Severity, get_known_rule_ids, lint_zone_file
     from octorules.linter.expression_bridge import WIREFILTER_AVAILABLE
     from octorules.linter.report import FORMATTERS
     from octorules.linter.suppressions import parse_suppressions
+
+    known_rules = get_known_rule_ids()
 
     if WIREFILTER_AVAILABLE:
         log.info("Expression parser: wirefilter")
@@ -1377,6 +1388,7 @@ def cmd_lint(
 
     zone_names = _get_zones(config, zone_filter)
     all_results: list = []
+    total_suppressed = 0
     has_errors = False
     has_warnings = False
 
@@ -1395,7 +1407,7 @@ def cmd_lint(
         else:
             plan_tier = "enterprise"
 
-        suppressions = parse_suppressions(rules_file)
+        suppressions = parse_suppressions(rules_file, known_rules=known_rules)
 
         ctx = lint_zone_file(
             desired,
@@ -1407,6 +1419,8 @@ def cmd_lint(
             rule_filter=lint_rules,
             suppressions=suppressions,
         )
+
+        total_suppressed += ctx.suppressed_count
 
         if ctx.results:
             output = formatter(ctx)
@@ -1432,6 +1446,9 @@ def cmd_lint(
         combined.results = all_results
         if not _write_output_file(output_file, lambda f: formatter(combined, f)):
             return 1
+
+    if total_suppressed > 0:
+        log.info("Lint: %d issue(s) suppressed", total_suppressed)
 
     if not all_results:
         log.info("No lint issues found.")

@@ -195,15 +195,28 @@ def normalize_rule(rule: dict) -> dict:
     return {k: _normalize_value(v, key=k) for k, v in rule.items() if k not in API_ONLY_FIELDS}
 
 
-def _require_string_field(entry: dict, field_name: str, context: str) -> str:
-    """Validate that *entry* has a non-empty string *field_name*.
+def _require_field(entry: dict, field_name: str, context: str, expected_type: type) -> object:
+    """Validate that *entry* has a *field_name* of *expected_type*.
 
     Returns the field value. Raises RuleValidationError with *context* on failure.
     """
     if field_name not in entry:
         raise RuleValidationError(f"{context} is missing required {field_name!r} field")
     value = entry[field_name]
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, expected_type):
+        raise RuleValidationError(
+            f"{context} has invalid {field_name!r} (must be a {expected_type.__name__})"
+        )
+    return value
+
+
+def _require_string_field(entry: dict, field_name: str, context: str) -> str:
+    """Validate that *entry* has a non-empty string *field_name*.
+
+    Returns the field value. Raises RuleValidationError with *context* on failure.
+    """
+    value = _require_field(entry, field_name, context, str)
+    if not value:
         raise RuleValidationError(
             f"{context} has invalid {field_name!r} (must be a non-empty string)"
         )
@@ -746,32 +759,27 @@ def validate_list_entry(entry: dict, index: int) -> None:
     Checks: name required, kind required (one of valid kinds), items must be a list,
     each item must have the field matching kind, no duplicate identity values.
     """
-    if "name" not in entry:
-        raise RuleValidationError(f"lists[{index}] is missing required 'name' field")
-    name = entry["name"]
-    if not isinstance(name, str) or not name:
-        raise RuleValidationError(f"lists[{index}] has invalid 'name' (must be a non-empty string)")
-    if "kind" not in entry:
-        raise RuleValidationError(f"lists[{index}] ({name!r}) is missing required 'kind' field")
-    kind = entry["kind"]
+    ctx = f"lists[{index}]"
+    name = _require_string_field(entry, "name", ctx)
+    ctx_name = f"{ctx} ({name!r})"
+    kind = _require_string_field(entry, "kind", ctx_name)
     if kind not in _VALID_LIST_KINDS:
         raise RuleValidationError(
-            f"lists[{index}] ({name!r}) has invalid 'kind' {kind!r}."
+            f"{ctx_name} has invalid 'kind' {kind!r}."
             f" Must be one of: {', '.join(sorted(_VALID_LIST_KINDS))}"
         )
     items = entry.get("items", [])
     if not isinstance(items, list):
-        raise RuleValidationError(f"lists[{index}] ({name!r}) 'items' must be a list")
+        raise RuleValidationError(f"{ctx_name} 'items' must be a list")
     seen: set[str] = set()
     for i, item in enumerate(items):
         identity = _item_identity(item, kind)
         if not identity:
             raise RuleValidationError(
-                f"lists[{index}] ({name!r}) item at index {i}"
-                f" is missing required field for kind {kind!r}"
+                f"{ctx_name} item at index {i} is missing required field for kind {kind!r}"
             )
         if identity in seen:
-            raise RuleValidationError(f"lists[{index}] ({name!r}) has duplicate item {identity!r}")
+            raise RuleValidationError(f"{ctx_name} has duplicate item {identity!r}")
         seen.add(identity)
 
 
@@ -973,10 +981,7 @@ def validate_page_shield_policy(entry: dict, index: int) -> None:
             f" Must be one of: {', '.join(sorted(_VALID_PAGE_SHIELD_ACTIONS))}"
         )
     _require_string_field(entry, "expression", ctx_desc)
-    if "enabled" not in entry:
-        raise RuleValidationError(f"{ctx_desc} is missing required 'enabled' field")
-    if not isinstance(entry["enabled"], bool):
-        raise RuleValidationError(f"{ctx_desc} has invalid 'enabled' (must be a boolean)")
+    _require_field(entry, "enabled", ctx_desc, bool)
     _require_string_field(entry, "value", ctx_desc)
 
 

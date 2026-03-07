@@ -10,6 +10,10 @@ human-readable plan output.
 
 from __future__ import annotations
 
+import logging
+
+log = logging.getLogger("octorules")
+
 
 def normalize_expression(expr: str) -> str:
     """Collapse whitespace outside double-quoted strings to single spaces.
@@ -80,6 +84,9 @@ def normalize_expression(expr: str) -> str:
                 ws_run = False
             after_open_brace = ch == "{"
             result.append(ch)
+
+    if in_quote:
+        log.warning("Unmatched quote in expression: %.80s...", expr if len(expr) > 80 else expr)
 
     return "".join(result).strip()
 

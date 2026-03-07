@@ -189,17 +189,25 @@ class CloudflareProvider:
             return [_rule_to_dict(r) for r in rules]
         except NotFoundError:
             return []
-        except BadRequestError as e:
+        except BadRequestError:
             # Cloudflare returns 400 for phases the zone/account doesn't
             # support (e.g. SBFM without the entitlement).  Treat the same
             # as "no ruleset" so callers aren't surprised.
-            log.info("Phase %s not supported for %s: %s", cf_phase, _fmt_scope(scope), e)
+            log.debug(
+                "Skipping phase %s for %s (not supported on this plan)",
+                cf_phase,
+                _fmt_scope(scope),
+            )
             return []
-        except PermissionDeniedError as e:
+        except PermissionDeniedError:
             # Token lacks permission for this specific phase (e.g. ddos_l7,
             # http_log_custom_fields).  Skip rather than aborting the entire
             # operation — the caller can still process other phases.
-            log.info("Phase %s not permitted for %s: %s", cf_phase, _fmt_scope(scope), e)
+            log.debug(
+                "Skipping phase %s for %s (token lacks permission)",
+                cf_phase,
+                _fmt_scope(scope),
+            )
             return []
 
     def put_phase_rules(self, scope: Scope, cf_phase: str, rules: list[dict]) -> int:
@@ -475,7 +483,12 @@ class CloudflareProvider:
         return all_items
 
     def put_list_items(self, scope: Scope, list_id: str, items: list[dict]) -> str:
-        """Replace all items in a list (async). Returns operation_id."""
+        """Replace all items in a list (async). Returns operation_id.
+
+        Unlike ``put_phase_rules``, no count-check is performed here because
+        this is an async bulk operation — the actual items are applied
+        server-side and validated during ``poll_bulk_operation``.
+        """
         sl = _fmt_scope(scope)
         log.debug("PUT rules/lists/%s/items %s items=%d", list_id, sl, len(items))
         result = self._client.rules.lists.items.update(list_id, **scope.api_kwargs, body=items)

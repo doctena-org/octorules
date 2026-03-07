@@ -1181,3 +1181,41 @@ class TestMaxWorkersInit:
         # Fetch just 2 phases — workers should be min(4, 2) = 2
         result = provider.get_all_phase_rules(scope, cf_phases=["p1", "p2"])
         assert isinstance(result, PhaseRulesResult)
+
+
+class TestProviderErrorScenarios:
+    """Additional error scenario tests (audit TODO 9)."""
+
+    def test_put_phase_rules_empty_response_rules(self, mock_cf_client, caplog):
+        """put_phase_rules with None response rules logs warning about count mismatch."""
+        rules = [{"ref": "r1", "expression": "true", "action": "redirect"}]
+        mock_cf_client.rulesets.phases.update.return_value = MockRuleset(rules=None)
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            count = provider.put_phase_rules(_zs(), "http_request_dynamic_redirect", rules)
+        assert count == 0
+        assert "sent 1 rule(s) but response contains 0" in caplog.text
+
+    def test_get_list_items_retry_exhaustion(self, mock_cf_client):
+        """get_list_items should raise after all retries are exhausted."""
+        from cloudflare import APIError
+
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = APIError(
+            "Server Error", request=MagicMock(), body=None
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        with pytest.raises(APIError, match="Server Error"):
+            provider.get_list_items(scope, "lst-1", _page_retries=1)
+        # Should have been called 2 times (1 initial + 1 retry)
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 2
+
+    def test_poll_bulk_operation_timeout(self, mock_cf_client):
+        """poll_bulk_operation should raise TimeoutError when status stays 'running'."""
+        mock_cf_client.rules.lists.bulk_operations.get.return_value = MockRule(
+            {"status": "running"}
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        with pytest.raises(TimeoutError, match="timed out after 0.01s"):
+            provider.poll_bulk_operation(scope, "op-timeout", timeout=0.01, interval=0.001)

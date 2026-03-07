@@ -605,6 +605,25 @@ class TestDisplayPreservesQuotes:
         assert '"hello { world } test"' in result
 
 
+class TestUnmatchedQuotes:
+    """TODO 1/10: Unmatched quotes should produce a warning, not crash."""
+
+    def test_unmatched_quote_warns(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            result = normalize_expression('(http.host eq "unclosed)')
+        assert "Unmatched quote" in caplog.text
+        # Should still return something (not crash)
+        assert isinstance(result, str)
+
+    def test_unmatched_quote_idempotent(self):
+        expr = 'http.host eq "open'
+        once = normalize_expression(expr)
+        twice = normalize_expression(once)
+        assert once == twice
+
+
 class TestDisplayEdgeCases:
     def test_unmatched_brace(self):
         expr = "ip.src in {1.2.3.4 " + "a " * 50  # no closing brace

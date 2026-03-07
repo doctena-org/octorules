@@ -76,7 +76,13 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
 
 
 def resolve_value(value: str) -> str:
-    """Resolve a value, expanding env/ prefix to environment variable."""
+    """Resolve a value, expanding ``env/`` prefix to an environment variable.
+
+    Strings starting with ``env/`` are treated as references to environment
+    variables.  For example, ``env/CLOUDFLARE_API_TOKEN`` is resolved to the
+    value of ``$CLOUDFLARE_API_TOKEN``.  Raises ``ConfigError`` if the
+    environment variable is not set.  All other strings are returned as-is.
+    """
     if isinstance(value, str) and value.startswith("env/"):
         env_var = value[4:]
         result = os.environ.get(env_var)
@@ -217,7 +223,16 @@ class Config:
 
     @classmethod
     def from_file(cls, path: str | Path) -> Config:
-        """Load config from a YAML file."""
+        """Load config from a YAML file.
+
+        The config file is a YAML mapping with three main sections:
+
+        * ``providers`` — Cloudflare credentials (``token`` supports the
+          ``env/VARNAME`` syntax to read from environment variables), rules
+          directory, and safety thresholds.
+        * ``zones`` — per-zone settings (sources, safety overrides).
+        * ``manager`` — concurrency and plan output configuration.
+        """
         path = Path(path)
         if not path.exists():
             raise ConfigError(f"Config file not found: {path}")
