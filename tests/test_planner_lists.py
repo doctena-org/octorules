@@ -15,6 +15,7 @@ from octorules.planner import (
     RuleChange,
     RuleValidationError,
     ZonePlan,
+    _items_by_identity,
     check_safety,
     compute_checksum,
     diff_list,
@@ -898,3 +899,64 @@ class TestWarnUnknownPhaseKeysLists:
             warn_unknown_phase_keys(rules_data, "account")
         assert "lists" not in caplog.text
         assert "bogus_phase" in caplog.text
+
+
+class TestItemsByIdentity:
+    """Tests for _items_by_identity helper."""
+
+    def test_ip_items_indexed(self):
+        items = [{"ip": "1.2.3.4"}, {"ip": "5.6.7.8"}]
+        result = _items_by_identity(items, "ip")
+        assert result == {"1.2.3.4": {"ip": "1.2.3.4"}, "5.6.7.8": {"ip": "5.6.7.8"}}
+
+    def test_empty_identity_skipped_with_warning(self, caplog):
+        """Items with empty identity keys should be skipped and a warning logged."""
+        items = [{"ip": "1.2.3.4"}, {"wrong_field": "value"}]
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            result = _items_by_identity(items, "ip")
+        assert len(result) == 1
+        assert "1.2.3.4" in result
+        assert "empty identity key" in caplog.text
+
+    def test_hostname_items_indexed(self):
+        items = [
+            {"hostname": {"url_hostname": "example.com"}},
+            {"hostname": {"url_hostname": "other.com"}},
+        ]
+        result = _items_by_identity(items, "hostname")
+        assert "example.com" in result
+        assert "other.com" in result
+
+    def test_duplicate_identity_warns(self, caplog):
+        """Duplicate identity keys should log a warning."""
+        items = [{"ip": "1.2.3.4", "comment": "first"}, {"ip": "1.2.3.4", "comment": "second"}]
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            result = _items_by_identity(items, "ip")
+        assert len(result) == 1
+        assert result["1.2.3.4"]["comment"] == "second"
+        assert "Duplicate list item identity" in caplog.text
+
+
+class TestItemIdentity:
+    """Tests for _item_identity helper."""
+
+    def test_asn_none_returns_empty(self):
+        """ASN with None value should return empty string, not 'None'."""
+        from octorules.planner import _item_identity
+
+        assert _item_identity({"asn": None}, "asn") == ""
+
+    def test_asn_missing_returns_empty(self):
+        from octorules.planner import _item_identity
+
+        assert _item_identity({}, "asn") == ""
+
+    def test_asn_int_returns_string(self):
+        from octorules.planner import _item_identity
+
+        assert _item_identity({"asn": 64512}, "asn") == "64512"
+
+    def test_asn_string_returns_string(self):
+        from octorules.planner import _item_identity
+
+        assert _item_identity({"asn": "64512"}, "asn") == "64512"

@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from functools import cached_property
+from operator import itemgetter
 from typing import TYPE_CHECKING
 
 from octorules.expression import normalize_expression
@@ -173,16 +174,40 @@ class RuleValidationError(Exception):
     """Raised when a rule fails validation."""
 
 
-def _normalize_value(v: object) -> object:
-    """Normalize a value for comparison: normalize expression whitespace for strings."""
-    if isinstance(v, str):
+# Keys whose string values need whitespace normalization for comparison.
+# Includes wirefilter expressions and CSP value strings (which the dumper
+# may reformat as multi-line block scalars).
+_NORMALIZE_KEYS = frozenset({"expression", "counting_expression", "value"})
+
+
+def _normalize_value(v: object, *, key: str = "") -> object:
+    """Normalize a value for comparison.
+
+    Only applies expression normalization to known expression keys.
+    """
+    if key in _NORMALIZE_KEYS and isinstance(v, str):
         return normalize_expression(v)
     return v
 
 
 def normalize_rule(rule: dict) -> dict:
-    """Strip API-only fields and normalize values for comparison."""
-    return {k: _normalize_value(v) for k, v in rule.items() if k not in API_ONLY_FIELDS}
+    """Strip API-only fields and normalize expression values for comparison."""
+    return {k: _normalize_value(v, key=k) for k, v in rule.items() if k not in API_ONLY_FIELDS}
+
+
+def _require_string_field(entry: dict, field_name: str, context: str) -> str:
+    """Validate that *entry* has a non-empty string *field_name*.
+
+    Returns the field value. Raises RuleValidationError with *context* on failure.
+    """
+    if field_name not in entry:
+        raise RuleValidationError(f"{context} is missing required {field_name!r} field")
+    value = entry[field_name]
+    if not isinstance(value, str) or not value:
+        raise RuleValidationError(
+            f"{context} has invalid {field_name!r} (must be a non-empty string)"
+        )
+    return value
 
 
 def validate_rules(rules: list[dict], phase: Phase) -> None:
@@ -195,26 +220,9 @@ def validate_rules(rules: list[dict], phase: Phase) -> None:
     """
     seen_refs: set[str] = set()
     for i, rule in enumerate(rules):
-        if "ref" not in rule:
-            raise RuleValidationError(
-                f"Rule at index {i} in {phase.friendly_name!r} is missing required 'ref' field"
-            )
-        ref = rule["ref"]
-        if not isinstance(ref, str) or not ref:
-            raise RuleValidationError(
-                f"Rule at index {i} in {phase.friendly_name!r} has invalid 'ref'"
-                " (must be a non-empty string)"
-            )
-        if "expression" not in rule:
-            raise RuleValidationError(
-                f"Rule {ref!r} in {phase.friendly_name!r} is missing required 'expression' field"
-            )
-        expr = rule["expression"]
-        if not isinstance(expr, str) or not expr:
-            raise RuleValidationError(
-                f"Rule {ref!r} in {phase.friendly_name!r} has invalid 'expression'"
-                " (must be a non-empty string)"
-            )
+        ctx = f"Rule at index {i} in {phase.friendly_name!r}"
+        ref = _require_string_field(rule, "ref", ctx)
+        _require_string_field(rule, "expression", f"Rule {ref!r} in {phase.friendly_name!r}")
         if ref in seen_refs:
             raise RuleValidationError(f"Duplicate ref {ref!r} in {phase.friendly_name!r}")
         seen_refs.add(ref)
@@ -239,11 +247,16 @@ def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
 
 
 def _rules_by_ref(rules: list[dict]) -> dict[str, dict]:
-    """Index a list of rules by their ref field."""
-    result = {}
+    """Index a list of rules by their ref field.
+
+    If duplicate refs exist, the last one wins and a warning is logged.
+    """
+    result: dict[str, dict] = {}
     for rule in rules:
         ref = rule.get("ref")
         if ref:
+            if ref in result:
+                log.warning("Duplicate ref %r in rules — later entry overwrites earlier", ref)
             result[ref] = rule
     return result
 
@@ -293,10 +306,8 @@ def _diff_rules(
     """Compute add/remove/modify/reorder changes between desired and current rules.
 
     Works for both real phases and synthetic phases (custom rulesets). When
-    allow_unmanaged=True, REMOVE changes are suppressed. Note: when
-    allow_unmanaged=True, current may contain extra refs not in desired, so the
-    set comparison will be False and reorder is not detected for the managed
-    subset. This is a known limitation.
+    allow_unmanaged=True, REMOVE changes are suppressed and reorder detection
+    is scoped to the managed (desired) refs only.
     """
     changes: list[RuleChange] = []
     desired_by_ref = _rules_by_ref(desired_rules)
@@ -345,9 +356,12 @@ def _diff_rules(
             change.__dict__["normalized_desired"] = norm_desired
             changes.append(change)
 
-    # Reorder detection (same set of refs, but different order)
+    # Reorder detection (same set of refs, but different order).
+    # When allow_unmanaged=True, filter current to only managed refs.
     desired_order = _ref_order(desired_rules)
     current_order = _ref_order(current_rules)
+    if allow_unmanaged:
+        current_order = [r for r in current_order if r in desired_refs]
     if set(desired_order) == set(current_order) and desired_order != current_order:
         changes.append(
             RuleChange(
@@ -423,46 +437,26 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
 
     Checks: id, name, phase, and rules list are present and valid.
     """
-    if "id" not in entry:
-        raise RuleValidationError(f"custom_rulesets[{index}] is missing required 'id' field")
-    rid = entry["id"]
-    if not isinstance(rid, str) or not rid:
-        raise RuleValidationError(f"custom_rulesets[{index}] has invalid 'id'")
-    if "name" not in entry:
-        raise RuleValidationError(f"custom_rulesets[{index}] is missing required 'name' field")
-    if "phase" not in entry:
-        raise RuleValidationError(f"custom_rulesets[{index}] is missing required 'phase' field")
+    ctx = f"custom_rulesets[{index}]"
+    rid = _require_string_field(entry, "id", ctx)
+    _require_string_field(entry, "name", ctx)
+    _require_string_field(entry, "phase", ctx)
     phase = entry["phase"]
     if phase not in PHASE_BY_CF:
         raise RuleValidationError(
-            f"custom_rulesets[{index}] has invalid 'phase' {phase!r}."
+            f"{ctx} has invalid 'phase' {phase!r}."
             f" Use a valid CF phase ID (e.g. 'http_request_firewall_custom')"
         )
     rules = entry.get("rules", [])
     if not isinstance(rules, list):
-        raise RuleValidationError(f"custom_rulesets[{index}] 'rules' must be a list")
+        raise RuleValidationError(f"{ctx} 'rules' must be a list")
     # Validate individual rules
     seen_refs: set[str] = set()
     label = entry.get("name") or rid
     for ri, rule in enumerate(rules):
-        if "ref" not in rule:
-            raise RuleValidationError(
-                f"Rule at index {ri} in custom ruleset {label!r} is missing required 'ref' field"
-            )
-        ref = rule["ref"]
-        if not isinstance(ref, str) or not ref:
-            raise RuleValidationError(
-                f"Rule at index {ri} in custom ruleset {label!r} has invalid 'ref'"
-            )
-        if "expression" not in rule:
-            raise RuleValidationError(
-                f"Rule {ref!r} in custom ruleset {label!r} is missing required 'expression' field"
-            )
-        expr = rule["expression"]
-        if not isinstance(expr, str) or not expr:
-            raise RuleValidationError(
-                f"Rule {ref!r} in custom ruleset {label!r} has invalid 'expression'"
-            )
+        rule_ctx = f"Rule at index {ri} in custom ruleset {label!r}"
+        ref = _require_string_field(rule, "ref", rule_ctx)
+        _require_string_field(rule, "expression", f"Rule {ref!r} in custom ruleset {label!r}")
         if "action" not in rule:
             raise RuleValidationError(
                 f"Rule {ref!r} in custom ruleset {label!r} must specify an 'action'"
@@ -539,7 +533,7 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
                 "phase": pp.phase.friendly_name,
                 "changes": sorted(
                     [_serialize_change(c) for c in pp.changes],
-                    key=lambda c: (c["change_type"], c["ref"]),
+                    key=itemgetter("change_type", "ref"),
                 ),
             }
             zone_data["phase_plans"].append(phase_data)
@@ -550,7 +544,7 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
                     "ruleset_id": crp.ruleset_id,
                     "changes": sorted(
                         [_serialize_change(c) for c in crp.changes],
-                        key=lambda c: (c["change_type"], c["ref"]),
+                        key=itemgetter("change_type", "ref"),
                     ),
                 }
                 cr_plans.append(cr_data)
@@ -568,7 +562,7 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
                 if lp.changes:
                     entry["changes"] = sorted(
                         [_serialize_change(c) for c in lp.changes],
-                        key=lambda c: (c["change_type"], c["ref"]),
+                        key=itemgetter("change_type", "ref"),
                     )
                 lp_data.append(entry)
             zone_data["list_plans"] = lp_data
@@ -583,7 +577,7 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
                 if psp.changes:
                     entry["changes"] = sorted(
                         [_serialize_change(c) for c in psp.changes],
-                        key=lambda c: (c["change_type"], c["ref"]),
+                        key=itemgetter("change_type", "ref"),
                     )
                 psp_data.append(entry)
             zone_data["page_shield_policy_plans"] = psp_data
@@ -617,72 +611,40 @@ def check_safety(
     if existing_count < zone_config.min_existing:
         return []
 
-    # Count REMOVE and MODIFY changes per phase
+    # Count REMOVE and MODIFY changes across all plan types
     delete_count = 0
     update_count = 0
     delete_phases: list[str] = []
     update_phases: list[str] = []
+
+    def _tally(
+        changes: list[RuleChange],
+        label: str,
+        extra_deletes: int = 0,
+    ) -> None:
+        nonlocal delete_count, update_count
+        deletes = extra_deletes
+        updates = 0
+        for c in changes:
+            if c.change_type == ChangeType.REMOVE:
+                deletes += 1
+            elif c.change_type == ChangeType.MODIFY:
+                updates += 1
+        if deletes:
+            delete_count += deletes
+            delete_phases.append(label)
+        if updates:
+            update_count += updates
+            update_phases.append(label)
+
     for pp in zone_plan.phase_plans:
-        phase_deletes = 0
-        phase_updates = 0
-        for c in pp.changes:
-            if c.change_type == ChangeType.REMOVE:
-                phase_deletes += 1
-            elif c.change_type == ChangeType.MODIFY:
-                phase_updates += 1
-        if phase_deletes:
-            delete_count += phase_deletes
-            delete_phases.append(pp.phase.friendly_name)
-        if phase_updates:
-            update_count += phase_updates
-            update_phases.append(pp.phase.friendly_name)
+        _tally(pp.changes, pp.phase.friendly_name)
     for crp in zone_plan.custom_ruleset_plans:
-        cr_deletes = 0
-        cr_updates = 0
-        for c in crp.changes:
-            if c.change_type == ChangeType.REMOVE:
-                cr_deletes += 1
-            elif c.change_type == ChangeType.MODIFY:
-                cr_updates += 1
-        label = f"custom_ruleset:{crp.ruleset_name}"
-        if cr_deletes:
-            delete_count += cr_deletes
-            delete_phases.append(label)
-        if cr_updates:
-            update_count += cr_updates
-            update_phases.append(label)
+        _tally(crp.changes, f"custom_ruleset:{crp.ruleset_name}")
     for lp in zone_plan.list_plans:
-        lp_deletes = 0
-        lp_updates = 0
-        if lp.delete:
-            lp_deletes += 1
-        for c in lp.changes:
-            if c.change_type == ChangeType.REMOVE:
-                lp_deletes += 1
-            elif c.change_type == ChangeType.MODIFY:
-                lp_updates += 1
-        label = f"list:{lp.list_name}"
-        if lp_deletes:
-            delete_count += lp_deletes
-            delete_phases.append(label)
-        if lp_updates:
-            update_count += lp_updates
-            update_phases.append(label)
+        _tally(lp.changes, f"list:{lp.list_name}", extra_deletes=int(lp.delete))
     for psp in zone_plan.page_shield_policy_plans:
-        psp_deletes = 0
-        psp_updates = 0
-        if psp.delete:
-            psp_deletes += 1
-        for c in psp.changes:
-            if c.change_type == ChangeType.MODIFY:
-                psp_updates += 1
-        label = f"page_shield:{psp.description}"
-        if psp_deletes:
-            delete_count += psp_deletes
-            delete_phases.append(label)
-        if psp_updates:
-            update_count += psp_updates
-            update_phases.append(label)
+        _tally(psp.changes, f"page_shield:{psp.description}", extra_deletes=int(psp.delete))
 
     violations: list[SafetyViolation] = []
     if existing_count > 0:
@@ -725,7 +687,10 @@ def _item_identity(item: dict, kind: str) -> str:
     if kind == "ip":
         return item.get("ip", "")
     if kind == "asn":
-        return str(item.get("asn", ""))
+        asn = item.get("asn")
+        if asn is None:
+            return ""
+        return str(asn)
     if kind == "hostname":
         hostname = item.get("hostname", {})
         if isinstance(hostname, dict):
@@ -740,18 +705,28 @@ def _item_identity(item: dict, kind: str) -> str:
 
 
 def _items_by_identity(items: list[dict], kind: str) -> dict[str, dict]:
-    """Index items by their identity key."""
+    """Index items by their identity key.
+
+    Items with empty identity keys are skipped with a warning.  Duplicate keys
+    log a warning and the later entry overwrites the earlier one.
+    """
     result: dict[str, dict] = {}
     for item in items:
         key = _item_identity(item, kind)
         if key:
+            if key in result:
+                log.warning(
+                    "Duplicate list item identity %r (kind=%s) — later entry overwrites", key, kind
+                )
             result[key] = item
+        else:
+            log.warning("Skipping list item with empty identity key (kind=%s): %s", kind, item)
     return result
 
 
 def normalize_list_item(item: dict) -> dict:
-    """Strip LIST_ITEM_API_FIELDS and normalize values for comparison."""
-    return {k: _normalize_value(v) for k, v in item.items() if k not in LIST_ITEM_API_FIELDS}
+    """Strip LIST_ITEM_API_FIELDS for comparison. No expression normalization needed."""
+    return {k: v for k, v in item.items() if k not in LIST_ITEM_API_FIELDS}
 
 
 def _make_list_phase(list_name: str) -> Phase:
@@ -973,9 +948,11 @@ def _make_page_shield_phase(description: str) -> Phase:
 
 
 def normalize_page_shield_policy(policy: dict) -> dict:
-    """Strip PAGE_SHIELD_POLICY_API_FIELDS and normalize values for comparison."""
+    """Strip PAGE_SHIELD_POLICY_API_FIELDS and normalize expression for comparison."""
     return {
-        k: _normalize_value(v) for k, v in policy.items() if k not in PAGE_SHIELD_POLICY_API_FIELDS
+        k: _normalize_value(v, key=k)
+        for k, v in policy.items()
+        if k not in PAGE_SHIELD_POLICY_API_FIELDS
     }
 
 
@@ -985,54 +962,22 @@ def validate_page_shield_policy(entry: dict, index: int) -> None:
     Checks: description required (non-empty string), action required (allow/log),
     expression required (string), enabled required (bool), value required (string).
     """
-    if "description" not in entry:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] is missing required 'description' field"
-        )
-    desc = entry["description"]
-    if not isinstance(desc, str) or not desc:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] has invalid 'description' (must be a non-empty string)"
-        )
-    if "action" not in entry:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) is missing required 'action' field"
-        )
+    ctx = f"page_shield_policies[{index}]"
+    desc = _require_string_field(entry, "description", ctx)
+    ctx_desc = f"{ctx} ({desc!r})"
+    _require_string_field(entry, "action", ctx_desc)
     action = entry["action"]
     if action not in _VALID_PAGE_SHIELD_ACTIONS:
         raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) has invalid 'action' {action!r}."
+            f"{ctx_desc} has invalid 'action' {action!r}."
             f" Must be one of: {', '.join(sorted(_VALID_PAGE_SHIELD_ACTIONS))}"
         )
-    if "expression" not in entry:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) is missing required 'expression' field"
-        )
-    expr = entry["expression"]
-    if not isinstance(expr, str) or not expr:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) has invalid 'expression'"
-            " (must be a non-empty string)"
-        )
+    _require_string_field(entry, "expression", ctx_desc)
     if "enabled" not in entry:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) is missing required 'enabled' field"
-        )
-    enabled = entry["enabled"]
-    if not isinstance(enabled, bool):
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) has invalid 'enabled' (must be a boolean)"
-        )
-    if "value" not in entry:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) is missing required 'value' field"
-        )
-    value = entry["value"]
-    if not isinstance(value, str) or not value:
-        raise RuleValidationError(
-            f"page_shield_policies[{index}] ({desc!r}) has invalid 'value'"
-            " (must be a non-empty string)"
-        )
+        raise RuleValidationError(f"{ctx_desc} is missing required 'enabled' field")
+    if not isinstance(entry["enabled"], bool):
+        raise RuleValidationError(f"{ctx_desc} has invalid 'enabled' (must be a boolean)")
+    _require_string_field(entry, "value", ctx_desc)
 
 
 def _diff_fields(desired: dict, current: dict, fields: tuple[str, ...]) -> list[RuleChange]:
@@ -1043,8 +988,8 @@ def _diff_fields(desired: dict, current: dict, fields: tuple[str, ...]) -> list[
     changes: list[RuleChange] = []
     synthetic = _make_page_shield_phase(desired.get("description", ""))
     for fname in fields:
-        d_val = _normalize_value(desired.get(fname))
-        c_val = _normalize_value(current.get(fname))
+        d_val = _normalize_value(desired.get(fname), key=fname)
+        c_val = _normalize_value(current.get(fname), key=fname)
         if d_val != c_val:
             change = RuleChange(
                 change_type=ChangeType.MODIFY,

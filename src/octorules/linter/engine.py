@@ -205,6 +205,9 @@ def lint_zone_file(
             lint_phase_restrictions(rule, phase, ctx)
 
     # Stage 2b: Custom ruleset rules (use waf_custom_rules phase for validation)
+    from octorules.linter.custom_ruleset_linter import lint_custom_rulesets
+
+    lint_custom_rulesets(rules_data, ctx)
     custom_rulesets = rules_data.get("custom_rulesets")
     if isinstance(custom_rulesets, list):
         waf_phase = PHASE_BY_NAME.get("waf_custom_rules")
@@ -222,6 +225,11 @@ def lint_zone_file(
     from octorules.linter.page_shield_linter import lint_page_shield_policies
 
     lint_page_shield_policies(rules_data, ctx)
+
+    # Stage 2d: List validation
+    from octorules.linter.list_linter import lint_lists
+
+    lint_lists(rules_data, ctx)
 
     # Stage 3: Plan-tier checks
     lint_plan_tier(rules_data, ctx)

@@ -1429,3 +1429,23 @@ class TestFunctionPlanRestrictions:
             r for r in ctx.results if r.rule_id == "B003" and "is_timed_hmac_valid_v0" in r.message
         ]
         assert len(b003) == 0
+
+
+class TestA002DepthExceeded:
+    def test_a002_fires_when_depth_exceeded(self, monkeypatch):
+        from octorules.linter import ast_linter
+        from octorules.linter.expression_bridge import ExpressionInfo
+
+        fake_info = ExpressionInfo(raw="deeply nested", depth_exceeded=True)
+        monkeypatch.setattr(ast_linter, "parse_expression", lambda expr: fake_info)
+        ctx = _lint("deeply nested")
+        assert "A002" in _ids(ctx)
+
+    def test_a002_not_fired_normal_expression(self, monkeypatch):
+        from octorules.linter import ast_linter
+        from octorules.linter.expression_bridge import ExpressionInfo
+
+        fake_info = ExpressionInfo(raw="simple", depth_exceeded=False)
+        monkeypatch.setattr(ast_linter, "parse_expression", lambda expr: fake_info)
+        ctx = _lint("simple")
+        assert "A002" not in _ids(ctx)

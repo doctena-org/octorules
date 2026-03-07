@@ -128,7 +128,7 @@ octorules validate --config config.yaml
 # Export existing rules to YAML
 octorules dump --config config.yaml
 
-# Lint rules files offline (109 rules, text/JSON/SARIF output)
+# Lint rules files offline (127 rules, text/JSON/SARIF output)
 octorules lint --config config.yaml
 ```
 
@@ -320,24 +320,26 @@ The linter runs 4 stages in order:
 
 | Stage | What it checks | Rule categories |
 |-------|---------------|-----------------|
-| 1. YAML structure | Required fields, types, duplicates, unknown keys | M (15 rules) |
-| 2. Per-rule checks | Actions, expressions, phase restrictions | A, C, D, I, J, K, L, N, B, E, F, G, O (83 rules) |
-| 2b. Page Shield policies | Policy structure, expressions, catch-all detection | S (4 rules) |
+| 1. YAML structure | Required fields, types, duplicates, unknown keys | M (16 rules) |
+| 2. Per-rule checks | Actions, expressions, phase restrictions | A, C, D, I, J, K, L, N, B, E, F, G, O (89 rules) |
+| 2b. Custom rulesets | Custom ruleset structure, duplicate refs | T (4 rules) |
+| 2c. Page Shield policies | Policy structure, expressions, catch-all detection | S (4 rules) |
+| 2d. List validation | List structure, item validity, duplicates | Q (6 rules) |
 | 3. Plan-tier limits | Regex availability, rule count limits | H (3 rules) |
-| 4. Cross-rule analysis | Duplicate expressions, unreachable rules, list references | P (4 rules) |
+| 4. Cross-rule analysis | Duplicate expressions, unreachable rules, list references | P (5 rules) |
 
 ### Rule categories
 
 | Prefix | Category | Rules |
 |--------|----------|-------|
-| A | Parse / syntax errors | 1 |
-| M | Structure | 15 |
-| C | Action validation | 15 |
+| A | Parse / syntax errors | 2 |
+| M | Structure | 16 |
+| C | Action validation | 18 |
 | D | Rate limiting | 6 |
 | I | Cache rules | 4 |
-| J | Config rules | 4 |
+| J | Config rules | 5 |
 | K | Redirect rules | 2 |
-| L | Transform rules | 5 |
+| L | Transform rules | 6 |
 | N | Origin rules | 1 |
 | B | Phase restrictions | 3 |
 | E | Function constraints | 7 |
@@ -346,9 +348,11 @@ The linter runs 4 stages in order:
 | H | Plan/entitlement | 3 |
 | S | Page Shield structure | 4 |
 | O | Best practice / style | 6 |
-| P | Cross-rule | 4 |
+| P | Cross-rule | 5 |
+| Q | List validation | 6 |
+| T | Custom ruleset validation | 4 |
 
-**109 rules total.** See [docs/lint-rules/README.md](docs/lint-rules/README.md) for the full reference (index with quick-reference table + per-stage detail files).
+**127 rules total.** See [docs/lint-rules/README.md](docs/lint-rules/README.md) for the full reference (index with quick-reference table + per-stage detail files).
 
 ### Suppressing lint rules
 

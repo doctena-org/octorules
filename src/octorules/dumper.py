@@ -154,13 +154,18 @@ def dump_zone_rules(
             output["lists"] = lists_list
 
     if page_shield_policies:
+        from octorules.expression import format_csp_value
+
         policies_list = []
         for policy in sorted(page_shield_policies, key=lambda p: p.get("description", "")):
-            cleaned = {
-                k: _literalize(v)
-                for k, v in policy.items()
-                if k not in PAGE_SHIELD_POLICY_API_FIELDS
-            }
+            cleaned = {}
+            for k, v in policy.items():
+                if k in PAGE_SHIELD_POLICY_API_FIELDS:
+                    continue
+                if k == "value" and isinstance(v, str) and len(v) > 80:
+                    cleaned[k] = _LiteralStr(_strip_trailing_whitespace(format_csp_value(v)))
+                else:
+                    cleaned[k] = _literalize(v)
             policies_list.append(cleaned)
         if policies_list:
             output["page_shield_policies"] = policies_list

@@ -201,3 +201,55 @@ class TestPhaseFilter:
         )
         m001 = [r for r in ctx.results if r.rule_id == "M001"]
         assert len(m001) == 1
+
+
+class TestDisabledRule:
+    def test_m016_disabled_rule(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {
+                        "ref": "disabled-rule",
+                        "expression": 'http.host eq "example.com"',
+                        "action": "block",
+                        "enabled": False,
+                    }
+                ]
+            }
+        )
+        m016 = [r for r in ctx.results if r.rule_id == "M016"]
+        assert len(m016) == 1
+        assert m016[0].severity == Severity.INFO
+        assert "disabled" in m016[0].message.lower()
+
+    def test_m016_enabled_rule_no_warning(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {
+                        "ref": "active-rule",
+                        "expression": 'http.host eq "example.com"',
+                        "action": "block",
+                        "enabled": True,
+                    }
+                ]
+            }
+        )
+        m016 = [r for r in ctx.results if r.rule_id == "M016"]
+        assert len(m016) == 0
+
+    def test_m016_missing_enabled_no_warning(self):
+        """No 'enabled' key at all — rule is implicitly enabled."""
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {
+                        "ref": "implicit-enabled",
+                        "expression": 'http.host eq "example.com"',
+                        "action": "block",
+                    }
+                ]
+            }
+        )
+        m016 = [r for r in ctx.results if r.rule_id == "M016"]
+        assert len(m016) == 0

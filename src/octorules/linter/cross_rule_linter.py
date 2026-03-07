@@ -61,6 +61,9 @@ def lint_cross_rules(rules_data: dict[str, Any], ctx: LintContext) -> None:
     # P004: Check managed list references
     _check_managed_lists(rules_data, ctx)
 
+    # P005: Check list type / field type compatibility
+    _check_list_type_mismatch(rules_data, ctx)
+
 
 def _check_duplicate_expressions(phase_name: str, rules: list[dict], ctx: LintContext) -> None:
     """P001: Detect rules with identical expressions within a phase.
@@ -212,6 +215,72 @@ def _check_managed_lists(rules_data: dict[str, Any], ctx: LintContext) -> None:
                                 f"Invalid managed list '${list_name}'."
                                 " Valid managed lists:"
                                 f" {', '.join(sorted('$' + n for n in _VALID_MANAGED_LISTS))}"
+                            ),
+                            phase=phase_name,
+                            ref=ref,
+                            field="expression",
+                        )
+                    )
+
+
+# Mapping from list kind to the set of compatible field prefixes
+_LIST_KIND_FIELD_MAP: dict[str, frozenset[str]] = {
+    "ip": frozenset({"ip.src"}),
+    "asn": frozenset({"ip.src.asnum", "ip.geoip.asnum"}),
+    "hostname": frozenset({"http.request.full_uri", "http.host"}),
+    "redirect": frozenset({"http.request.full_uri"}),
+}
+
+# Pattern: field in $list_name or field not in $list_name
+_FIELD_LIST_REF_PATTERN = re.compile(r"([\w.]+)\s+(?:not\s+)?in\s+\$([a-zA-Z_][a-zA-Z0-9_]*)")
+
+
+def _check_list_type_mismatch(rules_data: dict[str, Any], ctx: LintContext) -> None:
+    """P005: Detect list references where the field type doesn't match the list kind."""
+    # Build kind map from lists section
+    list_kinds: dict[str, str] = {}
+    lists_section = rules_data.get("lists")
+    if isinstance(lists_section, list):
+        for item in lists_section:
+            if isinstance(item, dict):
+                name = item.get("name", "")
+                kind = item.get("kind", "")
+                if name and isinstance(kind, str):
+                    list_kinds[name] = kind
+
+    if not list_kinds:
+        return
+
+    for phase_name, rules in rules_data.items():
+        if not isinstance(rules, list):
+            continue
+        if phase_name == "lists":
+            continue
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            expr = rule.get("expression", "")
+            if not isinstance(expr, str):
+                continue
+            ref = rule.get("ref", "")
+            for m in _FIELD_LIST_REF_PATTERN.finditer(expr):
+                field_name = m.group(1)
+                list_name = m.group(2)
+                kind = list_kinds.get(list_name)
+                if kind is None:
+                    continue  # unknown list, P003 handles this
+                compatible_fields = _LIST_KIND_FIELD_MAP.get(kind)
+                if compatible_fields is None:
+                    continue
+                if field_name not in compatible_fields:
+                    ctx.add(
+                        LintResult(
+                            rule_id="P005",
+                            severity=Severity.WARNING,
+                            message=(
+                                f"Field {field_name!r} used with ${list_name}"
+                                f" (kind: {kind!r}) — expected field:"
+                                f" {', '.join(sorted(compatible_fields))}"
                             ),
                             phase=phase_name,
                             ref=ref,

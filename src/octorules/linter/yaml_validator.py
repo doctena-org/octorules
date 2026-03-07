@@ -235,6 +235,19 @@ def _check_rule_fields(phase_name: str, rule: dict, index: int, ctx: LintContext
             )
         )
 
+    # M016: disabled rule
+    if rule.get("enabled") is False:
+        ctx.add(
+            LintResult(
+                rule_id="M016",
+                severity=Severity.INFO,
+                message="Rule is disabled (enabled: false)",
+                phase=phase_name,
+                ref=ref_label,
+                suggestion="Remove if no longer needed",
+            )
+        )
+
     # M013 / M014: always-true / always-false expressions
     expr = rule.get("expression")
     if isinstance(expr, str):

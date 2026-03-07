@@ -2,7 +2,7 @@
 
 Validates top-level keys, required fields, types, and structural correctness before any deeper analysis runs.
 
-## Category M — Structure (15 rules)
+## Category M — Structure (16 rules)
 
 ### M001 — Missing ref field
 
@@ -225,3 +225,21 @@ Fix: Remove the rule or fix the expression.
 Triggers when the expression string is longer than 4,096 characters (the Cloudflare API limit).
 
 Fix: Simplify the expression or split the rule into multiple rules.
+
+### M016 — Rule is disabled
+
+| Severity | Category |
+|----------|----------|
+| INFO | structure |
+
+Triggers when a rule has `enabled: false`. Disabled rules are valid but may indicate stale configuration.
+
+```yaml
+waf_custom_rules:
+  - ref: old-block
+    expression: 'ip.src in {1.2.3.4}'
+    action: block
+    enabled: false
+```
+
+Fix: Remove the rule if it's no longer needed, or re-enable it.

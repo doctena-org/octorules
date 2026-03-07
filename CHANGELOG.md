@@ -2,6 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.12.6] - 2026-03-07
+
+### Added
+- **New Category Q — List Validation** (6 rules):
+  - **Q001**: Missing or duplicate list name.
+  - **Q002**: Missing or invalid list kind (must be `ip`, `asn`, `hostname`, or `redirect`).
+  - **Q003**: List item missing required field for its kind.
+  - **Q004**: Invalid IP address in IP list.
+  - **Q005**: Invalid ASN value in ASN list (must be integer 0–4294967295).
+  - **Q006**: Duplicate items within a list.
+- **New Category T — Custom Ruleset Validation** (4 rules):
+  - **T001**: Missing required fields (`id`, `name`, `phase`) in custom ruleset.
+  - **T002**: Invalid custom ruleset ID format (must be 32-character hex).
+  - **T003**: Duplicate ref within a custom ruleset.
+  - **T004**: Duplicate ref across custom rulesets.
+- **A002**: Expression nesting depth exceeds 100 levels (wirefilter).
+- **C016**: Missing `id` in `execute` action's `action_parameters`.
+- **C017**: Invalid `execute` ID format (not 32-character hex).
+- **C018**: Compression terminal algorithm (`none`, `auto`) must be last
+  in the algorithms list.
+- **J005**: Security warning when SSL mode is set to `off`.
+- **L007**: Request header transforms (`request_header_rules`) do not support the
+  `add` operation — only `set` and `remove` are valid.
+- **M016**: Informational notice when a rule has `enabled: false`.
+- **P005**: List type / field type mismatch — detects when a field (e.g. `ip.src`)
+  is used with a list of incompatible kind (e.g. `asn`).
+- CSP value formatting in `octorules dump`: long page shield `value` fields
+  are formatted as multi-line YAML block scalars with one source per line,
+  directive names unindented, sources indented by 2 spaces.
+
+Total lint rules: **127** (was 109).
+
+### Fixed
+- **`check_safety` missed page shield REMOVE changes**: the safety threshold
+  check only counted `MODIFY` changes on page shield policies, silently
+  ignoring `REMOVE` changes. All four plan types (phases, custom rulesets,
+  lists, page shield) now use a shared `_tally()` helper that counts both
+  `REMOVE` and `MODIFY` consistently.
+- **ASN list identity `None` → `"None"`**: when a list item had `asn: null`
+  (or the CF API returned `null`), the identity key became the string
+  `"None"` instead of empty, causing phantom ADD+REMOVE diffs. Now returns
+  empty string for `None` ASN values.
+- **`JSONDecodeError` crash in `get_list_items`**: if the Cloudflare API
+  returned invalid JSON for list items, a `json.JSONDecodeError` would
+  escape the retry loop (only `APIError`/`APIConnectionError` were caught).
+  Now caught and raised as `ValueError` with context.
+- **C002 silent skip for non-string action**: `lint_actions` silently returned
+  when `action` was not a string (e.g. `action: 123`). Now reports C002
+  with a clear "must be a string" message.
+- Duplicate refs in `_rules_by_ref` now log a warning instead of silently
+  overwriting.
+- Duplicate identity keys in `_items_by_identity` now log a warning instead
+  of silently overwriting.
+- Malformed list items (empty identity key) now log a warning instead of
+  being silently dropped from diffs.
+- **`allow_unmanaged` reorder false negative**: when `allow_unmanaged=True`,
+  reorder was never detected because `current_order` contained unmanaged refs
+  not in `desired_order`, making the set comparison always fail. Now filters
+  `current_order` to only managed refs before comparing.
+- `_normalize_value` over-normalized: previously applied `normalize_expression()`
+  to **all** string fields (description, ref, action, etc.). Now scoped to
+  only `expression`, `counting_expression`, and `value` keys via `_NORMALIZE_KEYS`.
+- `_ruleset_to_dict` silent empty return: now logs a warning when ruleset
+  conversion fails, aiding debugging of unexpected API responses.
+
+### Changed
+- Extracted `_require_string_field()` helper — deduplicates validation logic
+  across `validate_rules`, `validate_custom_ruleset`, and
+  `validate_page_shield_policy` (was ~60 lines of near-identical checks).
+- `check_safety` uses a shared `_tally()` closure — deduplicates 4 identical
+  count loops (phases, custom rulesets, lists, page shield).
+- `compute_checksum` and `_serialize_change` sorting uses `operator.itemgetter`
+  instead of lambda.
+- `normalize_list_item` no longer calls `_normalize_value` — list items have
+  no expression fields, so the call was a no-op at best.
+
 ## [0.12.5] - 2026-03-06
 
 ### Added

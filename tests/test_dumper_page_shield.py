@@ -138,6 +138,38 @@ class TestDumpPageShieldPolicies:
         assert "''self''" not in text
         assert "\"script-src 'self' 'unsafe-inline'\"" in text
 
+    def test_dump_long_csp_value_formatted_as_block(self, tmp_path):
+        """Long CSP values should be formatted as multi-line block scalars."""
+        long_csp = (
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+            " ajax.googleapis.com *.ajax.googleapis.com"
+            " cdnjs.cloudflare.com *.cdnjs.cloudflare.com"
+            " challenges.cloudflare.com *.challenges.cloudflare.com"
+            " cookiefirst.com *.cookiefirst.com"
+            " google.com *.google.com"
+            " static.cloudflareinsights.com"
+        )
+        policies = [
+            {
+                "description": "CSP",
+                "action": "allow",
+                "expression": "true",
+                "enabled": True,
+                "value": long_csp,
+            }
+        ]
+        result = dump_zone_rules("example.com", {}, tmp_path, page_shield_policies=policies)
+        text = result.read_text()
+        # Should use block scalar style
+        assert "|" in text
+        # Should not be on a single line
+        data = yaml.safe_load(text)
+        loaded_value = data["page_shield_policies"][0]["value"]
+        # Loaded multi-line value should normalize back to original
+        from octorules.expression import normalize_expression
+
+        assert normalize_expression(loaded_value) == long_csp
+
     def test_round_trip_page_shield_policies(self, tmp_path):
         """Dumped policies should round-trip through diff with no changes."""
         from octorules.planner import diff_page_shield_policies
@@ -151,6 +183,36 @@ class TestDumpPageShieldPolicies:
                 "expression": "true",
                 "enabled": True,
                 "value": "script-src 'self'",
+            }
+        ]
+        result = dump_zone_rules("example.com", {}, tmp_path, page_shield_policies=cf_policies)
+        data = yaml.safe_load(result.read_text())
+        dumped_policies = data["page_shield_policies"]
+        plans = diff_page_shield_policies(dumped_policies, cf_policies)
+        assert not any(p.has_changes for p in plans)
+
+    def test_round_trip_long_csp_value(self, tmp_path):
+        """Long CSP values should round-trip through dump → load → diff with no changes."""
+        from octorules.planner import diff_page_shield_policies
+
+        long_csp = (
+            "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
+            " ajax.googleapis.com *.ajax.googleapis.com"
+            " cdnjs.cloudflare.com *.cdnjs.cloudflare.com"
+            " cookiefirst.com *.cookiefirst.com"
+            " google.com *.google.com"
+            " static.cloudflareinsights.com;"
+            " worker-src 'self' blob:"
+        )
+        cf_policies = [
+            {
+                "id": "policy-uuid",
+                "last_updated": "2026-01-01T00:00:00Z",
+                "description": "CSP",
+                "action": "allow",
+                "expression": "true",
+                "enabled": True,
+                "value": long_csp,
             }
         ]
         result = dump_zone_rules("example.com", {}, tmp_path, page_shield_policies=cf_policies)

@@ -6,6 +6,7 @@ import logging
 
 import pytest
 
+from octorules.config import ZoneConfig
 from octorules.phases import get_phase
 from octorules.planner import (
     ChangeType,
@@ -14,6 +15,7 @@ from octorules.planner import (
     RuleChange,
     RuleValidationError,
     ZonePlan,
+    check_safety,
     compute_checksum,
     diff_page_shield_policies,
     validate_page_shield_policy,
@@ -413,3 +415,99 @@ class TestComputeChecksumWithPageShieldPolicies:
         zp1 = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp1])
         zp2 = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp2])
         assert compute_checksum([zp1]) != compute_checksum([zp2])
+
+
+class TestCheckSafetyWithPageShieldPolicies:
+    """Tests for safety checks including page shield policy changes."""
+
+    def _zone_cfg(self, delete_threshold=30.0, update_threshold=30.0, min_existing=3):
+        return ZoneConfig(
+            name="test.com",
+            zone_id="z1",
+            sources=["rules"],
+            delete_threshold=delete_threshold,
+            update_threshold=update_threshold,
+            min_existing=min_existing,
+        )
+
+    def _make_page_shield_phase(self, desc: str):
+        from octorules.planner import _make_page_shield_phase
+
+        return _make_page_shield_phase(desc)
+
+    def test_page_shield_delete_counted(self):
+        """Page shield delete=True should be counted as a delete in safety checks."""
+        psp = PageShieldPolicyPlan(
+            description="CSP",
+            policy_id="pol-1",
+            delete=True,
+        )
+        zp = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp])
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(3)]}
+        violations = check_safety(zp, current, self._zone_cfg(delete_threshold=30.0))
+        assert len(violations) == 1
+        assert violations[0].kind == "delete"
+        assert "page_shield:CSP" in violations[0].phases
+
+    def test_page_shield_remove_changes_counted(self):
+        """REMOVE changes in page shield policy changes should count toward deletes."""
+        synthetic = self._make_page_shield_phase("CSP")
+        changes = [RuleChange(ChangeType.REMOVE, f"field{i}", synthetic) for i in range(4)]
+        psp = PageShieldPolicyPlan(
+            description="CSP",
+            policy_id="pol-1",
+            changes=changes,
+        )
+        zp = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp])
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].kind == "delete"
+        assert violations[0].count == 4
+        assert "page_shield:CSP" in violations[0].phases
+
+    def test_page_shield_modify_changes_counted(self):
+        """MODIFY changes in page shield policies should count toward updates."""
+        synthetic = self._make_page_shield_phase("CSP")
+        changes = [RuleChange(ChangeType.MODIFY, f"field{i}", synthetic) for i in range(4)]
+        psp = PageShieldPolicyPlan(
+            description="CSP",
+            policy_id="pol-1",
+            changes=changes,
+        )
+        zp = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp])
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].kind == "update"
+        assert violations[0].count == 4
+        assert "page_shield:CSP" in violations[0].phases
+
+    def test_page_shield_add_no_violation(self):
+        """ADD changes in page shield policies should not trigger safety violations."""
+        synthetic = self._make_page_shield_phase("CSP")
+        changes = [RuleChange(ChangeType.ADD, f"field{i}", synthetic) for i in range(5)]
+        psp = PageShieldPolicyPlan(
+            description="CSP",
+            policy_id="pol-1",
+            changes=changes,
+        )
+        zp = ZonePlan(zone_name="test.com", page_shield_policy_plans=[psp])
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert violations == []
+
+    def test_page_shield_and_phase_changes_combined(self):
+        """Page shield and phase changes should be summed together for safety checks."""
+        synthetic = self._make_page_shield_phase("CSP")
+        phase_changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(2)]
+        pp = PhasePlan(phase=REDIRECT_PHASE, changes=phase_changes)
+        psp_changes = [RuleChange(ChangeType.REMOVE, f"field{i}", synthetic) for i in range(2)]
+        psp = PageShieldPolicyPlan(description="CSP", policy_id="pol-1", changes=psp_changes)
+        zp = ZonePlan(zone_name="test.com", phase_plans=[pp], page_shield_policy_plans=[psp])
+        # 4 deletes out of 10 existing = 40%
+        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        violations = check_safety(zp, current, self._zone_cfg())
+        assert len(violations) == 1
+        assert violations[0].kind == "delete"
+        assert violations[0].count == 4

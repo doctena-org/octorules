@@ -2,7 +2,7 @@
 
 Analyzes relationships between rules within each phase.
 
-## Category P — Cross-Rule / Ruleset-Level (4 rules)
+## Category P — Cross-Rule / Ruleset-Level (5 rules)
 
 ### P001 — Duplicate expression across rules
 
@@ -77,3 +77,30 @@ waf_custom_rules:
 ```
 
 Fix: Use a valid managed list name. Valid managed lists: `$cf.anonymizer`, `$cf.botnetcc`, `$cf.malware`, `$cf.open_proxies`, `$cf.vpn`.
+
+### P005 — List type / field type mismatch
+
+| Severity | Category |
+|----------|----------|
+| WARNING | cross_rule |
+
+Triggers when a rule expression references a list via `$list_name` but the wirefilter field used with the list is incompatible with the list's `kind`. For example, using `ip.src in $my_asns` where `my_asns` is an ASN list — `ip.src` expects an IP list.
+
+Compatible field/kind mappings:
+- **IP lists** (`kind: ip`): `ip.src`
+- **ASN lists** (`kind: asn`): `ip.src.asnum`, `ip.geoip.asnum`
+- **Hostname lists** (`kind: hostname`): `http.request.full_uri`, `http.host`
+- **Redirect lists** (`kind: redirect`): `http.request.full_uri`
+
+```yaml
+lists:
+  - name: my_asns
+    kind: asn
+    items: [...]
+
+waf_custom_rules:
+  - ref: block-asns
+    expression: 'ip.src in $my_asns'    # ip.src expects IP list, not ASN
+```
+
+Fix: Use the correct field for the list kind (e.g., `ip.src.asnum in $my_asns`), or change the list kind.

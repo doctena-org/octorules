@@ -44,6 +44,12 @@ class TestActionValidity:
         ctx = _lint_rule({"ref": "t", "expression": "true"}, "redirect_rules")
         assert "C002" not in _ids(ctx)
 
+    def test_c002_non_string_action(self):
+        """Non-string action should report C002 instead of silently skipping."""
+        ctx = _lint_rule({"ref": "t", "expression": "true", "action": 123}, "waf_custom_rules")
+        assert "C002" in _ids(ctx)
+        assert "must be a string" in ctx.results[0].message
+
     def test_c003_missing_action_parameters(self):
         ctx = _lint_rule(
             {"ref": "t", "expression": "true", "action": "redirect"},
@@ -768,7 +774,7 @@ class TestL005HeaderMissingValue:
                     "headers": {"x-custom": {"operation": "add"}},
                 },
             },
-            "request_header_rules",
+            "response_header_rules",
         )
         assert "L005" in _ids(ctx)
 
@@ -1300,3 +1306,137 @@ class TestBlockResponseValidation:
         )
         # C015 shouldn't fire on non-dict response (silently skips)
         assert "C015" not in _ids(ctx)
+
+
+class TestExecuteValidation:
+    def test_c016_missing_id(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "execute",
+                "action_parameters": {"overrides": {}},
+            },
+            "waf_managed_rules",
+        )
+        assert "C016" in _ids(ctx)
+
+    def test_c017_invalid_id_format(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "execute",
+                "action_parameters": {"id": "not-valid-hex"},
+            },
+            "waf_managed_rules",
+        )
+        assert "C017" in _ids(ctx)
+
+    def test_valid_execute_id(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "execute",
+                "action_parameters": {"id": "abc12345def67890abc12345def67890"},
+            },
+            "waf_managed_rules",
+        )
+        assert "C016" not in _ids(ctx)
+        assert "C017" not in _ids(ctx)
+
+
+class TestCompressionOrdering:
+    def test_c018_none_not_last(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action_parameters": {
+                    "algorithms": [{"name": "none"}, {"name": "gzip"}],
+                },
+            },
+            "compression_rules",
+        )
+        assert "C018" in _ids(ctx)
+
+    def test_c018_auto_not_last(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action_parameters": {
+                    "algorithms": [{"name": "auto"}, {"name": "brotli"}],
+                },
+            },
+            "compression_rules",
+        )
+        assert "C018" in _ids(ctx)
+
+    def test_c018_none_last_ok(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action_parameters": {
+                    "algorithms": [{"name": "brotli"}, {"name": "gzip"}, {"name": "none"}],
+                },
+            },
+            "compression_rules",
+        )
+        assert "C018" not in _ids(ctx)
+
+
+class TestSSLOffWarning:
+    def test_j005_ssl_off(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action_parameters": {"ssl": "off"},
+            },
+            "config_rules",
+        )
+        assert "J005" in _ids(ctx)
+
+    def test_j005_ssl_full_ok(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action_parameters": {"ssl": "full"},
+            },
+            "config_rules",
+        )
+        assert "J005" not in _ids(ctx)
+
+
+class TestRequestHeaderAdd:
+    def test_l007_request_header_add_rejected(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "rewrite",
+                "action_parameters": {
+                    "headers": {"x-custom": {"operation": "add", "value": "v"}},
+                },
+            },
+            "request_header_rules",
+        )
+        assert "L007" in _ids(ctx)
+
+    def test_l007_response_header_add_ok(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "rewrite",
+                "action_parameters": {
+                    "headers": {"x-custom": {"operation": "add", "value": "v"}},
+                },
+            },
+            "response_header_rules",
+        )
+        assert "L007" not in _ids(ctx)

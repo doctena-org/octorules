@@ -37,6 +37,7 @@ class ExpressionInfo:
     ip_literals: list[str] = field(default_factory=list)
     int_literals: list[int] = field(default_factory=list)
     has_regex: bool = False
+    depth_exceeded: bool = False
     parse_error: str = ""
     """Empty on success.  On wirefilter parse failure, contains the error
     message (e.g. ``"unknown field `bogus`"``).  On FFI crash, contains
@@ -207,6 +208,7 @@ def _parse_with_wirefilter(expr: str, *, expect_parse_error: bool = False) -> Ex
             info.ip_literals = result.get("ip_literals", [])
             info.int_literals = result.get("int_literals", [])
             info.has_regex = bool(info.regex_literals)
+            info.depth_exceeded = result.get("depth_exceeded", False)
     except Exception as e:
         # FFI call crashed — fall back to regex extraction.
         log.warning("Wirefilter FFI crashed, falling back to regex: %s", e, exc_info=True)
