@@ -16,7 +16,9 @@ from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
 # Pattern for list references in expressions: $list_name (including dotted managed list names)
 _LIST_REF_PATTERN = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)")
 
-# Valid Cloudflare managed list names
+# Valid Cloudflare managed list names.
+# Source: https://developers.cloudflare.com/waf/tools/lists/managed-lists/
+# Last updated: 2026-03-07
 _VALID_MANAGED_LISTS = frozenset(
     {
         "cf.anonymizer",
@@ -212,13 +214,17 @@ def _check_managed_lists(rules_data: dict[str, Any], ctx: LintContext) -> None:
                             rule_id="P004",
                             severity=Severity.WARNING,
                             message=(
-                                f"Invalid managed list '${list_name}'."
+                                f"Unknown managed list '${list_name}'."
                                 " Valid managed lists:"
                                 f" {', '.join(sorted('$' + n for n in _VALID_MANAGED_LISTS))}"
                             ),
                             phase=phase_name,
                             ref=ref,
                             field="expression",
+                            suggestion=(
+                                "If this is a newly added Cloudflare managed list,"
+                                " update _VALID_MANAGED_LISTS in cross_rule_linter.py"
+                            ),
                         )
                     )
 

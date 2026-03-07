@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
@@ -119,6 +120,45 @@ class LintContext:
     @property
     def has_errors(self) -> bool:
         return any(r.severity == Severity.ERROR for r in self.results)
+
+
+def _collect_known_rule_ids() -> frozenset[str]:
+    """Collect all rule IDs defined across linter modules by scanning rule_id= patterns."""
+    import importlib
+    import inspect
+
+    ids: set[str] = set()
+    id_re = re.compile(r'rule_id="([A-Z]\d{3})"')
+    for mod_name in (
+        "octorules.linter.action_validator",
+        "octorules.linter.ast_linter",
+        "octorules.linter.cross_rule_linter",
+        "octorules.linter.custom_ruleset_linter",
+        "octorules.linter.list_linter",
+        "octorules.linter.page_shield_linter",
+        "octorules.linter.phase_linter",
+        "octorules.linter.plan_linter",
+        "octorules.linter.yaml_validator",
+    ):
+        try:
+            mod = importlib.import_module(mod_name)
+            source = inspect.getsource(mod)
+            ids.update(id_re.findall(source))
+        except Exception:  # noqa: BLE001
+            pass
+    return frozenset(ids)
+
+
+# Lazily cached — computed once on first access.
+_known_rule_ids: frozenset[str] | None = None
+
+
+def get_known_rule_ids() -> frozenset[str]:
+    """Return the set of all known lint rule IDs."""
+    global _known_rule_ids  # noqa: PLW0603
+    if _known_rule_ids is None:
+        _known_rule_ids = _collect_known_rule_ids()
+    return _known_rule_ids
 
 
 def lint_zone_file(

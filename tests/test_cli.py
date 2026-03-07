@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from octorules.cli import (
+    _CHECKSUM_RE,
     _emit_plan_outputs,
     _filter_current_by_phase,
     _filter_desired_by_phase,
@@ -217,6 +218,37 @@ class TestGetZones:
     def test_filter_invalid_zone(self, sample_config):
         with pytest.raises(ConfigError, match="not found"):
             _get_zones(sample_config, ["nonexistent.com"])
+
+    def test_filter_invalid_zone_lists_available(self, sample_config):
+        """Error message should list available zone names."""
+        with pytest.raises(ConfigError, match="example.com") as exc_info:
+            _get_zones(sample_config, ["nonexistent.com"])
+        assert "other.com" in str(exc_info.value)
+        assert "Available:" in str(exc_info.value)
+
+
+class TestChecksumValidation:
+    def test_valid_checksum_accepted(self, sample_config):
+        """A 64-char hex string should not raise."""
+        valid = "a" * 64
+        # cmd_sync will fail for other reasons but should not raise ConfigError
+        # about the checksum format. We test the validation directly.
+        assert _CHECKSUM_RE.match(valid)
+
+    def test_invalid_checksum_rejected(self, sample_config):
+        """Non-hex or wrong-length string should raise ConfigError."""
+        with pytest.raises(ConfigError, match="Invalid checksum format"):
+            cmd_sync(sample_config, None, checksum="notahash")
+
+    def test_short_checksum_rejected(self, sample_config):
+        """Too-short hex string should be rejected."""
+        with pytest.raises(ConfigError, match="Invalid checksum format"):
+            cmd_sync(sample_config, None, checksum="abcd1234")
+
+    def test_uppercase_checksum_rejected(self, sample_config):
+        """Uppercase hex should be rejected (checksums are lowercase)."""
+        with pytest.raises(ConfigError, match="Invalid checksum format"):
+            cmd_sync(sample_config, None, checksum="A" * 64)
 
 
 class TestCmdPlan:
@@ -1356,7 +1388,7 @@ class TestChecksum:
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        result = cmd_sync(sample_config, ["example.com"], checksum="wrong-hash")
+        result = cmd_sync(sample_config, ["example.com"], checksum="0" * 64)
         assert result == 1
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
 

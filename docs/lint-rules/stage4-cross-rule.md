@@ -62,13 +62,13 @@ lists:
     items: [...]
 ```
 
-### P004 — Invalid managed list name
+### P004 — Unknown managed list name
 
 | Severity | Category |
 |----------|----------|
 | WARNING | cross_rule |
 
-Triggers when an expression references a managed list via `$cf.*` syntax that is not a valid Cloudflare managed list.
+Triggers when an expression references a managed list via `$cf.*` syntax that is not a known Cloudflare managed list.
 
 ```yaml
 waf_custom_rules:
@@ -76,7 +76,7 @@ waf_custom_rules:
     expression: 'ip.src in $cf.invalid_list'
 ```
 
-Fix: Use a valid managed list name. Valid managed lists: `$cf.anonymizer`, `$cf.botnetcc`, `$cf.malware`, `$cf.open_proxies`, `$cf.vpn`.
+Fix: Use a valid managed list name. Known managed lists: `$cf.anonymizer`, `$cf.botnetcc`, `$cf.malware`, `$cf.open_proxies`, `$cf.vpn`. If Cloudflare has added a new managed list not yet in this set, please open an issue.
 
 ### P005 — List type / field type mismatch
 

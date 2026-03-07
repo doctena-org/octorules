@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from octorules.linter.cross_rule_linter import lint_cross_rules
-from octorules.linter.engine import LintContext
+from octorules.linter.engine import LintContext, Severity
 
 
 def _lint(rules_data, **kwargs):
@@ -27,6 +27,9 @@ class TestDuplicateExpressions:
             }
         )
         assert "P001" in _ids(ctx)
+        p001 = [r for r in ctx.results if r.rule_id == "P001"]
+        assert len(p001) == 1
+        assert p001[0].severity == Severity.WARNING
 
     def test_p001_whitespace_normalized(self):
         ctx = _lint(

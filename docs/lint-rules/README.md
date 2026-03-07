@@ -315,7 +315,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [P001](stage4-cross-rule.md#p001--duplicate-expression-across-rules) | Duplicate expression across rules | WARNING |
 | [P002](stage4-cross-rule.md#p002--unreachable-rule-after-terminating-action) | Unreachable rule after terminating action | WARNING |
 | [P003](stage4-cross-rule.md#p003--unresolved-list-reference) | Unresolved list reference | WARNING |
-| [P004](stage4-cross-rule.md#p004--invalid-managed-list-name) | Invalid managed list name | WARNING |
+| [P004](stage4-cross-rule.md#p004--unknown-managed-list-name) | Unknown managed list name | WARNING |
 | [P005](stage4-cross-rule.md#p005--list-type--field-type-mismatch) | List type / field type mismatch | WARNING |
 | [Q001](stage2d-lists.md#q001--missing-or-duplicate-list-name) | Missing or duplicate list name | ERROR |
 | [Q002](stage2d-lists.md#q002--missing-or-invalid-list-kind) | Missing or invalid list kind | ERROR |

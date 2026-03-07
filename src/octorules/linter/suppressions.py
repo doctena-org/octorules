@@ -18,8 +18,11 @@ tolerated.
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
+
+log = logging.getLogger("octorules.linter")
 
 # Matches: # octorules:disable=M013  or  # octorules:disable=M013,O001
 _DIRECTIVE_RE = re.compile(r"#\s*octorules:disable\s*=\s*([A-Z]\d{3}(?:\s*,\s*[A-Z]\d{3})*)")
@@ -28,11 +31,18 @@ _DIRECTIVE_RE = re.compile(r"#\s*octorules:disable\s*=\s*([A-Z]\d{3}(?:\s*,\s*[A
 _REF_RE = re.compile(r"^\s*-\s*ref:\s*(\S+)")
 
 
-def parse_suppressions(file_path: str | Path) -> dict[str, set[str]]:
+def parse_suppressions(
+    file_path: str | Path,
+    *,
+    known_rules: set[str] | None = None,
+) -> dict[str, set[str]]:
     """Parse suppression directives from a YAML file.
 
     Returns a dict mapping ref (or ``"*"`` for file-level) to a set of
     suppressed rule IDs.
+
+    If *known_rules* is provided, rule IDs not in the set are logged as
+    warnings and silently dropped.
     """
     suppressions: dict[str, set[str]] = {}
     pending_ids: set[str] = set()
@@ -49,6 +59,11 @@ def parse_suppressions(file_path: str | Path) -> dict[str, set[str]]:
         m_dir = _DIRECTIVE_RE.search(line)
         if m_dir:
             ids = {rid.strip() for rid in m_dir.group(1).split(",")}
+            if known_rules is not None:
+                unknown = ids - known_rules
+                for uid in sorted(unknown):
+                    log.warning("Unknown rule ID %r in suppression directive (%s)", uid, file_path)
+                ids -= unknown
             pending_ids.update(ids)
 
         # Check for ref line

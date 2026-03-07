@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.0] - 2026-03-07
+
+### Added
+- Suppression parser validates rule IDs against the known rule registry and
+  warns on unknown IDs (e.g. typos like `X999`).
+- `octorules lint` now logs `"Lint: N issue(s) suppressed"` at INFO when
+  suppressions are active.
+- CLI: `--checksum` value is validated as a 64-character lowercase hex string
+  before use; invalid formats raise a clear `ConfigError`.
+- CLI: "zone not found" error now lists available zones from the config.
+- `_require_field()` generic type validator in planner — generalizes
+  `_require_string_field()` to any type (used for `bool` in page shield).
+
+### Fixed
+- `normalize_expression()` now logs a warning on unmatched quotes instead of
+  silently returning a malformed result.
+- P004 message changed from "Invalid managed list" to "Unknown managed list"
+  with a suggestion to report newly added Cloudflare managed lists.
+- `_VALID_MANAGED_LISTS` in cross-rule linter now documents its source URL
+  and last-updated date.
+
+### Changed
+- `put_list_items` docstring documents why no count-check is performed
+  (async bulk operation with polling).
+- `pyproject.toml` documents wirefilter degraded-mode behavior in optional
+  dependency comment.
+- `config.py` docstrings enhanced: `resolve_value()` documents `env/VARNAME`
+  syntax; `Config.from_file()` documents config file structure.
+
 ## [0.12.6] - 2026-03-07
 
 ### Added
