@@ -257,6 +257,20 @@ def lint_expressions(
             )
         )
 
+    # A002: Expression nesting depth exceeded
+    if info.depth_exceeded:
+        ctx.add(
+            LintResult(
+                rule_id="A002",
+                severity=Severity.WARNING,
+                message="Expression nesting depth exceeds 100 levels",
+                phase=phase_name,
+                ref=ref,
+                field="expression",
+                suggestion="Simplify the expression to reduce nesting depth",
+            )
+        )
+
     # Category G — Value constraints
     _lint_value_constraints(info, phase_name, ref, ctx)
 

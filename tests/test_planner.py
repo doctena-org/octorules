@@ -15,6 +15,7 @@ from octorules.planner import (
     RuleValidationError,
     ZonePlan,
     _diff_rules,
+    _rules_by_ref,
     check_safety,
     compute_checksum,
     diff_custom_ruleset,
@@ -1421,6 +1422,63 @@ class TestDiffRulesHelper:
         ]
         changes = _diff_rules(phase, desired, current)
         assert any(c.change_type == ChangeType.REORDER for c in changes)
+
+    def test_allow_unmanaged_reorder_detected_for_managed_subset(self):
+        """Reorder among managed refs is detected even with allow_unmanaged."""
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "unmanaged", "expression": "x", "action": "redirect", "enabled": True},
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
+        assert any(c.change_type == ChangeType.REORDER for c in changes)
+
+    def test_allow_unmanaged_no_false_reorder(self):
+        """No reorder when managed refs are in the same order but unmanaged refs differ."""
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "unmanaged", "expression": "x", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
+        assert not any(c.change_type == ChangeType.REORDER for c in changes)
+
+
+class TestRulesByRef:
+    """Tests for _rules_by_ref helper."""
+
+    def test_indexes_by_ref(self):
+        rules = [{"ref": "r1", "action": "block"}, {"ref": "r2", "action": "log"}]
+        result = _rules_by_ref(rules)
+        assert result == {"r1": rules[0], "r2": rules[1]}
+
+    def test_skips_missing_ref(self):
+        rules = [{"ref": "r1", "action": "block"}, {"action": "log"}]
+        result = _rules_by_ref(rules)
+        assert len(result) == 1
+        assert "r1" in result
+
+    def test_duplicate_ref_warns(self, caplog):
+        """Duplicate refs should log a warning and last-wins."""
+        rules = [
+            {"ref": "r1", "action": "block"},
+            {"ref": "r1", "action": "log"},
+        ]
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            result = _rules_by_ref(rules)
+        assert len(result) == 1
+        assert result["r1"]["action"] == "log"
+        assert "Duplicate ref" in caplog.text
 
 
 class TestValidateCustomRuleset:

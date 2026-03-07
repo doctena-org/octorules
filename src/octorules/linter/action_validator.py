@@ -57,6 +57,15 @@ def lint_actions(rule: dict[str, Any], phase: Phase, ctx: LintContext) -> None:
         action = phase.default_action
 
     if not isinstance(action, str):
+        ctx.add(
+            LintResult(
+                rule_id="C002",
+                severity=Severity.ERROR,
+                message=f"'action' must be a string (got {type(action).__name__})",
+                phase=phase_name,
+                ref=ref,
+            )
+        )
         return
 
     # C001: Invalid action for phase
@@ -161,7 +170,9 @@ def lint_actions(rule: dict[str, Any], phase: Phase, ctx: LintContext) -> None:
         _lint_compress_response_params(action_params, phase_name, ref, ctx)
 
     # Action-specific validation (cross-phase)
-    if action == "skip":
+    if action == "execute":
+        _lint_execute_params(action_params, phase_name, ref, ctx)
+    elif action == "skip":
         _lint_skip_params(action_params, phase_name, ref, ctx)
     elif action == "block":
         _lint_block_response_params(action_params, phase_name, ref, ctx)
@@ -410,6 +421,20 @@ def _lint_config_params(params: dict, phase_name: str, ref: str, ctx: LintContex
                 field="action_parameters.ssl",
             )
         )
+    elif ssl == "off":
+        # J005: SSL off security warning
+        ctx.add(
+            LintResult(
+                rule_id="J005",
+                severity=Severity.WARNING,
+                message=(
+                    "SSL set to 'off' — traffic between Cloudflare and origin will be unencrypted"
+                ),
+                phase=phase_name,
+                ref=ref,
+                field="action_parameters.ssl",
+            )
+        )
 
     polish = params.get("polish")
     if isinstance(polish, str) and polish not in VALID_POLISH_VALUES:
@@ -639,6 +664,23 @@ def _lint_transform_params(params: dict, phase_name: str, ref: str, ctx: LintCon
                                 field=f"action_parameters.headers.{header_name}.operation",
                             )
                         )
+                    # L007: request headers don't support 'add' operation
+                    elif (
+                        isinstance(op, str) and op == "add" and phase_name == "request_header_rules"
+                    ):
+                        ctx.add(
+                            LintResult(
+                                rule_id="L007",
+                                severity=Severity.ERROR,
+                                message=(
+                                    f"Request header transforms do not support 'add' operation"
+                                    f" for header {header_name!r}. Use 'set' instead."
+                                ),
+                                phase=phase_name,
+                                ref=ref,
+                                field=f"action_parameters.headers.{header_name}.operation",
+                            )
+                        )
                     # L005: set/add missing value or expression
                     elif isinstance(op, str) and op in ("set", "add"):
                         if "value" not in header_val and "expression" not in header_val:
@@ -758,6 +800,42 @@ def _lint_serve_error_params(params: dict, phase_name: str, ref: str, ctx: LintC
             )
 
 
+_EXECUTE_ID_PATTERN = __import__("re").compile(r"^[0-9a-f]{32}$")
+
+
+def _lint_execute_params(params: dict, phase_name: str, ref: str, ctx: LintContext) -> None:
+    """Validate execute action_parameters (C016, C017)."""
+    # C016: Missing id
+    ruleset_id = params.get("id")
+    if ruleset_id is None:
+        ctx.add(
+            LintResult(
+                rule_id="C016",
+                severity=Severity.ERROR,
+                message="Action 'execute' requires 'id' in action_parameters",
+                phase=phase_name,
+                ref=ref,
+                field="action_parameters.id",
+            )
+        )
+        return
+
+    # C017: Invalid id format (must be 32-char hex)
+    if isinstance(ruleset_id, str) and not _EXECUTE_ID_PATTERN.match(ruleset_id):
+        ctx.add(
+            LintResult(
+                rule_id="C017",
+                severity=Severity.WARNING,
+                message=(
+                    f"Execute ruleset id {ruleset_id!r} is not a valid 32-character hex string"
+                ),
+                phase=phase_name,
+                ref=ref,
+                field="action_parameters.id",
+            )
+        )
+
+
 def _lint_skip_params(params: dict, phase_name: str, ref: str, ctx: LintContext) -> None:
     """Validate skip action_parameters (C011, C012)."""
     # C011: validate phases values
@@ -796,10 +874,11 @@ def _lint_skip_params(params: dict, phase_name: str, ref: str, ctx: LintContext)
 def _lint_compress_response_params(
     params: dict, phase_name: str, ref: str, ctx: LintContext
 ) -> None:
-    """Validate compress_response action_parameters (C013)."""
+    """Validate compress_response action_parameters (C013, C018)."""
     algorithms = params.get("algorithms")
     if isinstance(algorithms, list):
-        for algo in algorithms:
+        _TERMINAL_ALGORITHMS = frozenset({"none", "auto"})
+        for i, algo in enumerate(algorithms):
             algo_name = algo.get("name") if isinstance(algo, dict) else algo
             if isinstance(algo_name, str) and algo_name not in VALID_COMPRESSION_ALGORITHMS:
                 ctx.add(
@@ -810,6 +889,25 @@ def _lint_compress_response_params(
                             f"Invalid compression algorithm {algo_name!r}."
                             f" Must be one of:"
                             f" {', '.join(sorted(VALID_COMPRESSION_ALGORITHMS))}"
+                        ),
+                        phase=phase_name,
+                        ref=ref,
+                        field="action_parameters.algorithms",
+                    )
+                )
+            # C018: Terminal algorithm must be last
+            if (
+                isinstance(algo_name, str)
+                and algo_name in _TERMINAL_ALGORITHMS
+                and i < len(algorithms) - 1
+            ):
+                ctx.add(
+                    LintResult(
+                        rule_id="C018",
+                        severity=Severity.WARNING,
+                        message=(
+                            f"Compression algorithm {algo_name!r} must be the last item"
+                            " in the algorithms list"
                         ),
                         phase=phase_name,
                         ref=ref,

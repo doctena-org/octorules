@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from octorules.expression import format_expression_display, normalize_expression
+from octorules.expression import format_csp_value, format_expression_display, normalize_expression
 
 # ---------------------------------------------------------------------------
 # Identity / no-op cases
@@ -622,3 +622,85 @@ class TestDisplayEdgeCases:
         # With max_line=5, it should break
         result = format_expression_display(expr, max_line=5)
         assert "\n" in result
+
+
+# ---------------------------------------------------------------------------
+# CSP value formatting
+# ---------------------------------------------------------------------------
+
+
+class TestFormatCSPValue:
+    def test_short_value_unchanged(self):
+        csp = "script-src 'self' 'unsafe-inline'"
+        assert format_csp_value(csp) == csp
+
+    def test_single_directive_one_per_line(self):
+        csp = "script-src 'self' 'unsafe-inline' alpha.com *.alpha.com bravo.com *.bravo.com"
+        result = format_csp_value(csp, max_line=40)
+        lines = result.split("\n")
+        assert lines[0] == "script-src"
+        assert lines[1] == "  'self'"
+        assert lines[2] == "  'unsafe-inline'"
+        assert lines[3] == "  alpha.com"
+        # All source lines indented by 2 spaces
+        for line in lines[1:]:
+            assert line.startswith("  ")
+
+    def test_multiple_directives_split(self):
+        csp = (
+            "script-src 'self' alpha.com *.alpha.com bravo.com *.bravo.com; worker-src 'self' blob:"
+        )
+        result = format_csp_value(csp, max_line=50)
+        lines = result.split("\n")
+        assert lines[0] == "script-src"
+        assert lines[1] == "  'self'"
+        # Last source of first directive has semicolon
+        assert "  *.bravo.com;" in lines
+        # Second directive starts unindented
+        assert "worker-src" in lines
+        assert lines[-1] == "  blob:"
+
+    def test_round_trip_single_directive(self):
+        csp = "script-src 'self' " + " ".join(f"{d}.com *.{d}.com" for d in "abcdefghij")
+        formatted = format_csp_value(csp)
+        normalized = normalize_expression(formatted)
+        assert normalized == csp
+
+    def test_round_trip_multiple_directives(self):
+        csp = (
+            "script-src 'self' 'unsafe-inline' alpha.com *.alpha.com"
+            " bravo.com *.bravo.com; worker-src 'self' blob:"
+        )
+        formatted = format_csp_value(csp)
+        normalized = normalize_expression(formatted)
+        assert normalized == csp
+
+    def test_round_trip_real_csp(self):
+        """Round-trip a real production CSP value."""
+        csp = (
+            "script-src 'unsafe-inline' doctena.com *.doctena.com"
+            " cookiefirst.com *.cookiefirst.com google.com *.google.com"
+            " gstatic.com *.gstatic.com zdassets.com *.zdassets.com"
+            " 'unsafe-eval' ajax.cloudflare.com cdnjs.cloudflare.com"
+            " *.cdnjs.cloudflare.com static.cloudflareinsights.com;"
+            " worker-src 'self' blob:"
+        )
+        formatted = format_csp_value(csp, max_line=80)
+        normalized = normalize_expression(formatted)
+        assert normalized == csp
+
+    def test_empty_value(self):
+        assert format_csp_value("") == ""
+
+    def test_no_trailing_semicolon_lost(self):
+        csp = "script-src 'self'; style-src 'self'"
+        formatted = format_csp_value(csp, max_line=20)
+        normalized = normalize_expression(formatted)
+        assert normalized == csp
+
+    def test_idempotent(self):
+        csp = "script-src 'self' " + " ".join(f"{d}.com" for d in "abcdefghijklmnop")
+        formatted1 = format_csp_value(csp)
+        formatted2 = format_csp_value(formatted1)
+        # Already formatted input shouldn't change further
+        assert normalize_expression(formatted2) == csp

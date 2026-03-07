@@ -256,6 +256,56 @@ class TestListMethods:
         items = provider.get_list_items(scope, "lst-1")
         assert items == []
 
+    def test_get_list_items_invalid_json_raises(self, mock_cf_client):
+        """get_list_items raises ValueError when response contains invalid JSON."""
+        raw = MagicMock()
+        raw.http_response.text = "not valid json {"
+        mock_cf_client.rules.lists.items.with_raw_response.list.return_value = raw
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            provider.get_list_items(scope, "lst-1")
+
+    def test_get_list_items_no_result_info(self, mock_cf_client):
+        """Pagination stops when response has no result_info key."""
+        import json as _json
+
+        raw = MagicMock()
+        raw.http_response.text = _json.dumps({"result": [{"ip": "1.1.1.1/32"}]})
+        mock_cf_client.rules.lists.items.with_raw_response.list.return_value = raw
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        items = provider.get_list_items(Scope(account_id="acct-123"), "lst-1")
+        assert len(items) == 1
+
+    def test_get_list_items_empty_cursor_stops(self, mock_cf_client):
+        """Pagination stops when cursors.after is an empty string."""
+        import json as _json
+
+        body = {
+            "result": [{"ip": "1.1.1.1/32"}],
+            "result_info": {"cursors": {"after": ""}},
+        }
+        raw = MagicMock()
+        raw.http_response.text = _json.dumps(body)
+        mock_cf_client.rules.lists.items.with_raw_response.list.return_value = raw
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        items = provider.get_list_items(Scope(account_id="acct-123"), "lst-1")
+        assert len(items) == 1
+        # Should only make one API call (not loop infinitely)
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 1
+
+    def test_get_list_items_no_cursors_key(self, mock_cf_client):
+        """Pagination stops when result_info has no cursors key."""
+        import json as _json
+
+        body = {"result": [{"ip": "1.1.1.1/32"}], "result_info": {"total": 1}}
+        raw = MagicMock()
+        raw.http_response.text = _json.dumps(body)
+        mock_cf_client.rules.lists.items.with_raw_response.list.return_value = raw
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        items = provider.get_list_items(Scope(account_id="acct-123"), "lst-1")
+        assert len(items) == 1
+
     # --- put_list_items ---
 
     def test_put_list_items(self, mock_cf_client):

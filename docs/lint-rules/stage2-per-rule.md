@@ -2,7 +2,7 @@
 
 Runs four sub-checks for each rule in each phase: action validation, expression analysis, phase restriction checks, and parse error surfacing.
 
-## Category A — Parse / Syntax Errors (1 rule)
+## Category A — Parse / Syntax Errors (2 rules)
 
 ### A001 — Expression parse error (wirefilter)
 
@@ -22,9 +22,21 @@ waf_custom_rules:
 
 Fix: Correct the expression syntax.
 
+### A002 — Expression nesting depth exceeded
+
+| Severity | Category |
+|----------|----------|
+| WARNING | parse |
+
+Triggers when the wirefilter parser reports that expression nesting depth exceeds 100 levels. Extremely deeply nested expressions may cause performance issues at the Cloudflare edge.
+
+Requires the optional `octorules[wirefilter]` package.
+
+Fix: Simplify the expression to reduce nesting depth. Break complex logic into multiple rules if needed.
+
 ---
 
-## Category C — Action Validation (14 rules)
+## Category C — Action Validation (18 rules)
 
 ### C001 — Invalid action for phase
 
@@ -271,6 +283,64 @@ waf_custom_rules:
 
 Fix: Use a status code in the 400–499 range. Cloudflare only allows 4xx responses for block actions.
 
+### C016 — Missing id in execute action_parameters
+
+| Severity | Category |
+|----------|----------|
+| ERROR | action |
+
+Triggers when an `execute` action's `action_parameters` is missing the required `id` field. The `id` identifies which managed ruleset or custom ruleset to execute.
+
+```yaml
+waf_custom_rules:
+  - ref: deploy-custom
+    expression: 'true'
+    action: execute
+    action_parameters: {}   # missing id
+```
+
+Fix:
+
+```yaml
+action_parameters:
+  id: abc12345def67890abc12345def67890
+```
+
+### C017 — Invalid execute id format
+
+| Severity | Category |
+|----------|----------|
+| WARNING | action |
+
+Triggers when an `execute` action's `id` is not a valid 32-character lowercase hex string.
+
+```yaml
+action_parameters:
+  id: not-a-valid-id
+```
+
+Fix: Use the correct 32-character hex ruleset ID from Cloudflare.
+
+### C018 — Compression terminal algorithm must be last
+
+| Severity | Category |
+|----------|----------|
+| WARNING | action |
+
+Triggers when a `compress_response` action's `algorithms` list has a terminal algorithm (`none`, `auto`) that is not the last entry. Terminal algorithms stop the algorithm negotiation — any algorithms listed after them will never be used.
+
+```yaml
+compression_rules:
+  - ref: compress
+    expression: 'true'
+    action_parameters:
+      algorithms:
+        - name: auto     # terminal — stops negotiation
+        - name: gzip     # never reached
+```
+
+Fix: Move terminal algorithms to the end of the list, or remove subsequent entries.
+
 ---
 
 ## Category D — Rate Limiting (6 rules)
@@ -396,7 +466,7 @@ Fix: Either remove the TTL settings or set `cache: true`.
 
 ---
 
-## Category J — Config Rules (4 rules)
+## Category J — Config Rules (5 rules)
 
 ### J001 — Invalid security_level value
 
@@ -438,6 +508,24 @@ Triggers when `security_level` is explicitly set to `off`.
 
 Fix: Confirm this is intentional. If not, use a higher security level.
 
+### J005 — Security warning: ssl set to off
+
+| Severity | Category |
+|----------|----------|
+| WARNING | config |
+
+Triggers when `ssl` is explicitly set to `off`. This disables SSL/TLS encryption, allowing traffic to travel unencrypted between Cloudflare and your origin.
+
+```yaml
+config_rules:
+  - ref: disable-ssl
+    expression: 'http.host eq "legacy.example.com"'
+    action_parameters:
+      ssl: off
+```
+
+Fix: Confirm this is intentional. If not, use `flexible`, `full`, `strict`, or `origin_pull`.
+
 ---
 
 ## Category K — Redirect Rules (2 rules)
@@ -472,7 +560,7 @@ action_parameters:
 
 ---
 
-## Category L — Transform Rules (5 rules)
+## Category L — Transform Rules (6 rules)
 
 ### L002 — Empty header name in transform
 
@@ -561,6 +649,27 @@ url_rewrite_rules:
 ```
 
 Fix: Correct the expression syntax.
+
+### L007 — Request headers do not support add operation
+
+| Severity | Category |
+|----------|----------|
+| ERROR | transform |
+
+Triggers when a header transform in `request_header_rules` uses `operation: add`. Cloudflare only supports `set` and `remove` for request header modifications. The `add` operation (append a value) is only available in `response_header_rules`.
+
+```yaml
+request_header_rules:
+  - ref: add-header
+    expression: 'true'
+    action_parameters:
+      headers:
+        x-custom:
+          operation: add       # not valid for request headers
+          value: "my-value"
+```
+
+Fix: Use `operation: set` instead, or move the rule to `response_header_rules` if you need `add`.
 
 ---
 

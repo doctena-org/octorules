@@ -260,6 +260,85 @@ class TestManagedLists:
         assert "P003" not in _ids(ctx)
 
 
+class TestListTypeMismatch:
+    def test_p005_ip_field_with_asn_list(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src in $my_asns"},
+                ],
+                "lists": [{"name": "my_asns", "kind": "asn", "items": []}],
+            }
+        )
+        assert "P005" in _ids(ctx)
+
+    def test_p005_asn_field_with_ip_list(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src.asnum in $my_ips"},
+                ],
+                "lists": [{"name": "my_ips", "kind": "ip", "items": []}],
+            }
+        )
+        assert "P005" in _ids(ctx)
+
+    def test_p005_correct_ip_field_with_ip_list(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src in $my_ips"},
+                ],
+                "lists": [{"name": "my_ips", "kind": "ip", "items": []}],
+            }
+        )
+        assert "P005" not in _ids(ctx)
+
+    def test_p005_correct_asn_field_with_asn_list(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.geoip.asnum in $my_asns"},
+                ],
+                "lists": [{"name": "my_asns", "kind": "asn", "items": []}],
+            }
+        )
+        assert "P005" not in _ids(ctx)
+
+    def test_p005_not_in_also_detected(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src not in $my_asns"},
+                ],
+                "lists": [{"name": "my_asns", "kind": "asn", "items": []}],
+            }
+        )
+        assert "P005" in _ids(ctx)
+
+    def test_p005_no_lists_section(self):
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src in $my_list"},
+                ],
+            }
+        )
+        assert "P005" not in _ids(ctx)
+
+    def test_p005_unknown_list_no_error(self):
+        """Unknown list reference is handled by P003, not P005."""
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src in $unknown"},
+                ],
+                "lists": [{"name": "my_ips", "kind": "ip", "items": []}],
+            }
+        )
+        assert "P005" not in _ids(ctx)
+
+
 class TestPhaseFilter:
     def test_filter_skips_unmatched_phase(self):
         ctx = _lint(

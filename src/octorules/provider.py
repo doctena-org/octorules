@@ -441,6 +441,10 @@ class CloudflareProvider:
                     break
                 except (AuthenticationError, PermissionDeniedError):
                     raise
+                except _json.JSONDecodeError as e:
+                    raise ValueError(
+                        f"Invalid JSON in list items response for {list_id}: {e}"
+                    ) from e
                 except (APIError, APIConnectionError) as e:
                     last_exc = e
                     if attempt < _page_retries:
@@ -656,6 +660,10 @@ def _ruleset_to_dict(ruleset) -> dict:
     try:
         return dict(ruleset)
     except (TypeError, ValueError):
+        log.warning(
+            "Failed to convert ruleset to dict (type=%s), returning empty",
+            type(ruleset).__name__,
+        )
         return {}
 
 

@@ -240,3 +240,36 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
         i += 1
 
     return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# CSP value formatting (for page_shield_policies dump output)
+# ---------------------------------------------------------------------------
+
+
+def format_csp_value(value: str, max_line: int = 80) -> str:
+    """Format a CSP value string for readable multi-line YAML.
+
+    Short values (≤ *max_line* chars) are returned unchanged.  Long values
+    are formatted with one source per line: directive names at the base
+    indentation level and their sources indented by 2 spaces.
+
+    The result normalizes back to the original via ``normalize_expression()``.
+    """
+    if len(value) <= max_line:
+        return value
+
+    # Split on "; " (directive boundary), keeping the semicolons
+    parts = value.split("; ")
+    lines: list[str] = []
+    for i, part in enumerate(parts):
+        tokens = part.split(" ")
+        # Directive name (e.g. "script-src") on its own line
+        lines.append(tokens[0])
+        for j, token in enumerate(tokens[1:], 1):
+            # Attach semicolon to the last token of non-final directives
+            if i < len(parts) - 1 and j == len(tokens) - 1:
+                lines.append(f"  {token};")
+            else:
+                lines.append(f"  {token}")
+    return "\n".join(lines)

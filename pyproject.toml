@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.12.5"
+version = "0.12.6"
 description = "Manage Cloudflare Rules as IaC"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -34,7 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 wirefilter = [
-    "octorules-wirefilter>=0.3.0",
+    "octorules-wirefilter>=0.3.2",
 ]
 dev = [
     "pytest>=7.0",

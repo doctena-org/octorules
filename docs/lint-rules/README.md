@@ -1,6 +1,6 @@
 # Lint Rule Reference
 
-`octorules lint` performs offline static analysis of your rules files. **109 rules** across **17 categories**, organized into a 4-stage pipeline.
+`octorules lint` performs offline static analysis of your rules files. **127 rules** across **19 categories**, organized into a 4-stage pipeline.
 
 ### Suppressing rules
 
@@ -52,24 +52,26 @@ Suppressed findings are excluded from the report but counted in the summary line
 
 | Stage | What it checks | Categories | Rules | Details |
 |-------|---------------|------------|-------|---------|
-| 1. YAML structure | Required fields, types, duplicates, unknown keys | M | 15 | [stage1-yaml-structure.md](stage1-yaml-structure.md) |
-| 2. Per-rule checks | Actions, expressions, phase restrictions, values, style | A, C, D, I, J, K, L, N, E, F, G, B, O | 83 | [stage2-per-rule.md](stage2-per-rule.md) |
-| 2b. Page Shield | Policy structure, expressions, catch-all detection | S | 4 | [stage2b-page-shield.md](stage2b-page-shield.md) |
+| 1. YAML structure | Required fields, types, duplicates, unknown keys | M | 16 | [stage1-yaml-structure.md](stage1-yaml-structure.md) |
+| 2. Per-rule checks | Actions, expressions, phase restrictions, values, style | A, C, D, I, J, K, L, N, E, F, G, B, O | 89 | [stage2-per-rule.md](stage2-per-rule.md) |
+| 2b. Custom rulesets | Custom ruleset structure, duplicate refs | T | 4 | [stage2b-custom-rulesets.md](stage2b-custom-rulesets.md) |
+| 2c. Page Shield | Policy structure, expressions, catch-all detection | S | 4 | [stage2b-page-shield.md](stage2b-page-shield.md) |
+| 2d. List validation | List structure, item validity, duplicates | Q | 6 | [stage2d-lists.md](stage2d-lists.md) |
 | 3. Plan-tier limits | Regex availability, rule count limits | H | 3 | [stage3-plan-tier.md](stage3-plan-tier.md) |
-| 4. Cross-rule analysis | Duplicates, unreachable rules, list references | P | 4 | [stage4-cross-rule.md](stage4-cross-rule.md) |
+| 4. Cross-rule analysis | Duplicates, unreachable rules, list references | P | 5 | [stage4-cross-rule.md](stage4-cross-rule.md) |
 
 ## Categories
 
 | Prefix | Category | Rules |
 |--------|----------|-------|
-| A | Parse / syntax errors | 1 |
-| M | Structure | 15 |
-| C | Action validation | 15 |
+| A | Parse / syntax errors | 2 |
+| M | Structure | 16 |
+| C | Action validation | 18 |
 | D | Rate limiting | 6 |
 | I | Cache rules | 4 |
-| J | Config rules | 4 |
+| J | Config rules | 5 |
 | K | Redirect rules | 2 |
-| L | Transform rules | 5 |
+| L | Transform rules | 6 |
 | N | Origin rules | 1 |
 | E | Function constraints | 7 |
 | F | Type system | 3 |
@@ -78,7 +80,9 @@ Suppressed findings are excluded from the report but counted in the summary line
 | O | Best practice / style | 6 |
 | H | Plan/entitlement | 3 |
 | S | Page Shield structure | 4 |
-| P | Cross-rule | 4 |
+| P | Cross-rule | 5 |
+| Q | List validation | 6 |
+| T | Custom ruleset validation | 4 |
 
 ---
 
@@ -197,6 +201,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | ID | Description | Severity |
 |----|-------------|----------|
 | [A001](stage2-per-rule.md#a001--expression-parse-error-wirefilter) | Expression parse error (wirefilter) | WARNING |
+| [A002](stage2-per-rule.md#a002--expression-nesting-depth-exceeded) | Expression nesting depth exceeded | WARNING |
 | [M001](stage1-yaml-structure.md#m001--missing-ref-field) | Missing ref field | ERROR |
 | [M002](stage1-yaml-structure.md#m002--missing-expression-field) | Missing expression field | ERROR |
 | [M003](stage1-yaml-structure.md#m003--duplicate-ref-within-phase) | Duplicate ref within phase | ERROR |
@@ -212,6 +217,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [M013](stage1-yaml-structure.md#m013--expression-is-always-true-catch-all) | Expression is always true (catch-all) | WARNING |
 | [M014](stage1-yaml-structure.md#m014--expression-is-always-false-dead-rule) | Expression is always false (dead rule) | WARNING |
 | [M015](stage1-yaml-structure.md#m015--expression-exceeds-4096-character-limit) | Expression exceeds 4,096 character limit | ERROR |
+| [M016](stage1-yaml-structure.md#m016--rule-is-disabled) | Rule is disabled (enabled: false) | INFO |
 | [C001](stage2-per-rule.md#c001--invalid-action-for-phase) | Invalid action for phase | ERROR |
 | [C002](stage2-per-rule.md#c002--missing-required-action) | Missing required action | ERROR |
 | [C003](stage2-per-rule.md#c003--missing-required-action_parameters) | Missing required action_parameters | ERROR |
@@ -227,6 +233,9 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [C013](stage2-per-rule.md#c013--invalid-compress_response-algorithm) | Invalid compress_response algorithm | ERROR |
 | [C014](stage2-per-rule.md#c014--invalid-rate-limit-characteristic) | Invalid rate limit characteristic | WARNING |
 | [C015](stage2-per-rule.md#c015--invalid-block-response-parameter) | Invalid block response parameter | ERROR |
+| [C016](stage2-per-rule.md#c016--missing-id-in-execute-action_parameters) | Missing id in execute action_parameters | ERROR |
+| [C017](stage2-per-rule.md#c017--invalid-execute-id-format) | Invalid execute id format | WARNING |
+| [C018](stage2-per-rule.md#c018--compression-terminal-algorithm-must-be-last) | Compression terminal algorithm must be last | WARNING |
 | [D001](stage2-per-rule.md#d001--invalid-rate-limiting-period) | Invalid rate limiting period | ERROR |
 | [D002](stage2-per-rule.md#d002--missing-rate-limiting-characteristics) | Missing rate limiting characteristics | WARNING |
 | [D003](stage2-per-rule.md#d003--missing-requests_per_period-threshold) | Missing requests_per_period threshold | ERROR |
@@ -241,6 +250,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [J002](stage2-per-rule.md#j002--invalid-ssl-value) | Invalid ssl value | ERROR |
 | [J003](stage2-per-rule.md#j003--invalid-polish-value) | Invalid polish value | ERROR |
 | [J004](stage2-per-rule.md#j004--security-warning-security_level-set-to-off) | Security warning: security_level off | WARNING |
+| [J005](stage2-per-rule.md#j005--security-warning-ssl-set-to-off) | Security warning: ssl set to off | WARNING |
 | [K001](stage2-per-rule.md#k001--invalid-redirect-status-code) | Invalid redirect status code | ERROR |
 | [K002](stage2-per-rule.md#k002--missing-target_url-in-redirect) | Missing target_url in redirect | ERROR |
 | [L002](stage2-per-rule.md#l002--empty-header-name-in-transform) | Empty header name in transform | ERROR |
@@ -248,6 +258,7 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [L004](stage2-per-rule.md#l004--invalid-header-transform-operation) | Invalid header transform operation | ERROR |
 | [L005](stage2-per-rule.md#l005--header-setadd-missing-value-or-expression) | Header set/add missing value or expression | ERROR |
 | [L006](stage2-per-rule.md#l006--expression-parse-error-in-transform-action_parameters) | Expression parse error in transform action_parameters | WARNING |
+| [L007](stage2-per-rule.md#l007--request-headers-do-not-support-add-operation) | Request headers do not support add operation | ERROR |
 | [N001](stage2-per-rule.md#n001--port-number-out-of-range) | Port number out of range (1-65535) | ERROR |
 | [B001](stage2-per-rule.md#b001--response-field-used-in-request-phase) | Response field used in request phase | WARNING |
 | [B002](stage2-per-rule.md#b002--request-body-field-in-phase-without-body-access) | Request body field in phase without body access | WARNING |
@@ -305,3 +316,14 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [P002](stage4-cross-rule.md#p002--unreachable-rule-after-terminating-action) | Unreachable rule after terminating action | WARNING |
 | [P003](stage4-cross-rule.md#p003--unresolved-list-reference) | Unresolved list reference | WARNING |
 | [P004](stage4-cross-rule.md#p004--invalid-managed-list-name) | Invalid managed list name | WARNING |
+| [P005](stage4-cross-rule.md#p005--list-type--field-type-mismatch) | List type / field type mismatch | WARNING |
+| [Q001](stage2d-lists.md#q001--missing-or-duplicate-list-name) | Missing or duplicate list name | ERROR |
+| [Q002](stage2d-lists.md#q002--missing-or-invalid-list-kind) | Missing or invalid list kind | ERROR |
+| [Q003](stage2d-lists.md#q003--list-item-missing-required-field) | List item missing required field | ERROR |
+| [Q004](stage2d-lists.md#q004--invalid-ip-address-in-ip-list) | Invalid IP address in IP list | ERROR |
+| [Q005](stage2d-lists.md#q005--invalid-asn-value-in-asn-list) | Invalid ASN value in ASN list | ERROR |
+| [Q006](stage2d-lists.md#q006--duplicate-items-within-list) | Duplicate items within list | WARNING |
+| [T001](stage2b-custom-rulesets.md#t001--missing-required-field) | Missing required custom ruleset field | ERROR |
+| [T002](stage2b-custom-rulesets.md#t002--invalid-id-format) | Invalid custom ruleset id format | WARNING |
+| [T003](stage2b-custom-rulesets.md#t003--duplicate-ref-within-custom-ruleset) | Duplicate ref within custom ruleset | ERROR |
+| [T004](stage2b-custom-rulesets.md#t004--duplicate-ref-across-custom-rulesets) | Duplicate ref across custom rulesets | WARNING |
