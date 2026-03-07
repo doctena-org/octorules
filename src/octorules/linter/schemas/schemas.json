@@ -1,0 +1,931 @@
+{
+  "_generated_with": "octorules-wirefilter 0.3.2",
+  "fields": [
+    {
+      "name": "cf.api_gateway.auth_id_present",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.api_gateway.fallthrough_detected",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.api_gateway.request_violates_schema",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.bot_management.corporate_proxy",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.detection_ids",
+      "type": "ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.ja3_hash",
+      "type": "STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.ja4",
+      "type": "STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.js_detection.passed",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.score",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.static_resource",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.bot_management.verified_bot",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.client.bot",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.edge.client_tcp",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.edge.server_ip",
+      "type": "IP"
+    },
+    {
+      "name": "cf.edge.server_port",
+      "type": "INT"
+    },
+    {
+      "name": "cf.hostname.metadata",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.llm.prompt.detected",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.llm.prompt.injection_score",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.llm.prompt.pii_categories",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.llm.prompt.pii_detected",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.llm.prompt.unsafe_topic_categories",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.llm.prompt.unsafe_topic_detected",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.random_seed",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.ray_id",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.response.1xxx_code",
+      "type": "INT",
+      "is_response": true
+    },
+    {
+      "name": "cf.response.error_type",
+      "type": "STRING",
+      "is_response": true
+    },
+    {
+      "name": "cf.threat_score",
+      "type": "INT"
+    },
+    {
+      "name": "cf.timings.client_tcp_rtt_msec",
+      "type": "INT"
+    },
+    {
+      "name": "cf.timings.edge_msec",
+      "type": "INT"
+    },
+    {
+      "name": "cf.timings.origin_ttfb_msec",
+      "type": "INT"
+    },
+    {
+      "name": "cf.tls_cipher",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_ciphers_sha1",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_fingerprint_sha1",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_fingerprint_sha256",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_issuer_dn",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_issuer_dn_legacy",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_issuer_dn_rfc2253",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_issuer_serial",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_issuer_ski",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_not_after",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_not_before",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_presented",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_revoked",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_serial",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_ski",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_subject_dn",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_subject_dn_legacy",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_subject_dn_rfc2253",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_auth.cert_verified",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.tls_client_extensions_sha1",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_extensions_sha1_le",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_client_hello_length",
+      "type": "INT"
+    },
+    {
+      "name": "cf.tls_client_random",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.tls_version",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.verified_bot_category",
+      "type": "STRING"
+    },
+    {
+      "name": "cf.waf.auth_detected",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.has_failed",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.has_malicious_obj",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.has_obj",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.num_malicious_obj",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.num_obj",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.obj_results",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.obj_sizes",
+      "type": "ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.content_scan.obj_types",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.credential_check.password_leaked",
+      "type": "BOOL"
+    },
+    {
+      "name": "cf.waf.credential_check.username_and_password_leaked",
+      "type": "BOOL",
+      "requires_plan": "pro"
+    },
+    {
+      "name": "cf.waf.credential_check.username_leaked",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.credential_check.username_password_similar",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.score",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.score.class",
+      "type": "STRING",
+      "requires_plan": "business"
+    },
+    {
+      "name": "cf.waf.score.rce",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.score.sqli",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.waf.score.xss",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "cf.worker.upstream_zone",
+      "type": "STRING"
+    },
+    {
+      "name": "http.cookie",
+      "type": "STRING"
+    },
+    {
+      "name": "http.host",
+      "type": "STRING"
+    },
+    {
+      "name": "http.referer",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.accepted_languages",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "http.request.body.form",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.form.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.form.values",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.mime",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.body.multipart",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.multipart.content_dispositions",
+      "type": "ARRAY_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.multipart.content_transfer_encodings",
+      "type": "ARRAY_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.multipart.content_types",
+      "type": "ARRAY_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.multipart.filenames",
+      "type": "ARRAY_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.multipart.names",
+      "type": "ARRAY_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.multipart.values",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.raw",
+      "type": "STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.size",
+      "type": "INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.body.truncated",
+      "type": "BOOL",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.cookies",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "pro"
+    },
+    {
+      "name": "http.request.full_uri",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.headers",
+      "type": "MAP_ARRAY_STRING"
+    },
+    {
+      "name": "http.request.headers.names",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "http.request.headers.truncated",
+      "type": "BOOL"
+    },
+    {
+      "name": "http.request.headers.values",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "http.request.jwt.claims.aud",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.aud.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.aud.values",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.exp.sec",
+      "type": "MAP_ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.exp.sec.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.exp.sec.values",
+      "type": "ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.iat.sec",
+      "type": "MAP_ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.iat.sec.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.iat.sec.values",
+      "type": "ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.iss",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.iss.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.iss.values",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.jti",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.jti.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.jti.values",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.nbf.sec",
+      "type": "MAP_ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.nbf.sec.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.nbf.sec.values",
+      "type": "ARRAY_INT",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.sub",
+      "type": "MAP_ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.sub.names",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.jwt.claims.sub.values",
+      "type": "ARRAY_STRING",
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "http.request.method",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.timestamp.msec",
+      "type": "INT"
+    },
+    {
+      "name": "http.request.timestamp.sec",
+      "type": "INT"
+    },
+    {
+      "name": "http.request.uri",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.uri.args",
+      "type": "MAP_ARRAY_STRING"
+    },
+    {
+      "name": "http.request.uri.args.names",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "http.request.uri.args.values",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "http.request.uri.path.extension",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.uri.query",
+      "type": "STRING"
+    },
+    {
+      "name": "http.request.version",
+      "type": "STRING"
+    },
+    {
+      "name": "http.response.code",
+      "type": "INT",
+      "is_response": true
+    },
+    {
+      "name": "http.response.content_type.media_type",
+      "type": "STRING",
+      "is_response": true
+    },
+    {
+      "name": "http.response.headers",
+      "type": "MAP_ARRAY_STRING",
+      "is_response": true
+    },
+    {
+      "name": "http.response.headers.names",
+      "type": "ARRAY_STRING",
+      "is_response": true
+    },
+    {
+      "name": "http.response.headers.values",
+      "type": "ARRAY_STRING",
+      "is_response": true
+    },
+    {
+      "name": "http.response.headers.truncated",
+      "type": "BOOL",
+      "is_response": true
+    },
+    {
+      "name": "http.user_agent",
+      "type": "STRING"
+    },
+    {
+      "name": "http.x_forwarded_for",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src",
+      "type": "IP"
+    },
+    {
+      "name": "ip.src.asnum",
+      "type": "INT"
+    },
+    {
+      "name": "ip.src.city",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.continent",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.country",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.is_in_european_union",
+      "type": "BOOL",
+      "requires_plan": "business"
+    },
+    {
+      "name": "ip.src.lat",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.lon",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.metro_code",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.postal_code",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.region",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.region_code",
+      "type": "STRING"
+    },
+    {
+      "name": "ip.src.subdivision_1_iso_code",
+      "type": "STRING",
+      "requires_plan": "business"
+    },
+    {
+      "name": "ip.src.subdivision_2_iso_code",
+      "type": "STRING",
+      "requires_plan": "business"
+    },
+    {
+      "name": "ip.src.timezone.name",
+      "type": "STRING"
+    },
+    {
+      "name": "raw.http.request.full_uri",
+      "type": "STRING"
+    },
+    {
+      "name": "raw.http.request.uri",
+      "type": "STRING"
+    },
+    {
+      "name": "raw.http.request.uri.args",
+      "type": "MAP_ARRAY_STRING"
+    },
+    {
+      "name": "raw.http.request.uri.args.names",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "raw.http.request.uri.args.values",
+      "type": "ARRAY_STRING"
+    },
+    {
+      "name": "raw.http.request.uri.path",
+      "type": "STRING"
+    },
+    {
+      "name": "raw.http.request.uri.path.extension",
+      "type": "STRING"
+    },
+    {
+      "name": "raw.http.request.uri.query",
+      "type": "STRING"
+    },
+    {
+      "name": "raw.http.response.headers",
+      "type": "MAP_ARRAY_STRING",
+      "is_response": true
+    },
+    {
+      "name": "raw.http.response.headers.names",
+      "type": "ARRAY_STRING",
+      "is_response": true
+    },
+    {
+      "name": "raw.http.response.headers.values",
+      "type": "ARRAY_STRING",
+      "is_response": true
+    },
+    {
+      "name": "ssl",
+      "type": "BOOL"
+    }
+  ],
+  "functions": [
+    {
+      "name": "any"
+    },
+    {
+      "name": "all"
+    },
+    {
+      "name": "concat"
+    },
+    {
+      "name": "lower"
+    },
+    {
+      "name": "upper"
+    },
+    {
+      "name": "url_decode"
+    },
+    {
+      "name": "uuidv4",
+      "restricted_phases": [
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "starts_with"
+    },
+    {
+      "name": "ends_with"
+    },
+    {
+      "name": "contains"
+    },
+    {
+      "name": "len"
+    },
+    {
+      "name": "substring"
+    },
+    {
+      "name": "regex_replace",
+      "restricted_phases": [
+        "redirect_rules",
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "remove_bytes"
+    },
+    {
+      "name": "to_string",
+      "restricted_phases": [
+        "redirect_rules",
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "lookup_json_string"
+    },
+    {
+      "name": "lookup_json_integer"
+    },
+    {
+      "name": "sha256",
+      "restricted_phases": [
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ],
+      "requires_plan": "enterprise"
+    },
+    {
+      "name": "sha512"
+    },
+    {
+      "name": "hmac"
+    },
+    {
+      "name": "is_timed_hmac_valid_v0",
+      "requires_plan": "pro"
+    },
+    {
+      "name": "ip_in_range"
+    },
+    {
+      "name": "wildcard"
+    },
+    {
+      "name": "encode_base64",
+      "restricted_phases": [
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "decode_base64",
+      "restricted_phases": [
+        "rate_limiting_rules",
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules",
+        "waf_custom_rules"
+      ]
+    },
+    {
+      "name": "cidr",
+      "restricted_phases": [
+        "rate_limiting_rules",
+        "waf_custom_rules"
+      ]
+    },
+    {
+      "name": "cidr6",
+      "restricted_phases": [
+        "rate_limiting_rules",
+        "waf_custom_rules"
+      ]
+    },
+    {
+      "name": "join",
+      "restricted_phases": [
+        "custom_error_rules",
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules",
+        "waf_custom_rules"
+      ]
+    },
+    {
+      "name": "split",
+      "restricted_phases": [
+        "custom_error_rules",
+        "response_header_rules"
+      ]
+    },
+    {
+      "name": "has_key"
+    },
+    {
+      "name": "has_value"
+    },
+    {
+      "name": "remove_query_args",
+      "restricted_phases": [
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "bit_slice",
+      "restricted_phases": [
+        "network_ddos_rules",
+        "network_firewall_ids",
+        "network_firewall_managed",
+        "network_firewall_ratelimit",
+        "network_firewall_rules"
+      ]
+    },
+    {
+      "name": "wildcard_replace",
+      "restricted_phases": [
+        "redirect_rules",
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "http.request.uri.path",
+      "restricted_phases": [
+        "request_header_rules",
+        "response_header_rules",
+        "url_rewrite_rules"
+      ]
+    },
+    {
+      "name": "cf.bot_management.score",
+      "requires_plan": "enterprise"
+    }
+  ]
+}

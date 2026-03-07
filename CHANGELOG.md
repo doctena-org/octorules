@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.1] - 2026-03-07
+
+### Changed
+- **Schema loading is now dynamic**: field and function registries are built
+  at import time from wirefilter + `overlay.toml` when wirefilter is installed,
+  eliminating version-skew between local dev and CI. Falls back to a frozen
+  `schemas.json` snapshot when wirefilter is absent.
+- `sync_schemas.py` now generates `schemas.json` (data) instead of Python code
+  blocks in `fields.py` / `functions.py`.
+- Publish workflow is gated on lint + test via reusable workflows — broken
+  code can no longer reach PyPI.
+- `--check` step removed from CI test workflow (pre-commit hook keeps the
+  fallback fresh; live loading makes the check unnecessary).
+
+### Added
+- `_registry.py`: import-time schema loader (wirefilter-first, JSON fallback).
+- `schemas.json`: frozen schema snapshot for the no-wirefilter fallback path.
+- `docs/schemas.md`: full architecture documentation (data sources, data flow,
+  editing overlay.toml, fallback behavior).
+- `scripts/hooks/pre-commit`: auto-regenerates `schemas.json` when
+  `overlay.toml` or `pyproject.toml` is modified.
+- `lint.yaml` and `test.yaml` now support `workflow_call` (reusable workflows).
+
+### Fixed
+- Missing `overlay.toml` entries for JWT `exp` claim fields
+  (`requires_plan = "enterprise"`) — pre-existing oversight since these fields
+  were added to wirefilter.
+- `overlay.toml` missing metadata for 8 functions (`decode_base64`, `cidr`,
+  `cidr6`, `join`, `split`, `bit_slice`, `is_timed_hmac_valid_v0`, `sha256`).
+
 ## [0.13.0] - 2026-03-07
 
 ### Added

@@ -20,5 +20,3 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev,wirefilter]"
       - run: pytest tests/ -v
-      - name: Check schema sync
-        run: python scripts/sync_schemas.py --check

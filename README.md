@@ -533,8 +533,14 @@ git clone git@github.com:doctena-org/octorules.git
 cd octorules
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,wirefilter]"
+ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 ```
+
+The pre-commit hook auto-regenerates `schemas.json` (the frozen schema fallback
+for users without wirefilter) whenever `overlay.toml` or `pyproject.toml`
+changes. See [docs/schemas.md](docs/schemas.md) for the full schema
+architecture.
 
 ### Running tests and linting
 
@@ -555,7 +561,7 @@ git tag v0.10.0
 git push origin v0.10.0
 ```
 
-Pushing a `v*` tag triggers the [publish workflow](.github/workflows/publish.yaml), which builds the package, publishes it to [PyPI](https://pypi.org/project/octorules/), and creates a GitHub Release.
+Pushing a `v*` tag triggers the [publish workflow](.github/workflows/publish.yaml), which runs the full lint and test suites before building, publishing to [PyPI](https://pypi.org/project/octorules/), and creating a GitHub Release. Publishing is gated — if lint or tests fail, nothing is released.
 
 ## License
 
