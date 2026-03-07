@@ -1,6 +1,7 @@
 # Python-only metadata not present in wirefilter.
 # Only entries that differ from defaults are listed.
 # Defaults: requires_plan = "", is_response = false, restricted_phases = []
+# See docs/schemas.md for architecture and editing instructions.
 
 [fields]
 "cf.api_gateway.auth_id_present" = { requires_plan = "enterprise" }
