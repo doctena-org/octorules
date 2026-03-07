@@ -112,16 +112,51 @@ _fn("is_timed_hmac_valid_v0", requires_plan="pro")
 _fn("ip_in_range")
 _fn("wildcard")
 _fn("encode_base64", restricted_phases=_TRANSFORM_PHASES)
-_fn("decode_base64", restricted_phases=_TRANSFORM_AND_WAF_AND_RATELIMIT_PHASES)
-_fn("cidr", restricted_phases=_WAF_AND_RATELIMIT_PHASES)
-_fn("cidr6", restricted_phases=_WAF_AND_RATELIMIT_PHASES)
-_fn("join", restricted_phases=_TRANSFORM_AND_WAF_AND_ERROR_PHASES)
-_fn("split", restricted_phases=_RESPONSE_TRANSFORM_AND_ERROR_PHASES)
+_fn(
+    "decode_base64",
+    restricted_phases=frozenset(
+        {
+            "rate_limiting_rules",
+            "request_header_rules",
+            "response_header_rules",
+            "url_rewrite_rules",
+            "waf_custom_rules",
+        }
+    ),
+)
+_fn("cidr", restricted_phases=frozenset({"rate_limiting_rules", "waf_custom_rules"}))
+_fn("cidr6", restricted_phases=frozenset({"rate_limiting_rules", "waf_custom_rules"}))
+_fn(
+    "join",
+    restricted_phases=frozenset(
+        {
+            "custom_error_rules",
+            "request_header_rules",
+            "response_header_rules",
+            "url_rewrite_rules",
+            "waf_custom_rules",
+        }
+    ),
+)
+_fn("split", restricted_phases=frozenset({"custom_error_rules", "response_header_rules"}))
 _fn("has_key")
 _fn("has_value")
 _fn("remove_query_args", restricted_phases=_TRANSFORM_PHASES)
-_fn("bit_slice", restricted_phases=_NETWORK_PHASES)
+_fn(
+    "bit_slice",
+    restricted_phases=frozenset(
+        {
+            "network_ddos_rules",
+            "network_firewall_ids",
+            "network_firewall_managed",
+            "network_firewall_ratelimit",
+            "network_firewall_rules",
+        }
+    ),
+)
 _fn("wildcard_replace", restricted_phases=_TRANSFORM_AND_REDIRECT_PHASES)
+_fn("http.request.uri.path", restricted_phases=_TRANSFORM_PHASES)
+_fn("cf.bot_management.score", requires_plan="enterprise")
 # --- END GENERATED FUNCTIONS --- #
 
 # --- Functions NOT in the CF docs reference page --- #
