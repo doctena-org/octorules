@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.13.2] - 2026-03-09
+
+### Fixed
+- **`FileNotFoundError` on `overlay.toml` in installed package**: `overlay.toml`
+  and `schemas.json` were not included in the published wheel (missing
+  `[tool.setuptools.package-data]` in `pyproject.toml`). This caused a crash
+  at import time when wirefilter was installed, breaking `octorules lint` in CI.
+
 ## [0.13.1] - 2026-03-07
 
 ### Changed
