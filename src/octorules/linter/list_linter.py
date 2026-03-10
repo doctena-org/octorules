@@ -11,6 +11,8 @@ from typing import Any
 
 from octorules.linter.engine import LintContext, LintResult, Severity
 
+RULE_IDS = frozenset({"Q001", "Q002", "Q003", "Q004", "Q005", "Q006"})
+
 _VALID_KINDS = frozenset({"ip", "asn", "hostname", "redirect"})
 
 # Required item field per list kind
@@ -166,7 +168,7 @@ def _lint_ip_item(val: Any, index: int, name_label: str, seen: set[str], ctx: Li
 
 def _lint_asn_item(val: Any, index: int, name_label: str, seen: set[str], ctx: LintContext) -> None:
     """Q005: Invalid ASN, Q006: Duplicate."""
-    if not isinstance(val, int):
+    if not isinstance(val, int) or isinstance(val, bool):
         ctx.add(
             LintResult(
                 rule_id="Q005",

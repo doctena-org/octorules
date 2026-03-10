@@ -54,8 +54,8 @@ Suppressed findings are excluded from the report but counted in the summary line
 |-------|---------------|------------|-------|---------|
 | 1. YAML structure | Required fields, types, duplicates, unknown keys | M | 16 | [stage1-yaml-structure.md](stage1-yaml-structure.md) |
 | 2. Per-rule checks | Actions, expressions, phase restrictions, values, style | A, C, D, I, J, K, L, N, E, F, G, B, O | 89 | [stage2-per-rule.md](stage2-per-rule.md) |
-| 2b. Custom rulesets | Custom ruleset structure, duplicate refs | T | 4 | [stage2b-custom-rulesets.md](stage2b-custom-rulesets.md) |
-| 2c. Page Shield | Policy structure, expressions, catch-all detection | S | 4 | [stage2b-page-shield.md](stage2b-page-shield.md) |
+| 2b. Custom rulesets | Custom ruleset structure, duplicate refs + full per-rule checks (actions, expressions, phase restrictions) | T | 4 | [stage2b-custom-rulesets.md](stage2b-custom-rulesets.md) |
+| 2c. Page Shield | Policy structure, catch-all detection + expression analysis and phase restrictions | S | 4 | [stage2b-page-shield.md](stage2b-page-shield.md) |
 | 2d. List validation | List structure, item validity, duplicates | Q | 6 | [stage2d-lists.md](stage2d-lists.md) |
 | 3. Plan-tier limits | Regex availability, rule count limits | H | 3 | [stage3-plan-tier.md](stage3-plan-tier.md) |
 | 4. Cross-rule analysis | Duplicates, unreachable rules, list references | P | 5 | [stage4-cross-rule.md](stage4-cross-rule.md) |
@@ -221,17 +221,17 @@ Some functions are restricted to specific phases. The linter checks this via rul
 | [C001](stage2-per-rule.md#c001--invalid-action-for-phase) | Invalid action for phase | ERROR |
 | [C002](stage2-per-rule.md#c002--missing-required-action) | Missing required action | ERROR |
 | [C003](stage2-per-rule.md#c003--missing-required-action_parameters) | Missing required action_parameters | ERROR |
-| [C004](stage2-per-rule.md#c004--unknown-action_parameters-key) | Unknown action_parameters key | WARNING |
+| [C004](stage2-per-rule.md#c004--unknown-action_parameters-key) | Unknown action_parameters key | ERROR |
 | [C005](stage2-per-rule.md#c005--invalid-action_parameters-type) | Invalid action_parameters type | ERROR |
 | [C006](stage2-per-rule.md#c006--invalid-status_code-type-or-value) | Invalid status_code type or value | ERROR |
 | [C007](stage2-per-rule.md#c007--missing-required-status_code-for-redirect) | Missing required status_code for redirect | ERROR |
 | [C008](stage2-per-rule.md#c008--conflicting-static-value-and-dynamic-expression) | Conflicting static value and dynamic expression | ERROR |
 | [C009](stage2-per-rule.md#c009--unnecessary-action_parameters) | Unnecessary action_parameters | WARNING |
 | [C010](stage2-per-rule.md#c010--serve_error-content-exceeds-10kb-limit) | serve_error content exceeds 10KB limit | ERROR |
-| [C011](stage2-per-rule.md#c011--invalid-skip-phases-value) | Invalid skip phases value | WARNING |
-| [C012](stage2-per-rule.md#c012--invalid-skip-products-value) | Invalid skip products value | WARNING |
+| [C011](stage2-per-rule.md#c011--invalid-skip-phases-value) | Invalid skip phases value | ERROR |
+| [C012](stage2-per-rule.md#c012--invalid-skip-products-value) | Invalid skip products value | ERROR |
 | [C013](stage2-per-rule.md#c013--invalid-compress_response-algorithm) | Invalid compress_response algorithm | ERROR |
-| [C014](stage2-per-rule.md#c014--invalid-rate-limit-characteristic) | Invalid rate limit characteristic | WARNING |
+| [C014](stage2-per-rule.md#c014--invalid-rate-limit-characteristic) | Invalid rate limit characteristic | ERROR |
 | [C015](stage2-per-rule.md#c015--invalid-block-response-parameter) | Invalid block response parameter | ERROR |
 | [C016](stage2-per-rule.md#c016--missing-id-in-execute-action_parameters) | Missing id in execute action_parameters | ERROR |
 | [C017](stage2-per-rule.md#c017--invalid-execute-id-format) | Invalid execute id format | WARNING |

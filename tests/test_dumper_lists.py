@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 import yaml
 
 from octorules.config import _yaml_load
-from octorules.dumper import dump_zone_rules
+from octorules.dumper import _write_list_file, dump_zone_rules
 
 
 class TestDumpLists:
@@ -381,3 +383,71 @@ class TestDumpListsExternalization:
             current_description="Server IPs",
         )
         assert not lp.has_changes
+
+
+class TestWriteListFilePathTraversal:
+    """Tests for path traversal protection in _write_list_file."""
+
+    def _sample_entry(self):
+        return {
+            "name": "test_list",
+            "kind": "ip",
+            "description": "test",
+            "items": [{"ip": "1.2.3.4"}],
+        }
+
+    def test_dotdot_list_name_returns_none(self, tmp_path, caplog):
+        """List name with ../ should return None and log an error."""
+        lists_dir = tmp_path / "custom_lists"
+        lists_dir.mkdir()
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_list_file(tmp_path, lists_dir, "../../etc/passwd", self._sample_entry())
+        assert result is None
+        assert "outside lists directory" in caplog.text
+
+    def test_single_dotdot_list_name_returns_none(self, tmp_path, caplog):
+        """List name with a single ../ escape should return None."""
+        lists_dir = tmp_path / "custom_lists"
+        lists_dir.mkdir()
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_list_file(tmp_path, lists_dir, "../secret", self._sample_entry())
+        assert result is None
+        assert "outside lists directory" in caplog.text
+
+    def test_absolute_path_list_name_returns_none(self, tmp_path, caplog):
+        """List name that is an absolute path should return None."""
+        lists_dir = tmp_path / "custom_lists"
+        lists_dir.mkdir()
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_list_file(tmp_path, lists_dir, "/etc/passwd", self._sample_entry())
+        assert result is None
+        assert "outside lists directory" in caplog.text
+
+    def test_embedded_dotdot_list_name_returns_none(self, tmp_path, caplog):
+        """List name with embedded ../ segments should return None."""
+        lists_dir = tmp_path / "custom_lists"
+        lists_dir.mkdir()
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_list_file(
+                tmp_path, lists_dir, "sub/../../etc/passwd", self._sample_entry()
+            )
+        assert result is None
+        assert "outside lists directory" in caplog.text
+
+    def test_traversal_does_not_create_file(self, tmp_path):
+        """Traversal attempt must not create any file outside lists_dir."""
+        lists_dir = tmp_path / "custom_lists"
+        lists_dir.mkdir()
+        _write_list_file(tmp_path, lists_dir, "../../etc/passwd", self._sample_entry())
+        # No file should have been created outside the lists directory
+        assert not (tmp_path / "etc").exists()
+        assert not (tmp_path.parent / "etc").exists()
+
+    def test_safe_list_name_succeeds(self, tmp_path):
+        """A normal list name should succeed and return a relative path."""
+        lists_dir = tmp_path / "custom_lists"
+        lists_dir.mkdir()
+        result = _write_list_file(tmp_path, lists_dir, "my_safe_list", self._sample_entry())
+        assert result is not None
+        assert "my_safe_list.yaml" in result
+        assert (lists_dir / "my_safe_list.yaml").exists()

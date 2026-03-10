@@ -103,3 +103,9 @@
 "bit_slice" = { restricted_phases = ["network_firewall_rules", "network_ddos_rules", "network_firewall_managed", "network_firewall_ratelimit", "network_firewall_ids"] }
 "is_timed_hmac_valid_v0" = { requires_plan = "pro" }
 "cf.bot_management.score" = { requires_plan = "enterprise" }
+
+# Cloudflare managed list names referenced in expressions as $cf.<name>.
+# Source: https://developers.cloudflare.com/waf/tools/lists/managed-lists/
+# Last verified: 2026-03-07
+[managed_lists]
+names = ["cf.anonymizer", "cf.botnetcc", "cf.malware", "cf.open_proxies", "cf.vpn"]

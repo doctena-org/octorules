@@ -93,3 +93,10 @@ def load_schema() -> dict:
         return data
     log.debug("wirefilter not installed, using frozen schemas.json fallback")
     return _load_fallback()
+
+
+def load_managed_lists() -> frozenset[str]:
+    """Load valid Cloudflare managed list names from overlay.toml."""
+    overlay = _load_overlay()
+    names = overlay.get("managed_lists", {}).get("names", [])
+    return frozenset(names)

@@ -11,6 +11,8 @@ from typing import Any
 
 from octorules.linter.engine import LintContext, LintResult, Severity
 
+RULE_IDS = frozenset({"T001", "T002", "T003", "T004"})
+
 _HEX_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 

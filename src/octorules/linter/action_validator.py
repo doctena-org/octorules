@@ -15,6 +15,7 @@ from typing import Any
 from octorules.linter.engine import LintContext, LintResult, Severity
 from octorules.linter.schemas.actions import (
     ACTION_SCHEMAS,
+    PHASE_PARAMETER_OVERRIDES,
     VALID_ACTIONS_BY_PHASE,
     VALID_BLOCK_RESPONSE_STATUS_CODES,
     VALID_BROWSER_TTL_MODES,
@@ -30,6 +31,53 @@ from octorules.linter.schemas.actions import (
     VALID_SSL_VALUES,
 )
 from octorules.phases import Phase
+
+RULE_IDS = frozenset(
+    {
+        "C001",
+        "C002",
+        "C003",
+        "C004",
+        "C005",
+        "C006",
+        "C007",
+        "C008",
+        "C009",
+        "C010",
+        "C011",
+        "C012",
+        "C013",
+        "C014",
+        "C015",
+        "C016",
+        "C017",
+        "C018",
+        "D001",
+        "D002",
+        "D003",
+        "D004",
+        "D005",
+        "D006",
+        "I001",
+        "I002",
+        "I003",
+        "I004",
+        "J001",
+        "J002",
+        "J003",
+        "J004",
+        "J005",
+        "K001",
+        "K002",
+        "L002",
+        "L003",
+        "L004",
+        "L005",
+        "L006",
+        "L007",
+        "N001",
+    }
+)
 
 _VALID_HEADER_OPERATIONS = frozenset({"set", "remove", "add"})
 
@@ -123,14 +171,19 @@ def lint_actions(rule: dict[str, Any], phase: Phase, ctx: LintContext) -> None:
         return
 
     # C004: Unknown action_parameters keys
+    # Use phase-specific override when available (narrows the action schema).
     if schema and schema.allowed_parameter_keys:
-        unknown = set(action_params.keys()) - schema.allowed_parameter_keys
+        allowed = PHASE_PARAMETER_OVERRIDES.get(phase_name, schema.allowed_parameter_keys)
+        unknown = set(action_params.keys()) - allowed
         for key in sorted(unknown):
             ctx.add(
                 LintResult(
                     rule_id="C004",
-                    severity=Severity.WARNING,
-                    message=(f"Unknown action_parameters key {key!r} for action {action!r}"),
+                    severity=Severity.ERROR,
+                    message=(
+                        f"Unknown action_parameters key {key!r}"
+                        f" for action {action!r} in phase {phase_name!r}"
+                    ),
                     phase=phase_name,
                     ref=ref,
                     field=f"action_parameters.{key}",
@@ -513,7 +566,7 @@ def _lint_rate_limit_params(params: dict, phase_name: str, ref: str, ctx: LintCo
                 ctx.add(
                     LintResult(
                         rule_id="C014",
-                        severity=Severity.WARNING,
+                        severity=Severity.ERROR,
                         message=f"Unknown rate limit characteristic {char_val!r}",
                         phase=phase_name,
                         ref=ref,
@@ -578,7 +631,18 @@ def _lint_origin_params(params: dict, phase_name: str, ref: str, ctx: LintContex
     origin = params.get("origin")
     if isinstance(origin, dict):
         port = origin.get("port")
-        if isinstance(port, int) and (port < 1 or port > 65535):
+        if port is not None and (not isinstance(port, int) or isinstance(port, bool)):
+            ctx.add(
+                LintResult(
+                    rule_id="N001",
+                    severity=Severity.ERROR,
+                    message=f"Port must be an integer, got {type(port).__name__}",
+                    phase=phase_name,
+                    ref=ref,
+                    field="action_parameters.origin.port",
+                )
+            )
+        elif isinstance(port, int) and (port < 1 or port > 65535):
             ctx.add(
                 LintResult(
                     rule_id="N001",
@@ -592,7 +656,7 @@ def _lint_origin_params(params: dict, phase_name: str, ref: str, ctx: LintContex
 
 
 def _lint_transform_params(params: dict, phase_name: str, ref: str, ctx: LintContext) -> None:
-    """Validate transform action_parameters (L001-L003, C008)."""
+    """Validate transform action_parameters (L002-L007, C008)."""
     # Check URI transforms
     uri = params.get("uri")
     if isinstance(uri, dict):
@@ -846,7 +910,7 @@ def _lint_skip_params(params: dict, phase_name: str, ref: str, ctx: LintContext)
                 ctx.add(
                     LintResult(
                         rule_id="C011",
-                        severity=Severity.WARNING,
+                        severity=Severity.ERROR,
                         message=f"Invalid skip phase {phase_val!r}",
                         phase=phase_name,
                         ref=ref,
@@ -862,7 +926,7 @@ def _lint_skip_params(params: dict, phase_name: str, ref: str, ctx: LintContext)
                 ctx.add(
                     LintResult(
                         rule_id="C012",
-                        severity=Severity.WARNING,
+                        severity=Severity.ERROR,
                         message=f"Invalid skip product {product_val!r}",
                         phase=phase_name,
                         ref=ref,

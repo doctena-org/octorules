@@ -280,24 +280,11 @@ def _ref_order(rules: list[dict]) -> list[str]:
 
 
 def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
-    """Prepare desired rules: validate, inject default action, set enabled default."""
+    """Prepare desired rules: validate, normalize, default enabled, inject action."""
     validate_rules(rules, phase)
-
-    prepared = []
-    for rule in rules:
-        rule = rule.copy()
-        # Normalize expression whitespace (multi-line YAML → single line)
-        rule["expression"] = normalize_expression(rule["expression"])
-        # Normalize counting_expression if present
-        ap = rule.get("action_parameters")
-        if isinstance(ap, dict) and isinstance(ap.get("counting_expression"), str):
-            ap = ap.copy()
-            ap["counting_expression"] = normalize_expression(ap["counting_expression"])
-            rule["action_parameters"] = ap
-        # Default enabled to true
-        if "enabled" not in rule:
-            rule["enabled"] = True
-        # Inject default action if phase has one and rule doesn't specify
+    prepared = _prepare_base_rules(rules)
+    # Inject default action for rules that don't specify one
+    for rule in prepared:
         if "action" not in rule:
             if phase.default_action is None:
                 raise ValueError(
@@ -305,7 +292,6 @@ def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
                     f"must specify an 'action' (no default for this phase)"
                 )
             rule["action"] = phase.default_action
-        prepared.append(rule)
     return prepared
 
 
@@ -479,15 +465,39 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
         seen_refs.add(ref)
 
 
-def _make_synthetic_phase(ruleset_name: str, cf_phase: str) -> Phase:
-    """Create a synthetic Phase for a custom ruleset (used in RuleChange)."""
+def _make_synthetic_phase(
+    prefix: str, name: str, cf_phase: str, *, zone_level: bool = False, account_level: bool = True
+) -> Phase:
+    """Create a synthetic Phase for non-standard rulesets (custom, lists, page shield)."""
     return Phase(
-        friendly_name=f"custom_ruleset:{ruleset_name}",
+        friendly_name=f"{prefix}:{name}",
         cf_phase=cf_phase,
         default_action=None,
-        zone_level=False,
-        account_level=True,
+        zone_level=zone_level,
+        account_level=account_level,
     )
+
+
+def _prepare_base_rules(rules: list[dict]) -> list[dict]:
+    """Normalize expressions and default ``enabled`` to True for a list of rules.
+
+    This is the shared preparation logic used by both phase rules and custom
+    ruleset rules.  Phase rules add action injection on top of this.
+    """
+    prepared = []
+    for rule in rules:
+        rule = rule.copy()
+        rule["expression"] = normalize_expression(rule["expression"])
+        # Normalize counting_expression if present
+        ap = rule.get("action_parameters")
+        if isinstance(ap, dict) and isinstance(ap.get("counting_expression"), str):
+            ap = ap.copy()
+            ap["counting_expression"] = normalize_expression(ap["counting_expression"])
+            rule["action_parameters"] = ap
+        if "enabled" not in rule:
+            rule["enabled"] = True
+        prepared.append(rule)
+    return prepared
 
 
 def diff_custom_ruleset(
@@ -504,18 +514,10 @@ def diff_custom_ruleset(
         phase=phase,
     )
 
-    # Prepare desired rules: normalize expressions, default enabled to True
-    prepared = []
-    for rule in desired_rules:
-        rule = rule.copy()
-        rule["expression"] = normalize_expression(rule["expression"])
-        if "enabled" not in rule:
-            rule["enabled"] = True
-        prepared.append(rule)
-    plan.prepared_rules = prepared
+    plan.prepared_rules = _prepare_base_rules(desired_rules)
 
-    synthetic_phase = _make_synthetic_phase(ruleset_name, phase)
-    plan.changes = _diff_rules(synthetic_phase, prepared, current_rules)
+    synthetic_phase = _make_synthetic_phase("custom_ruleset", ruleset_name, phase)
+    plan.changes = _diff_rules(synthetic_phase, plan.prepared_rules, current_rules)
     return plan
 
 
@@ -744,13 +746,7 @@ def normalize_list_item(item: dict) -> dict:
 
 def _make_list_phase(list_name: str) -> Phase:
     """Create a synthetic Phase for list item changes."""
-    return Phase(
-        friendly_name=f"list:{list_name}",
-        cf_phase="account_lists",
-        default_action=None,
-        zone_level=False,
-        account_level=True,
-    )
+    return _make_synthetic_phase("list", list_name, "account_lists")
 
 
 def validate_list_entry(entry: dict, index: int) -> None:
@@ -945,11 +941,11 @@ _PAGE_SHIELD_DIFF_FIELDS = ("action", "expression", "enabled", "value")
 
 
 def _make_page_shield_phase(description: str) -> Phase:
-    """Create a synthetic Phase for a page shield policy (used in RuleChange)."""
-    return Phase(
-        friendly_name=f"page_shield:{description}",
-        cf_phase="page_shield_policies",
-        default_action=None,
+    """Create a synthetic Phase for a page shield policy."""
+    return _make_synthetic_phase(
+        "page_shield",
+        description,
+        "page_shield_policies",
         zone_level=True,
         account_level=False,
     )

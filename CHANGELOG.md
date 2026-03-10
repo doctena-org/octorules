@@ -2,6 +2,63 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.0] - 2026-03-10
+
+### Added
+- **Phase-specific parameter validation**: `response_header_rules` now rejects
+  `action_parameters.uri` (URI rewrites are not available in the response phase).
+  Catches rules accidentally misplaced under the wrong phase due to YAML editing
+  mistakes (e.g. deleting a phase key while its rules remain, causing them to fall
+  under the previous phase). Implemented via `PHASE_PARAMETER_OVERRIDES` in the
+  action schema — extensible to other phases if needed.
+- **Full lint parity for custom rulesets and Page Shield policies**: custom
+  ruleset rules now receive phase restriction checks (B001, B002, B003) in
+  addition to action and expression analysis. Page Shield policies now receive
+  both expression analysis and phase restriction checks.
+- **`check_catch_all()` helper** in lint engine — deduplicates M013/M014
+  always-true/always-false detection across `yaml_validator`, `page_shield_linter`,
+  and `cross_rule_linter`. Accepts an `entity` parameter for context-aware
+  messages ("rule" vs "policy").
+- **Explicit `RULE_IDS` frozensets** on all 9 linter modules — `engine.py`
+  collects them lazily for suppression validation and rule filtering.
+- **Managed list names in `overlay.toml`** — `[managed_lists]` section with
+  source URL and last-verified date, replacing hardcoded names.
+- **`QuoteAwareScanner`** class in `expression.py` — robust character-by-character
+  scanner that correctly handles escaped quotes, replacing the previous inline
+  state machine.
+- **`assert_lint()` / `assert_no_lint()` test helpers** in
+  `tests/test_linter/conftest.py` — consistent assertion helpers with count,
+  severity, ref, and phase checking, with clear error messages.
+
+### Changed
+- **C004** (unknown `action_parameters` key) promoted from WARNING to **ERROR**.
+  Cloudflare's API rejects unknown keys; WARNING was too lenient.
+- **C011** (invalid skip phase) promoted from WARNING to **ERROR**.
+- **C012** (invalid skip product) promoted from WARNING to **ERROR**.
+- **C014** (unknown rate limit characteristic) promoted from WARNING to **ERROR**.
+- **CLI refactored**: command implementations extracted from `cli.py` to new
+  `commands.py` module (~1500 LOC). `cli.py` retains argument parsing and
+  re-exports for backward compatibility.
+- **Planner DRY refactor**: extracted `_prepare_base_rules()` (shared
+  expression normalization + `enabled` defaulting) and `_make_synthetic_phase()`
+  (shared Phase construction for custom rulesets, lists, page shield).
+- **Provider graduated backoff**: `poll_bulk_operation()` uses `(1, 2, 3, 5)`
+  second intervals instead of fixed 2s polling.
+- `lint_phase_restrictions()` now accepts optional `ref_override` parameter
+  (parity with `lint_expressions()`).
+
+### Fixed
+- **ASN list accepted boolean values**: `asn: true` in YAML was silently
+  accepted as ASN 1 because Python's `isinstance(True, int)` returns `True`.
+  Now explicitly rejects booleans.
+- **Origin port accepted boolean values**: `port: true` was silently accepted
+  as port 1 for the same reason. Now reports a type error.
+- **Custom ruleset rules skipped phase restriction checks**: B001 (response
+  field in request phase), B002 (body field without body access), and B003
+  (plan-gated field) were never checked for custom ruleset rules.
+- **Page Shield policies skipped phase restriction checks**: B003 (plan-gated
+  field) was never checked for Page Shield policy expressions.
+
 ## [0.13.2] - 2026-03-09
 
 ### Fixed

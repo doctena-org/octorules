@@ -12,6 +12,8 @@ from octorules.linter.engine import LintContext, LintResult, Severity
 from octorules.linter.expression_bridge import parse_expression
 from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
 
+RULE_IDS = frozenset({"H001", "H002"})
+
 # Rule count limits per phase per plan tier
 _RULE_LIMITS: dict[str, dict[str, int]] = {
     "free": {

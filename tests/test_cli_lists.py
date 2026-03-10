@@ -148,10 +148,10 @@ class TestListsPlanAccount:
             zones={},
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_with_lists(self, mock_provider_cls, tmp_path):
         """_plan_account should plan lists when present in YAML."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -177,10 +177,10 @@ class TestListsPlanAccount:
         assert lp.create is True
         assert lp.has_changes
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_no_lists(self, mock_provider_cls, tmp_path):
         """_plan_account without lists key should not call get_all_lists."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -201,10 +201,10 @@ class TestListsPlanAccount:
         assert len(zp.list_plans) == 0
         provider.get_all_lists.assert_not_called()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_lists_no_changes(self, mock_provider_cls, tmp_path):
         """When list items match current state, no changes."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -233,10 +233,10 @@ class TestListsPlanAccount:
         assert zp is not None
         assert len(zp.list_plans) == 0  # no changes = not added
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_lists_deletion(self, mock_provider_cls, tmp_path):
         """Lists in CF but not in YAML should be planned for deletion."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -262,12 +262,12 @@ class TestListsPlanAccount:
         assert lp.list_name == "old_list"
         assert lp.delete is True
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_lists_api_error_graceful(self, mock_provider_cls, tmp_path, caplog):
         """API error fetching lists should warn but still plan phases."""
         from cloudflare import APIError
 
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -292,7 +292,7 @@ class TestListsPlanAccount:
 class TestListsDump:
     """Tests for lists in cmd_dump."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_includes_lists(self, mock_provider_cls, tmp_path, caplog):
         """Account dump should include lists section."""
         from octorules.config import _yaml_load
@@ -330,7 +330,7 @@ class TestListsDump:
         assert data["lists"][0]["kind"] == "ip"
         assert data["lists"][0]["items"][0]["ip"] == "1.2.3.4"
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_lists_api_error(self, mock_provider_cls, tmp_path, caplog):
         """API error fetching lists should warn but still dump phases."""
         from cloudflare import APIError
@@ -360,7 +360,7 @@ class TestListsDump:
         dumped = rules_dir / "test-account.yaml"
         assert dumped.exists()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_no_lists_returns_none(self, mock_provider_cls, tmp_path, caplog):
         """When get_all_lists returns empty dict, lists section is omitted."""
         import yaml
@@ -386,7 +386,7 @@ class TestListsDump:
         data = yaml.safe_load(dumped.read_text())
         assert "lists" not in (data or {})
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_uses_config_lists_dir(self, mock_provider_cls, tmp_path, caplog):
         """Account dump should write list items to config.lists_dir."""
         rules_dir = tmp_path / "rules"
@@ -419,7 +419,7 @@ class TestListsDump:
         assert (custom_dir / "blocked_ips.yaml").exists()
         assert not (rules_dir / "custom_lists").exists()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_output_dir_override_ignores_config_lists_dir(
         self, mock_provider_cls, tmp_path, caplog
     ):
@@ -469,7 +469,7 @@ class TestListsSync:
             zones={},
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_creates_new_list(self, mock_provider_cls, tmp_path, caplog):
         """Sync should call create_list + put_list_items for new lists."""
         config = self._make_account_config(
@@ -502,7 +502,7 @@ class TestListsSync:
         provider.put_list_items.assert_called_once()
         provider.poll_bulk_operation.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_deletes_removed_list(self, mock_provider_cls, tmp_path, caplog):
         """Sync should call delete_list for lists in CF but not in YAML."""
         config = self._make_account_config(
@@ -531,7 +531,7 @@ class TestListsSync:
             "list-999",
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_no_list_changes_skips_apply(self, mock_provider_cls, tmp_path):
         """When list items match, no API calls for lists should be made."""
         config = self._make_account_config(
@@ -565,7 +565,7 @@ class TestListsSync:
         provider.delete_list.assert_not_called()
         provider.update_list_description.assert_not_called()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_lists_api_error_returns_1(self, mock_provider_cls, tmp_path, caplog):
         """API error during list create should return 1."""
         from cloudflare import APIError
@@ -596,7 +596,7 @@ class TestApplyLists:
         return _make_list_phase("test_list")
 
     def test_apply_create_and_items(self):
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         phase = self._make_list_phase()
         lp = ListPlan(
@@ -622,7 +622,7 @@ class TestApplyLists:
         provider.poll_bulk_operation.assert_called_once_with(scope, "op-123")
 
     def test_apply_delete(self):
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         phase = self._make_list_phase()
         lp = ListPlan(
@@ -642,7 +642,7 @@ class TestApplyLists:
         provider.delete_list.assert_called_once_with(scope, "list-999")
 
     def test_apply_description_update(self):
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         lp = ListPlan(
             list_name="my_list",
@@ -662,7 +662,7 @@ class TestApplyLists:
     def test_apply_create_error_returns_error(self):
         from cloudflare import APIError
 
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         lp = ListPlan(
             list_name="fail_list",
@@ -679,7 +679,7 @@ class TestApplyLists:
         assert len(synced) == 0
 
     def test_apply_item_update_timeout_returns_error(self):
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         phase = self._make_list_phase()
         lp = ListPlan(
@@ -701,7 +701,7 @@ class TestApplyLists:
         assert len(synced) == 0
 
     def test_apply_skips_no_prepared_items(self, caplog):
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         phase = self._make_list_phase()
         lp = ListPlan(
@@ -724,7 +724,7 @@ class TestApplyLists:
 
     def test_apply_description_skipped_for_create(self):
         """Description update should be skipped for newly created lists (set during create)."""
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         phase = self._make_list_phase()
         lp = ListPlan(
@@ -748,7 +748,7 @@ class TestApplyLists:
         provider.update_list_description.assert_not_called()
 
     def test_apply_empty_list_plans(self):
-        from octorules.cli import _apply_lists
+        from octorules.commands import _apply_lists
 
         zp = ZonePlan(zone_name="test-account", list_plans=[])
         scope = Scope(account_id="acct-123", label="Test Account")

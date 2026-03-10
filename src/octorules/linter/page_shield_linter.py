@@ -9,15 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from octorules.expression import normalize_expression
 from octorules.linter.engine import (
     LintContext,
     LintResult,
     Severity,
-    is_always_false,
-    is_always_true,
+    check_catch_all,
 )
 from octorules.phases import Phase
+
+RULE_IDS = frozenset({"M013", "M014", "S001", "S002", "S003", "S004"})
 
 # Synthetic phase for page_shield_policies expression analysis
 _PS_PHASE = Phase("page_shield_policies", "page_shield", "allow")
@@ -151,39 +151,17 @@ def _check_policy_structure(
     # M013 / M014: always-true / always-false expressions
     expr = policy.get("expression")
     if isinstance(expr, str):
-        normalized_expr = normalize_expression(expr).lower()
-        if is_always_true(normalized_expr):
-            ctx.add(
-                LintResult(
-                    rule_id="M013",
-                    severity=Severity.WARNING,
-                    message="Expression is always true — this is a catch-all policy",
-                    phase="page_shield_policies",
-                    ref=desc_label,
-                    field="expression",
-                    suggestion="Verify this is intentional (catch-all policies affect all traffic)",
-                )
-            )
-        elif is_always_false(normalized_expr):
-            ctx.add(
-                LintResult(
-                    rule_id="M014",
-                    severity=Severity.WARNING,
-                    message="Expression is always false — this policy will never match",
-                    phase="page_shield_policies",
-                    ref=desc_label,
-                    field="expression",
-                    suggestion="Remove the policy or fix the expression",
-                )
-            )
+        check_catch_all(expr, "page_shield_policies", desc_label, ctx, entity="policy")
 
 
 def _check_policy_expressions(policy: dict[str, Any], desc_label: str, ctx: LintContext) -> None:
-    """Delegate expression analysis to the AST linter."""
+    """Delegate expression and phase-restriction analysis to the AST/phase linters."""
     from octorules.linter.ast_linter import lint_expressions
+    from octorules.linter.phase_linter import lint_phase_restrictions
 
     expr = policy.get("expression")
     if not isinstance(expr, str) or not expr:
         return
 
     lint_expressions(policy, _PS_PHASE, ctx, ref_override=desc_label)
+    lint_phase_restrictions(policy, _PS_PHASE, ctx, ref_override=desc_label)

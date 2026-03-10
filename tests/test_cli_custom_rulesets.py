@@ -111,10 +111,10 @@ class TestCustomRulesetsPlanAccount:
             zones={},
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_with_custom_rulesets(self, mock_provider_cls, tmp_path):
         """_plan_account should plan custom rulesets when present in YAML."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -141,10 +141,10 @@ class TestCustomRulesetsPlanAccount:
         assert crp.ruleset_name == "Block attackers"
         assert crp.has_changes
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_no_custom_rulesets(self, mock_provider_cls, tmp_path):
         """_plan_account without custom_rulesets in YAML should still work."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -166,10 +166,10 @@ class TestCustomRulesetsPlanAccount:
         assert len(zp.custom_ruleset_plans) == 0
         provider.get_all_custom_rulesets.assert_not_called()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_custom_rulesets_no_changes(self, mock_provider_cls, tmp_path):
         """When custom ruleset rules match current state, no changes."""
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -199,14 +199,14 @@ class TestCustomRulesetsPlanAccount:
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 0  # no changes = not added
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_custom_rulesets_api_error_graceful(
         self, mock_provider_cls, tmp_path, caplog
     ):
         """API error fetching custom rulesets should warn but still plan phases."""
         from cloudflare import APIError
 
-        from octorules.cli import _plan_account
+        from octorules.commands import _plan_account
 
         config = self._make_config(
             tmp_path,
@@ -238,7 +238,7 @@ class TestCustomRulesetsPlanAccount:
 class TestCustomRulesetsDump:
     """Tests for custom rulesets in cmd_dump."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_includes_custom_rulesets(self, mock_provider_cls, tmp_path, caplog):
         """Account dump should include custom_rulesets section."""
         import yaml
@@ -274,7 +274,7 @@ class TestCustomRulesetsDump:
         assert data["custom_rulesets"][0]["name"] == "Block attackers"
         assert len(data["custom_rulesets"][0]["rules"]) == 1
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_custom_rulesets_api_error(self, mock_provider_cls, tmp_path, caplog):
         """API error fetching custom rulesets should warn but still dump phases."""
         from cloudflare import APIError
@@ -320,7 +320,7 @@ class TestCustomRulesetsSync:
             zones={},
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_applies_custom_rulesets(self, mock_provider_cls, tmp_path, caplog):
         """Sync should call put_custom_ruleset for custom ruleset changes."""
         config = self._make_account_config(
@@ -349,7 +349,7 @@ class TestCustomRulesetsSync:
         assert call_args[0][1] == "rs1"  # ruleset_id
         assert "custom_ruleset:Block attackers" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_custom_rulesets_api_error(self, mock_provider_cls, tmp_path, caplog):
         """API error applying custom ruleset should return 1."""
         from cloudflare import APIError
@@ -379,7 +379,7 @@ class TestCustomRulesetsSync:
             result = cmd_sync(config, None, scope_filter="account")
         assert result == 1
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_no_changes_skips_apply(self, mock_provider_cls, tmp_path):
         """When custom ruleset rules match, no PUT calls should be made."""
         config = self._make_account_config(
@@ -417,10 +417,14 @@ class TestApplyCustomRulesets:
     """Tests for _apply_custom_rulesets helper."""
 
     def test_apply_success(self):
-        from octorules.cli import _apply_custom_rulesets
+        from octorules.commands import _apply_custom_rulesets
         from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
 
-        phase = _make_synthetic_phase("Block attackers", "http_request_firewall_custom")
+        phase = _make_synthetic_phase(
+            "custom_ruleset",
+            "Block attackers",
+            "http_request_firewall_custom",
+        )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
@@ -441,10 +445,14 @@ class TestApplyCustomRulesets:
     def test_apply_api_error(self):
         from cloudflare import APIError
 
-        from octorules.cli import _apply_custom_rulesets
+        from octorules.commands import _apply_custom_rulesets
         from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
 
-        phase = _make_synthetic_phase("Block attackers", "http_request_firewall_custom")
+        phase = _make_synthetic_phase(
+            "custom_ruleset",
+            "Block attackers",
+            "http_request_firewall_custom",
+        )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
@@ -464,10 +472,14 @@ class TestApplyCustomRulesets:
         assert len(synced) == 0
 
     def test_apply_skips_no_prepared_rules(self, caplog):
-        from octorules.cli import _apply_custom_rulesets
+        from octorules.commands import _apply_custom_rulesets
         from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
 
-        phase = _make_synthetic_phase("Block attackers", "http_request_firewall_custom")
+        phase = _make_synthetic_phase(
+            "custom_ruleset",
+            "Block attackers",
+            "http_request_firewall_custom",
+        )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
@@ -487,7 +499,7 @@ class TestApplyCustomRulesets:
         assert "no prepared rules" in caplog.text
 
     def test_apply_no_changes_skipped(self):
-        from octorules.cli import _apply_custom_rulesets
+        from octorules.commands import _apply_custom_rulesets
         from octorules.planner import CustomRulesetPlan
 
         crp = CustomRulesetPlan(
