@@ -5,6 +5,8 @@ from __future__ import annotations
 from octorules.linter.engine import LintContext, Severity
 from octorules.linter.yaml_validator import lint_yaml_structure
 
+from .conftest import assert_lint, assert_no_lint
+
 
 def _lint(rules_data, **kwargs):
     ctx = LintContext(**kwargs)
@@ -15,25 +17,23 @@ def _lint(rules_data, **kwargs):
 class TestTopLevelKeys:
     def test_valid_phase_names(self):
         ctx = _lint({"redirect_rules": [], "cache_rules": []})
-        m007_results = [r for r in ctx.results if r.rule_id == "M007"]
-        assert len(m007_results) == 0
+        assert len(ctx.results) == 0
+        assert_no_lint(ctx, "M007")
 
     def test_unknown_phase_key(self):
         ctx = _lint({"bogus_phase": []})
-        m007 = [r for r in ctx.results if r.rule_id == "M007"]
-        assert len(m007) == 1
+        assert len(ctx.results) == 1
+        m007 = assert_lint(ctx, "M007", count=1, severity=Severity.WARNING)
         assert "bogus_phase" in m007[0].message
 
     def test_deprecated_phase_name(self):
         ctx = _lint({"waf_managed_exceptions": []})
-        m008 = [r for r in ctx.results if r.rule_id == "M008"]
-        assert len(m008) == 1
+        m008 = assert_lint(ctx, "M008", count=1, severity=Severity.WARNING)
         assert "waf_managed_rules" in m008[0].message
 
     def test_cf_phase_identifier(self):
         ctx = _lint({"http_request_dynamic_redirect": []})
-        m012 = [r for r in ctx.results if r.rule_id == "M012"]
-        assert len(m012) == 1
+        m012 = assert_lint(ctx, "M012", count=1, severity=Severity.WARNING)
         assert "redirect_rules" in m012[0].suggestion
 
     def test_known_non_phase_keys_ignored(self):
@@ -93,8 +93,8 @@ class TestRuleFields:
                 ]
             }
         )
-        m003 = [r for r in ctx.results if r.rule_id == "M003"]
-        assert len(m003) == 1
+        m003 = assert_lint(ctx, "M003", count=1, severity=Severity.ERROR, phase="redirect_rules")
+        assert "dup" in m003[0].message
 
     def test_invalid_enabled_type(self):
         ctx = _lint({"redirect_rules": [{"ref": "test", "expression": "true", "enabled": "yes"}]})
@@ -137,8 +137,9 @@ class TestValidRule:
 class TestAlwaysTrueFalse:
     def test_m013_always_true(self):
         ctx = _lint({"redirect_rules": [{"ref": "test", "expression": "true"}]})
-        m013 = [r for r in ctx.results if r.rule_id == "M013"]
-        assert len(m013) == 1
+        m013 = assert_lint(
+            ctx, "M013", count=1, severity=Severity.WARNING, ref="test", phase="redirect_rules"
+        )
         assert "always true" in m013[0].message
 
     def test_m013_always_true_parens(self):
@@ -217,9 +218,14 @@ class TestDisabledRule:
                 ]
             }
         )
-        m016 = [r for r in ctx.results if r.rule_id == "M016"]
-        assert len(m016) == 1
-        assert m016[0].severity == Severity.INFO
+        m016 = assert_lint(
+            ctx,
+            "M016",
+            count=1,
+            severity=Severity.INFO,
+            ref="disabled-rule",
+            phase="waf_custom_rules",
+        )
         assert "disabled" in m016[0].message.lower()
 
     def test_m016_enabled_rule_no_warning(self):

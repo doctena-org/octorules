@@ -252,13 +252,13 @@ class TestChecksumValidation:
 
 
 class TestCmdPlan:
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_changes_returns_0(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, None)
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_with_changes_returns_2(self, mock_provider_cls, sample_config):
         # Write a rules file so there are desired rules
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -267,7 +267,7 @@ class TestCmdPlan:
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_has_changes_exit_code(self, mock_provider_cls, sample_config):
         """--exit-code flag returns 2 when changes are detected."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -276,14 +276,14 @@ class TestCmdPlan:
         result = cmd_plan(sample_config, ["example.com"], exit_code=True)
         assert result == 2
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_changes_exit_code(self, mock_provider_cls, sample_config):
         """--exit-code flag returns 0 when there are no changes."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"], exit_code=True)
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_zone_filter(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_plan(sample_config, ["example.com"])
@@ -293,13 +293,13 @@ class TestCmdPlan:
             cf_phases=None,
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_rules_file_means_no_changes(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_rules_file_logs_debug(self, mock_provider_cls, sample_config, caplog):
         """Zone with no rules file should log at debug level."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
@@ -309,14 +309,14 @@ class TestCmdPlan:
 
 
 class TestCmdSync:
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_changes_skips_apply(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_sync(sample_config, None)
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_applies_changes(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -332,7 +332,7 @@ class TestCmdSync:
         assert payload[0]["action"] == "redirect"
         assert payload[0]["ref"] == "r1"
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_multiple_phases(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -348,7 +348,7 @@ class TestCmdSync:
         assert result == 0
         assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_skips_zones_without_changes(self, mock_provider_cls, sample_config):
         """When syncing all zones, zones without rules files should be skipped."""
         # Only example.com has rules, other.com does not
@@ -360,7 +360,7 @@ class TestCmdSync:
         # Only one PUT call (for example.com), other.com is skipped
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_api_error_returns_1(self, mock_provider_cls, sample_config, caplog):
         """When the CF API fails during sync, abort immediately and return 1."""
         from cloudflare import APIError
@@ -376,7 +376,7 @@ class TestCmdSync:
         assert result == 1
         assert "API rate limited" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_connection_error_returns_1(self, mock_provider_cls, sample_config, caplog):
         """APIConnectionError during sync should return 1."""
         from cloudflare import APIConnectionError
@@ -391,7 +391,7 @@ class TestCmdSync:
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_programming_error_propagates(self, mock_provider_cls, sample_config):
         """Programming bugs (TypeError, etc.) should NOT be caught."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -401,7 +401,7 @@ class TestCmdSync:
         with pytest.raises(TypeError, match="bad arg"):
             cmd_sync(sample_config, ["example.com"])
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_aborts_on_first_failure(self, mock_provider_cls, sample_config):
         """Fail-fast: second phase should not be attempted after first fails."""
         from cloudflare import APIError
@@ -424,7 +424,7 @@ class TestCmdSync:
         # Fail-fast: only one PUT attempted, second phase never reached
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_logs_partial_success_on_failure(self, mock_provider_cls, sample_config, caplog):
         """When a phase fails, previously synced phases should be logged."""
         from cloudflare import APIError
@@ -453,7 +453,7 @@ class TestCmdSync:
         assert result == 1
         assert "Successfully synced before failure" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_progress_logging(self, mock_provider_cls, tmp_path, caplog):
         """Sync should log progress for each zone."""
         rules_dir = tmp_path / "rules"
@@ -480,7 +480,7 @@ class TestCmdSync:
         assert "Syncing a.com" in caplog.text
         assert "Syncing b.com" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_per_phase_logging(self, mock_provider_cls, sample_config, caplog):
         """Sync should log per-phase change counts."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -501,7 +501,7 @@ class TestCmdSync:
         assert "redirect_rules: done" in caplog.text
         assert "cache_rules: done" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_debug_logs_api_call(self, mock_provider_cls, sample_config, caplog):
         """Sync should log PUT details at debug level."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -514,7 +514,7 @@ class TestCmdSync:
         assert "zone_id=zone-abc" in caplog.text
         assert "rules=1" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_reads_rules_once(self, mock_provider_cls, sample_config):
         """Sync should read zone rules YAML only once, not re-read during apply."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -530,7 +530,7 @@ class TestCmdSync:
 
 
 class TestCmdDump:
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_no_rules(self, mock_provider_cls, sample_config, caplog):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
@@ -540,7 +540,7 @@ class TestCmdDump:
         dumped = sample_config.rules_dir / "example.com.yaml"
         assert dumped.read_text() == "--- {}\n"
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_writes_file(self, mock_provider_cls, sample_config, caplog):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {
             "http_request_dynamic_redirect": [
@@ -553,7 +553,7 @@ class TestCmdDump:
         assert "Dumped example.com" in caplog.text
         assert (sample_config.rules_dir / "example.com.yaml").exists()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_custom_output_dir(self, mock_provider_cls, sample_config, tmp_path):
         out_dir = tmp_path / "custom_out"
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {
@@ -565,7 +565,7 @@ class TestCmdDump:
         assert result == 0
         assert (out_dir / "example.com.yaml").exists()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_api_error_continues(self, mock_provider_cls, tmp_path, caplog):
         """API error on one zone should not prevent dumping others."""
         from cloudflare import APIError
@@ -597,7 +597,7 @@ class TestCmdDump:
         assert "Failed to dump fail.com" in caplog.text
         assert (rules_dir / "ok.com.yaml").exists()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_all_succeed_returns_0(self, mock_provider_cls, sample_config):
         """When all zones dump successfully, return 0."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
@@ -721,13 +721,13 @@ class TestCmdValidate:
 
 
 class TestCmdCompare:
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_differences_returns_0(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_compare(sample_config, None)
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_with_differences_returns_1(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -735,7 +735,7 @@ class TestCmdCompare:
         result = cmd_compare(sample_config, ["example.com"])
         assert result == 1
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_identical_rules_returns_0(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -747,7 +747,7 @@ class TestCmdCompare:
         result = cmd_compare(sample_config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_zone_filter(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_compare(sample_config, ["example.com"])
@@ -756,7 +756,7 @@ class TestCmdCompare:
             cf_phases=None,
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_phase_filter(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -771,7 +771,7 @@ class TestCmdCompare:
         result = cmd_compare(sample_config, ["example.com"], phase_filter=["redirect_rules"])
         assert result == 1
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_checksum_prints_hash(self, mock_provider_cls, sample_config, caplog):
         """compare --checksum should print a SHA-256 checksum."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -786,7 +786,7 @@ class TestCmdCompare:
                 assert len(hex_hash) == 64
                 int(hex_hash, 16)  # valid hex
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_checksum_no_changes(self, mock_provider_cls, sample_config, caplog):
         """compare --checksum with no changes should still print checksum."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
@@ -797,13 +797,13 @@ class TestCmdCompare:
 
 
 class TestCmdReport:
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_returns_0(self, mock_provider_cls, sample_config):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         result = cmd_report(sample_config, None)
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_csv_output_has_header(self, mock_provider_cls, sample_config, capsys):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_report(sample_config, None, report_format="csv")
@@ -812,7 +812,7 @@ class TestCmdReport:
         assert "Phase" in out
         assert "Status" in out
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_csv_shows_drifted_phase(self, mock_provider_cls, sample_config, capsys):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -822,7 +822,7 @@ class TestCmdReport:
         assert "yaml_only" in out
         assert "redirect_rules" in out
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_csv_shows_in_sync_phase(self, mock_provider_cls, sample_config, capsys):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -835,7 +835,7 @@ class TestCmdReport:
         out = capsys.readouterr().out
         assert "in_sync" in out
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_json_output_structure(self, mock_provider_cls, sample_config, capsys):
         import json
 
@@ -849,7 +849,7 @@ class TestCmdReport:
         assert "summary" in data
         assert data["zones"][0]["zone"] == "example.com"
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_zone_filter(self, mock_provider_cls, sample_config, capsys):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_report(sample_config, ["example.com"], report_format="csv")
@@ -858,7 +858,7 @@ class TestCmdReport:
             cf_phases=None,
         )
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_phase_filter(self, mock_provider_cls, sample_config, capsys):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -877,7 +877,7 @@ class TestCmdReport:
         assert "redirect_rules" in out
         assert "cache_rules" not in out
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_live_only_status(self, mock_provider_cls, sample_config, capsys):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {
             "http_request_dynamic_redirect": [
@@ -888,7 +888,7 @@ class TestCmdReport:
         out = capsys.readouterr().out
         assert "live_only" in out
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_multiple_zones_summary(self, mock_provider_cls, sample_config, capsys):
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
         cmd_report(sample_config, None, report_format="csv")
@@ -1078,7 +1078,7 @@ class TestCmdVersions:
 
 
 class TestAlwaysDryRun:
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_skips_always_dry_run_zone(self, mock_provider_cls, tmp_path, caplog):
         """Zones with always_dry_run=True should be skipped during sync."""
         rules_dir = tmp_path / "rules"
@@ -1102,7 +1102,7 @@ class TestAlwaysDryRun:
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
         assert "always_dry_run" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_applies_non_dry_run_zone(self, mock_provider_cls, tmp_path):
         """Zones without always_dry_run should still be applied."""
         rules_dir = tmp_path / "rules"
@@ -1123,7 +1123,7 @@ class TestAlwaysDryRun:
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_mixed_zones(self, mock_provider_cls, tmp_path, caplog):
         """Sync with a mix of dry-run and normal zones."""
         rules_dir = tmp_path / "rules"
@@ -1260,7 +1260,7 @@ class TestPhaseFiltering:
         result = _filter_current_by_phase(current, None)
         assert result is current
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_phase_filter_passes_cf_phases_to_provider(self, mock_provider_cls, sample_config):
         """Phase filter should pass cf_phases to get_all_phase_rules to skip unneeded API calls."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -1270,7 +1270,7 @@ class TestPhaseFiltering:
         call_kwargs = mock_provider_cls.return_value.get_all_phase_rules.call_args
         assert call_kwargs[1]["cf_phases"] == ["http_request_dynamic_redirect"]
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_phase_filter_fetches_all(self, mock_provider_cls, sample_config):
         """Without phase filter, cf_phases should be None (fetch all)."""
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
@@ -1278,7 +1278,7 @@ class TestPhaseFiltering:
         call_kwargs = mock_provider_cls.return_value.get_all_phase_rules.call_args
         assert call_kwargs[1]["cf_phases"] is None
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_plan_with_phase_filter(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -1294,7 +1294,7 @@ class TestPhaseFiltering:
         assert result == 0  # has changes, but no --exit-code flag
         # But only redirect_rules should be in the plan
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_sync_with_phase_filter(self, mock_provider_cls, sample_config):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -1347,7 +1347,7 @@ class TestChecksum:
         args = parser.parse_args(["sync", "--doit", "--checksum", "abc123"])
         assert args.checksum == "abc123"
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_plan_prints_checksum(self, mock_provider_cls, sample_config, caplog):
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -1362,7 +1362,7 @@ class TestChecksum:
                 assert len(hex_hash) == 64
                 int(hex_hash, 16)  # Should not raise
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_sync_checksum_match_proceeds(self, mock_provider_cls, sample_config, caplog):
         """When checksum matches, sync should proceed normally."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -1382,7 +1382,7 @@ class TestChecksum:
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_sync_checksum_mismatch_aborts(self, mock_provider_cls, sample_config):
         """When checksum mismatches, sync should abort with exit 1."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -1406,7 +1406,7 @@ class TestSafetyForce:
         args = parser.parse_args(["sync", "--doit"])
         assert args.force is False
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_mass_delete_blocked(self, mock_provider_cls, tmp_path, caplog):
         """Deleting most rules should be blocked by safety threshold."""
         rules_dir = tmp_path / "rules"
@@ -1434,7 +1434,7 @@ class TestSafetyForce:
         mock_provider_cls.return_value.put_phase_rules.assert_not_called()
         assert "Safety threshold exceeded" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_small_delete_allowed(self, mock_provider_cls, tmp_path):
         """Deleting 1 out of 10 rules (10%) should be allowed."""
         rules_dir = tmp_path / "rules"
@@ -1461,7 +1461,7 @@ class TestSafetyForce:
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_force_bypasses_safety(self, mock_provider_cls, tmp_path):
         """--force should bypass safety checks."""
         rules_dir = tmp_path / "rules"
@@ -1485,7 +1485,7 @@ class TestSafetyForce:
         assert result == 0
         mock_provider_cls.return_value.put_phase_rules.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dry_run_zones_excluded_from_safety(self, mock_provider_cls, tmp_path):
         """always_dry_run zones should not trigger safety checks."""
         rules_dir = tmp_path / "rules"
@@ -1512,7 +1512,7 @@ class TestSafetyForce:
         result = cmd_sync(config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_error_message_includes_phase_names(self, mock_provider_cls, tmp_path, caplog):
         """Safety error message should include the affected phase names."""
         rules_dir = tmp_path / "rules"
@@ -1536,7 +1536,7 @@ class TestSafetyForce:
             cmd_sync(config, ["example.com"])
         assert "redirect_rules" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_error_message_content(self, mock_provider_cls, tmp_path, caplog):
         """Safety error message should include zone, counts, and percentages."""
         rules_dir = tmp_path / "rules"
@@ -1566,7 +1566,7 @@ class TestSafetyForce:
 class TestParallelPlanning:
     """Tests for parallel zone planning (max_workers)."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_plan_sequential(self, mock_provider_cls, sample_config):
         """max_workers=1: sequential planning works same as before."""
         sample_config.max_workers = 1
@@ -1576,7 +1576,7 @@ class TestParallelPlanning:
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_plan_parallel(self, mock_provider_cls, tmp_path):
         """max_workers=2: parallel planning returns correct results."""
         rules_dir = tmp_path / "rules"
@@ -1602,7 +1602,7 @@ class TestParallelPlanning:
         # API called for each zone
         assert mock_provider_cls.return_value.get_all_phase_rules.call_count == 2
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_plan_parallel_zone_order_preserved(self, mock_provider_cls, tmp_path, capsys):
         """Parallel planning preserves zone order in output."""
         rules_dir = tmp_path / "rules"
@@ -1632,7 +1632,7 @@ class TestParallelPlanning:
         zone_names = [z["zone"] for z in data["zones"]]
         assert zone_names == ["alpha.com", "beta.com"]
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_sync_parallel_plan_sequential_apply(self, mock_provider_cls, tmp_path):
         """Sync with max_workers=2: planning is parallel, apply is sequential."""
         rules_dir = tmp_path / "rules"
@@ -1658,7 +1658,7 @@ class TestParallelPlanning:
         # Both zones applied
         assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_cmd_dump_parallel(self, mock_provider_cls, tmp_path, caplog):
         """Dump with max_workers=2: parallel dump."""
         rules_dir = tmp_path / "rules"
@@ -1688,7 +1688,7 @@ class TestParallelPlanning:
 class TestAllowUnmanaged:
     """Tests for allow_unmanaged zone config in CLI."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_unmanaged_rules_not_removed(self, mock_provider_cls, tmp_path):
         """With allow_unmanaged, rules in CF but not YAML should be kept."""
         rules_dir = tmp_path / "rules"
@@ -1716,7 +1716,7 @@ class TestAllowUnmanaged:
         # r2 should NOT be marked for removal, so no changes
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_unmanaged_phase_not_removed(self, mock_provider_cls, tmp_path):
         """With allow_unmanaged, entire phases in CF but not YAML should be kept."""
         rules_dir = tmp_path / "rules"
@@ -1755,7 +1755,7 @@ class TestAllowUnmanaged:
 class TestPlanErrorIsolation:
     """Tests for per-zone error isolation during planning."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sequential_plan_api_error_continues(self, mock_provider_cls, tmp_path, caplog):
         """Sequential planning: API error on one zone should not kill others."""
         from cloudflare import APIError
@@ -1786,7 +1786,7 @@ class TestPlanErrorIsolation:
         assert result == 1
         assert "Failed to plan fail.com" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_parallel_plan_api_error_continues(self, mock_provider_cls, tmp_path, caplog):
         """Parallel planning: API error on one zone should not kill others."""
         from cloudflare import APIError
@@ -1817,7 +1817,7 @@ class TestPlanErrorIsolation:
         assert result == 1
         assert "Failed to plan fail.com" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_aborts_on_plan_failure(self, mock_provider_cls, tmp_path, caplog):
         """Sync should abort entirely if any zone fails during planning."""
         from cloudflare import APIError
@@ -1895,7 +1895,7 @@ class TestFormatApiError:
 class TestAuthErrorPropagation:
     """Tests for authentication error propagation (tasks 27, 29)."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_auth_error_propagates(self, mock_provider_cls, sample_config):
         """AuthenticationError during plan should not be silently caught."""
         from cloudflare import AuthenticationError
@@ -1908,7 +1908,7 @@ class TestAuthErrorPropagation:
         with pytest.raises(AuthenticationError):
             cmd_plan(sample_config, ["example.com"])
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_permission_error_propagates(self, mock_provider_cls, sample_config):
         """PermissionDeniedError during plan should not be silently caught."""
         from cloudflare import PermissionDeniedError
@@ -1921,7 +1921,7 @@ class TestAuthErrorPropagation:
         with pytest.raises(PermissionDeniedError):
             cmd_plan(sample_config, ["example.com"])
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_auth_error_during_apply_returns_1(self, mock_provider_cls, sample_config, caplog):
         """AuthenticationError during sync apply should return 1 with clear message."""
         from cloudflare import AuthenticationError
@@ -1940,7 +1940,7 @@ class TestAuthErrorPropagation:
         assert "Authentication/permission error" in caplog.text
         assert "HTTP 401" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_auth_error_no_partial_success_msg(self, mock_provider_cls, sample_config, caplog):
         """Auth errors should NOT log 'Successfully synced before failure'."""
         from cloudflare import AuthenticationError
@@ -1969,7 +1969,7 @@ class TestAuthErrorPropagation:
         assert result == 1
         assert "Successfully synced before failure" not in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_auth_error_propagates(self, mock_provider_cls, sample_config):
         """AuthenticationError during dump should propagate, not be caught per-zone."""
         from cloudflare import AuthenticationError
@@ -2028,7 +2028,7 @@ class TestAuthErrorPropagation:
 class TestFailedPhaseFiltering:
     """Tests for filtering out failed phases from planning (task 28)."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_failed_phase_excluded_from_plan(self, mock_provider_cls, sample_config, caplog):
         """Phase that failed to fetch should be excluded from desired rules."""
         from octorules.provider import PhaseRulesResult
@@ -2050,7 +2050,7 @@ class TestFailedPhaseFiltering:
         # cache_rules still planned (has changes), but no --exit-code flag
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_no_failed_phases_plans_normally(self, mock_provider_cls, sample_config):
         """When no phases fail, planning proceeds as usual."""
         from octorules.provider import PhaseRulesResult
@@ -2061,7 +2061,7 @@ class TestFailedPhaseFiltering:
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_all_phases_failed_means_no_changes(self, mock_provider_cls, sample_config, caplog):
         """When all desired phases fail, plan should show no changes."""
         from octorules.provider import PhaseRulesResult
@@ -2076,7 +2076,7 @@ class TestFailedPhaseFiltering:
         assert "Skipping redirect_rules" in caplog.text
         assert result == 0  # No changes (desired was filtered out)
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plain_dict_backward_compatible(self, mock_provider_cls, sample_config):
         """Plain dict (no failed_phases) should work as before."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -2085,7 +2085,7 @@ class TestFailedPhaseFiltering:
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_failed_phase_not_in_desired_ignored(self, mock_provider_cls, sample_config, caplog):
         """Failed phase not in desired rules should not log a warning."""
         from octorules.provider import PhaseRulesResult
@@ -2105,7 +2105,7 @@ class TestFailedPhaseFiltering:
 class TestApiErrorStatusCodes:
     """Tests for HTTP status code inclusion in error messages (task 29)."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_error_includes_status_code(self, mock_provider_cls, sample_config, caplog):
         """Plan failure should include HTTP status code in error message."""
         from cloudflare import InternalServerError
@@ -2120,7 +2120,7 @@ class TestApiErrorStatusCodes:
         assert result == 1
         assert "HTTP 500" in caplog.text
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_error_includes_status_code(self, mock_provider_cls, sample_config, caplog):
         """Sync API error should include HTTP status code."""
         from cloudflare import RateLimitError
@@ -2250,7 +2250,7 @@ class TestEmitPlanOutputs:
 class TestParallelPhaseApply:
     """Tests for parallel phase PUT within a zone during sync."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_parallel_phases_with_max_workers_gt_1(self, mock_provider_cls, tmp_path):
         """With max_workers > 1 and multiple phases, phases applied in parallel."""
         rules_dir = tmp_path / "rules"
@@ -2276,7 +2276,7 @@ class TestParallelPhaseApply:
         # Both phases should have been applied
         assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_sequential_phases_with_max_workers_1(self, mock_provider_cls, tmp_path):
         """With max_workers=1, phases are applied sequentially (no thread pool)."""
         rules_dir = tmp_path / "rules"
@@ -2301,7 +2301,7 @@ class TestParallelPhaseApply:
         assert result == 0
         assert mock_provider_cls.return_value.put_phase_rules.call_count == 2
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_parallel_phase_api_error_reported(self, mock_provider_cls, tmp_path, caplog):
         """API error in one phase during parallel apply should be reported."""
         from cloudflare import APIError
@@ -2344,14 +2344,14 @@ class TestApplyParallel:
     """Direct unit tests for the _apply_parallel helper."""
 
     def test_empty_task_list(self):
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         successes, error = _apply_parallel([], max_workers=4)
         assert successes == []
         assert error is None
 
     def test_single_task_success(self):
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         called = []
         tasks = [("task-a", lambda: called.append("a"))]
@@ -2363,7 +2363,7 @@ class TestApplyParallel:
     def test_single_task_api_error(self):
         from cloudflare import APIError
 
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         def fail():
             raise APIError("boom", request=MagicMock(), body=None)
@@ -2376,7 +2376,7 @@ class TestApplyParallel:
         assert "boom" in error
 
     def test_single_task_timeout_error(self):
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         def fail():
             raise TimeoutError("timed out")
@@ -2391,7 +2391,7 @@ class TestApplyParallel:
     def test_sequential_stops_on_first_error(self):
         from cloudflare import APIError
 
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         called = []
 
@@ -2414,7 +2414,7 @@ class TestApplyParallel:
     def test_auth_error_propagates_sequential(self):
         from cloudflare import AuthenticationError
 
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         mock_response = MagicMock()
         mock_response.status_code = 401
@@ -2429,7 +2429,7 @@ class TestApplyParallel:
     def test_auth_error_propagates_parallel(self):
         from cloudflare import AuthenticationError
 
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         mock_response = MagicMock()
         mock_response.status_code = 401
@@ -2447,7 +2447,7 @@ class TestApplyParallel:
 
         from cloudflare import APIError
 
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         barrier = threading.Barrier(3, timeout=5)
 
@@ -2470,7 +2470,7 @@ class TestApplyParallel:
 
     def test_non_int_max_workers_uses_sequential(self):
         """MagicMock or other non-int max_workers falls back to sequential."""
-        from octorules.cli import _apply_parallel
+        from octorules.commands import _apply_parallel
 
         called = []
         tasks = [("a", lambda: called.append("a")), ("b", lambda: called.append("b"))]
@@ -2483,7 +2483,7 @@ class TestApplyParallel:
 class TestPreparedRulesReuse:
     """Tests that prepared_rules from planning are reused during sync."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_uses_prepared_rules(self, mock_provider_cls, tmp_path):
         """Sync should use prepared_rules from planning, not re-prepare."""
         rules_dir = tmp_path / "rules"

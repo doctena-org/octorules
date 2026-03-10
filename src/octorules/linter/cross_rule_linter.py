@@ -13,21 +13,29 @@ from octorules.expression import normalize_expression
 from octorules.linter.engine import LintContext, LintResult, Severity, is_always_true
 from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
 
+RULE_IDS = frozenset({"P001", "P002", "P003", "P004", "P005"})
+
 # Pattern for list references in expressions: $list_name (including dotted managed list names)
 _LIST_REF_PATTERN = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)")
 
-# Valid Cloudflare managed list names.
-# Source: https://developers.cloudflare.com/waf/tools/lists/managed-lists/
-# Last updated: 2026-03-07
-_VALID_MANAGED_LISTS = frozenset(
-    {
-        "cf.anonymizer",
-        "cf.botnetcc",
-        "cf.malware",
-        "cf.open_proxies",
-        "cf.vpn",
-    }
-)
+
+def _load_managed_lists() -> frozenset[str]:
+    """Load valid managed list names from overlay.toml (cached at module level)."""
+    from octorules.linter.schemas._registry import load_managed_lists
+
+    return load_managed_lists()
+
+
+# Lazily cached — computed once on first access.
+_managed_lists: frozenset[str] | None = None
+
+
+def _get_managed_lists() -> frozenset[str]:
+    global _managed_lists  # noqa: PLW0603
+    if _managed_lists is None:
+        _managed_lists = _load_managed_lists()
+    return _managed_lists
+
 
 # Actions that terminate request processing (subsequent rules won't execute)
 _TERMINATING_ACTIONS = frozenset(
@@ -208,7 +216,8 @@ def _check_managed_lists(rules_data: dict[str, Any], ctx: LintContext) -> None:
                 # Only check dotted names that start with cf.
                 if not list_name.startswith("cf."):
                     continue
-                if list_name not in _VALID_MANAGED_LISTS:
+                managed = _get_managed_lists()
+                if list_name not in managed:
                     ctx.add(
                         LintResult(
                             rule_id="P004",
@@ -216,14 +225,14 @@ def _check_managed_lists(rules_data: dict[str, Any], ctx: LintContext) -> None:
                             message=(
                                 f"Unknown managed list '${list_name}'."
                                 " Valid managed lists:"
-                                f" {', '.join(sorted('$' + n for n in _VALID_MANAGED_LISTS))}"
+                                f" {', '.join(sorted('$' + n for n in managed))}"
                             ),
                             phase=phase_name,
                             ref=ref,
                             field="expression",
                             suggestion=(
                                 "If this is a newly added Cloudflare managed list,"
-                                " update _VALID_MANAGED_LISTS in cross_rule_linter.py"
+                                " update the [managed_lists] section in overlay.toml"
                             ),
                         )
                     )

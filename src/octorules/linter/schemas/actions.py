@@ -164,6 +164,18 @@ RATE_LIMIT_SCHEMA = ActionSchema(
 
 LOG_SCHEMA = ActionSchema(requires_parameters=False)
 
+# --- Phase-specific parameter restrictions ---
+# Narrows the action schema's allowed_parameter_keys for specific phases.
+# Used by C004 to catch rules misplaced under the wrong phase (e.g. a
+# url_rewrite_rules entry with action_parameters.uri accidentally falling
+# under response_header_rules after a YAML editing mistake).
+
+PHASE_PARAMETER_OVERRIDES: dict[str, frozenset[str]] = {
+    # response_header_rules only supports header transforms — URI rewrites
+    # are not available in the response phase (the request URI is already gone).
+    "response_header_rules": frozenset({"headers"}),
+}
+
 # --- Valid actions per phase ---
 
 VALID_ACTIONS_BY_PHASE: dict[str, set[str]] = {

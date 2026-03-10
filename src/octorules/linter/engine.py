@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
@@ -122,31 +121,65 @@ class LintContext:
         return any(r.severity == Severity.ERROR for r in self.results)
 
 
-def _collect_known_rule_ids() -> frozenset[str]:
-    """Collect all rule IDs defined across linter modules by scanning rule_id= patterns."""
-    import importlib
-    import inspect
+def check_catch_all(
+    expr: str,
+    phase_name: str,
+    ref: str,
+    ctx: LintContext,
+    *,
+    entity: str = "rule",
+) -> None:
+    """M013/M014: detect always-true / always-false expressions.
 
-    ids: set[str] = set()
-    id_re = re.compile(r'rule_id="([A-Z]\d{3})"')
-    for mod_name in (
-        "octorules.linter.action_validator",
-        "octorules.linter.ast_linter",
-        "octorules.linter.cross_rule_linter",
-        "octorules.linter.custom_ruleset_linter",
-        "octorules.linter.list_linter",
-        "octorules.linter.page_shield_linter",
-        "octorules.linter.phase_linter",
-        "octorules.linter.plan_linter",
-        "octorules.linter.yaml_validator",
-    ):
-        try:
-            mod = importlib.import_module(mod_name)
-            source = inspect.getsource(mod)
-            ids.update(id_re.findall(source))
-        except Exception:  # noqa: BLE001
-            pass
-    return frozenset(ids)
+    Args:
+        expr: Raw expression string (must be a non-empty str).
+        phase_name: Phase friendly name for the lint result.
+        ref: Rule ref or policy description label.
+        ctx: Lint context to add results to.
+        entity: "rule" or "policy" — used in the message text.
+    """
+    from octorules.expression import normalize_expression
+
+    normalized = normalize_expression(expr).lower()
+    if is_always_true(normalized):
+        ctx.add(
+            LintResult(
+                rule_id="M013",
+                severity=Severity.WARNING,
+                message=f"Expression is always true — this is a catch-all {entity}",
+                phase=phase_name,
+                ref=ref,
+                field="expression",
+                suggestion=f"Verify this is intentional (catch-all {entity}s affect all traffic)",
+            )
+        )
+    elif is_always_false(normalized):
+        ctx.add(
+            LintResult(
+                rule_id="M014",
+                severity=Severity.WARNING,
+                message=f"Expression is always false — this {entity} will never match",
+                phase=phase_name,
+                ref=ref,
+                field="expression",
+                suggestion=f"Remove the {entity} or fix the expression",
+            )
+        )
+
+
+def _collect_known_rule_ids() -> frozenset[str]:
+    """Collect all rule IDs from the RULE_IDS constants in each linter module."""
+    from octorules.linter.action_validator import RULE_IDS as _av
+    from octorules.linter.ast_linter import RULE_IDS as _al
+    from octorules.linter.cross_rule_linter import RULE_IDS as _cr
+    from octorules.linter.custom_ruleset_linter import RULE_IDS as _crl
+    from octorules.linter.list_linter import RULE_IDS as _ll
+    from octorules.linter.page_shield_linter import RULE_IDS as _psl
+    from octorules.linter.phase_linter import RULE_IDS as _pl
+    from octorules.linter.plan_linter import RULE_IDS as _pll
+    from octorules.linter.yaml_validator import RULE_IDS as _yv
+
+    return _av | _al | _cr | _crl | _ll | _psl | _pl | _pll | _yv
 
 
 # Lazily cached — computed once on first access.
@@ -260,6 +293,7 @@ def lint_zone_file(
                         continue
                     lint_actions(rule, waf_phase, ctx)
                     lint_expressions(rule, waf_phase, ctx)
+                    lint_phase_restrictions(rule, waf_phase, ctx)
 
     # Stage 2c: Page Shield policy checks
     from octorules.linter.page_shield_linter import lint_page_shield_policies

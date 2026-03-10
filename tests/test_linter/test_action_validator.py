@@ -9,6 +9,8 @@ from octorules.linter.engine import LintContext, Severity
 from octorules.linter.expression_bridge import WIREFILTER_AVAILABLE
 from octorules.phases import PHASE_BY_NAME
 
+from .conftest import assert_lint
+
 _needs_wirefilter = pytest.mark.skipif(
     not WIREFILTER_AVAILABLE,
     reason="requires octorules-wirefilter FFI for expression parse errors",
@@ -29,10 +31,11 @@ def _ids(ctx):
 class TestActionValidity:
     def test_c001_invalid_action_for_phase(self):
         ctx = _lint_rule({"ref": "t", "expression": "true", "action": "block"}, "redirect_rules")
-        assert "C001" in _ids(ctx)
-        c001 = [r for r in ctx.results if r.rule_id == "C001"]
-        assert len(c001) == 1
-        assert c001[0].severity == Severity.ERROR
+        assert len(ctx.results) == 1
+        c001 = assert_lint(
+            ctx, "C001", count=1, severity=Severity.ERROR, phase="redirect_rules", ref="t"
+        )
+        assert "block" in c001[0].message
 
     def test_c001_valid_action(self):
         ctx = _lint_rule({"ref": "t", "expression": "true", "action": "redirect"}, "redirect_rules")
@@ -62,10 +65,10 @@ class TestActionValidity:
             {"ref": "t", "expression": "true", "action": "redirect"},
             "redirect_rules",
         )
-        assert "C003" in _ids(ctx)
-        c003 = [r for r in ctx.results if r.rule_id == "C003"]
-        assert len(c003) == 1
-        assert c003[0].severity == Severity.ERROR
+        c003 = assert_lint(
+            ctx, "C003", count=1, severity=Severity.ERROR, phase="redirect_rules", ref="t"
+        )
+        assert "action_parameters" in c003[0].message.lower()
 
     def test_c004_unknown_parameter_key(self):
         ctx = _lint_rule(
@@ -114,6 +117,88 @@ class TestDefaultActionParamValidation:
             "config_rules",
         )
         assert "C004" not in _ids(ctx)
+
+
+class TestPhaseParameterOverrides:
+    """C004 fires when action_parameters keys are invalid for a specific phase."""
+
+    def test_uri_in_response_header_rules_fires_c004(self):
+        """URI transforms are not available in response_header_rules."""
+        ctx = _lint_rule(
+            {
+                "ref": "misplaced-rewrite",
+                "expression": "true",
+                "action_parameters": {
+                    "uri": {"path": {"value": "/index.html"}},
+                },
+            },
+            "response_header_rules",
+        )
+        assert_lint(ctx, "C004", count=1, severity=Severity.ERROR)
+        assert "uri" in ctx.results[0].message
+
+    def test_headers_in_response_header_rules_ok(self):
+        """Headers are valid in response_header_rules."""
+        ctx = _lint_rule(
+            {
+                "ref": "add-header",
+                "expression": "true",
+                "action_parameters": {
+                    "headers": {
+                        "X-Frame-Options": {"operation": "set", "value": "DENY"},
+                    },
+                },
+            },
+            "response_header_rules",
+        )
+        assert "C004" not in _ids(ctx)
+
+    def test_uri_in_url_rewrite_rules_ok(self):
+        """URI transforms are valid in url_rewrite_rules (no override)."""
+        ctx = _lint_rule(
+            {
+                "ref": "rewrite-path",
+                "expression": "true",
+                "action_parameters": {
+                    "uri": {"path": {"value": "/new-path"}},
+                },
+            },
+            "url_rewrite_rules",
+        )
+        assert "C004" not in _ids(ctx)
+
+    def test_uri_in_request_header_rules_ok(self):
+        """URI transforms are valid in request_header_rules (no override)."""
+        ctx = _lint_rule(
+            {
+                "ref": "rewrite-path",
+                "expression": "true",
+                "action_parameters": {
+                    "uri": {"path": {"value": "/new-path"}},
+                },
+            },
+            "request_header_rules",
+        )
+        assert "C004" not in _ids(ctx)
+
+    def test_mixed_uri_and_headers_in_response_fires_c004(self):
+        """Both uri and headers in response_header_rules — uri fires C004."""
+        ctx = _lint_rule(
+            {
+                "ref": "mixed",
+                "expression": "true",
+                "action_parameters": {
+                    "uri": {"path": {"value": "/bad"}},
+                    "headers": {
+                        "X-Test": {"operation": "set", "value": "ok"},
+                    },
+                },
+            },
+            "response_header_rules",
+        )
+        c004s = [r for r in ctx.results if r.rule_id == "C004"]
+        assert len(c004s) == 1
+        assert "uri" in c004s[0].message
 
 
 class TestC005InvalidParamsType:
@@ -275,8 +360,8 @@ class TestRedirectParams:
             },
             "redirect_rules",
         )
-        errors = [r for r in ctx.results if r.severity == Severity.ERROR]
-        assert len(errors) == 0
+        assert len(ctx.results) == 0
+        assert not ctx.has_errors
 
 
 class TestCacheParams:
@@ -329,7 +414,8 @@ class TestCacheParams:
             },
             "cache_rules",
         )
-        assert "I004" in _ids(ctx)
+        i004 = assert_lint(ctx, "I004", count=1, severity=Severity.WARNING)
+        assert "bypass" in i004[0].message.lower() or "cache" in i004[0].message.lower()
 
     def test_valid_cache(self):
         ctx = _lint_rule(
@@ -595,6 +681,33 @@ class TestOriginParams:
             "origin_rules",
         )
         assert "N001" not in _ids(ctx)
+
+    def test_n001_boolean_port_rejected(self):
+        """bool is a subclass of int — port: true should be rejected."""
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "route",
+                "action_parameters": {"origin": {"port": True}},
+            },
+            "origin_rules",
+        )
+        assert "N001" in _ids(ctx)
+        n001 = [r for r in ctx.results if r.rule_id == "N001"]
+        assert "bool" in n001[0].message
+
+    def test_n001_string_port_rejected(self):
+        ctx = _lint_rule(
+            {
+                "ref": "t",
+                "expression": "true",
+                "action": "route",
+                "action_parameters": {"origin": {"port": "8443"}},
+            },
+            "origin_rules",
+        )
+        assert "N001" in _ids(ctx)
 
 
 class TestD006CountingExpression:

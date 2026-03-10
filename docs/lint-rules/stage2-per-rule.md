@@ -93,11 +93,11 @@ Fix: Add the required `action_parameters`.
 
 | Severity | Category |
 |----------|----------|
-| WARNING | action |
+| ERROR | action |
 
-Triggers when `action_parameters` contains a key not recognized by the action's schema.
+Triggers when `action_parameters` contains a key not recognized by the action's schema. Phase-specific overrides narrow the allowed keys further (e.g. `response_header_rules` only allows `headers`, not `uri`).
 
-Fix: Remove the unrecognized key or check for typos.
+Fix: Remove the unrecognized key or check for typos. If a rule was accidentally placed under the wrong phase (e.g. after a YAML editing mistake), move it to the correct phase.
 
 ### C005 — Invalid action_parameters type
 
@@ -180,7 +180,7 @@ Fix: Reduce the content size to under 10KB. Consider linking to external assets 
 
 | Severity | Category |
 |----------|----------|
-| WARNING | action |
+| ERROR | action |
 
 Triggers when a `skip` action's `phases` list contains an unrecognized Cloudflare phase identifier.
 
@@ -200,7 +200,7 @@ Fix: Use valid Cloudflare phase identifiers (e.g. `http_request_firewall_custom`
 
 | Severity | Category |
 |----------|----------|
-| WARNING | action |
+| ERROR | action |
 
 Triggers when a `skip` action's `products` list contains an unrecognized product name.
 
@@ -240,7 +240,7 @@ Fix: Use valid algorithms: `gzip`, `brotli`, `zstd`, `none`, `auto`.
 
 | Severity | Category |
 |----------|----------|
-| WARNING | action |
+| ERROR | action |
 
 Triggers when a rate limiting rule's `characteristics` list contains an unrecognized value.
 

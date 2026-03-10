@@ -102,6 +102,16 @@ class TestASNListItems:
         ctx = _lint({"lists": [{"name": "myasns", "kind": "asn", "items": [{"asn": "not-int"}]}]})
         assert "Q005" in _ids(ctx)
 
+    def test_q005_asn_boolean_true_rejected(self):
+        """bool is a subclass of int in Python — True should not be accepted as ASN."""
+        ctx = _lint({"lists": [{"name": "myasns", "kind": "asn", "items": [{"asn": True}]}]})
+        assert "Q005" in _ids(ctx)
+
+    def test_q005_asn_boolean_false_rejected(self):
+        """bool is a subclass of int in Python — False should not be accepted as ASN."""
+        ctx = _lint({"lists": [{"name": "myasns", "kind": "asn", "items": [{"asn": False}]}]})
+        assert "Q005" in _ids(ctx)
+
     def test_q005_asn_out_of_range(self):
         ctx = _lint({"lists": [{"name": "myasns", "kind": "asn", "items": [{"asn": -1}]}]})
         assert "Q005" in _ids(ctx)

@@ -34,7 +34,7 @@ def sample_config(tmp_path):
 class TestPageShieldPoliciesCLI:
     """Tests for Page Shield policy integration in CLI."""
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_with_page_shield_policies(self, mock_provider_cls, sample_config, caplog):
         """Plan should detect Page Shield policy additions."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -54,7 +54,7 @@ class TestPageShieldPoliciesCLI:
         assert result == 0
         assert "CSP on all" in caplog.text or True  # plan output goes to stdout
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_plan_no_page_shield_key_skips(self, mock_provider_cls, sample_config):
         """When page_shield_policies key is absent, skip policy planning."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -66,7 +66,7 @@ class TestPageShieldPoliciesCLI:
         # get_all_page_shield_policies should NOT be called
         mock_provider_cls.return_value.get_all_page_shield_policies.assert_not_called()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_includes_page_shield_policies(self, mock_provider_cls, sample_config):
         """Dump should fetch and include Page Shield policies."""
         import yaml
@@ -89,7 +89,7 @@ class TestPageShieldPoliciesCLI:
         assert "page_shield_policies" in data
         assert data["page_shield_policies"][0]["description"] == "CSP on all"
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_dump_no_policies_no_section(self, mock_provider_cls, sample_config):
         """Dump with no policies should not include page_shield_policies key."""
         import yaml
@@ -147,7 +147,7 @@ class TestPageShieldPoliciesCLI:
             result = cmd_validate(sample_config, ["example.com"])
         assert result == 1
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_creates_page_shield_policy(self, mock_provider_cls, sample_config, caplog):
         """Sync should create new Page Shield policies."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -170,7 +170,7 @@ class TestPageShieldPoliciesCLI:
         assert result == 0
         mock_prov.create_page_shield_policy.assert_called_once()
 
-    @patch("octorules.cli.CloudflareProvider")
+    @patch("octorules.commands.CloudflareProvider")
     def test_sync_deletes_page_shield_policy(self, mock_provider_cls, sample_config, caplog):
         """Sync should delete policies in CF but not in YAML."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -196,7 +196,7 @@ class TestPageShieldPoliciesCLI:
 
     def test_apply_page_shield_policies_create(self):
         """_apply_page_shield_policies should call create for new policies."""
-        from octorules.cli import _apply_page_shield_policies
+        from octorules.commands import _apply_page_shield_policies
         from octorules.planner import PageShieldPolicyPlan
 
         change = RuleChange(
@@ -224,7 +224,7 @@ class TestPageShieldPoliciesCLI:
 
     def test_apply_page_shield_policies_delete(self):
         """_apply_page_shield_policies should call delete for removed policies."""
-        from octorules.cli import _apply_page_shield_policies
+        from octorules.commands import _apply_page_shield_policies
         from octorules.planner import PageShieldPolicyPlan
 
         psp = PageShieldPolicyPlan(description="Old CSP", policy_id="policy-123", delete=True)
@@ -239,7 +239,7 @@ class TestPageShieldPoliciesCLI:
 
     def test_apply_page_shield_policies_update(self):
         """_apply_page_shield_policies should call update for modified policies."""
-        from octorules.cli import _apply_page_shield_policies
+        from octorules.commands import _apply_page_shield_policies
         from octorules.planner import PageShieldPolicyPlan
 
         change = RuleChange(
@@ -262,7 +262,7 @@ class TestPageShieldPoliciesCLI:
 
     def test_apply_page_shield_policies_empty(self):
         """Empty page_shield_policy_plans should do nothing."""
-        from octorules.cli import _apply_page_shield_policies
+        from octorules.commands import _apply_page_shield_policies
 
         zp = ZonePlan(zone_name="example.com", page_shield_policy_plans=[])
         scope = Scope(zone_id="zone-abc", label="example.com")

@@ -11,8 +11,51 @@ human-readable plan output.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 
 log = logging.getLogger("octorules")
+
+
+class QuoteAwareScanner:
+    """Iterate over characters in an expression, tracking double-quote state.
+
+    Yields ``(index, char, in_quote)`` tuples.  Escaped quotes (``\\"``)
+    inside double-quoted strings do not toggle the quoting state.
+
+    After iteration, ``unmatched_quote`` is True if the string ended
+    inside an unclosed quote.
+
+    Usage::
+
+        scanner = QuoteAwareScanner(expr)
+        for i, ch, in_quote in scanner:
+            ...
+        if scanner.unmatched_quote:
+            log.warning("unmatched quote")
+    """
+
+    __slots__ = ("_expr", "unmatched_quote")
+
+    def __init__(self, expr: str) -> None:
+        self._expr = expr
+        self.unmatched_quote = False
+
+    def __iter__(self) -> Iterator[tuple[int, str, bool]]:
+        in_quote = False
+        escaped = False
+        for i, ch in enumerate(self._expr):
+            if escaped:
+                escaped = False
+                yield i, ch, in_quote
+                continue
+            if ch == "\\" and in_quote:
+                escaped = True
+                yield i, ch, in_quote
+                continue
+            if ch == '"':
+                in_quote = not in_quote
+            yield i, ch, in_quote
+        self.unmatched_quote = in_quote
 
 
 def normalize_expression(expr: str) -> str:
@@ -25,47 +68,18 @@ def normalize_expression(expr: str) -> str:
     Cloudflare's canonical form (e.g. ``{"a" "b"}`` not ``{ "a" "b" }``).
     """
     result: list[str] = []
-    in_quote = False
-    escaped = False
     ws_run = False
     after_open_brace = False
 
-    for ch in expr:
-        if escaped:
-            result.append(ch)
-            escaped = False
+    scanner = QuoteAwareScanner(expr)
+    for _i, ch, in_quote in scanner:
+        if in_quote or (ch == '"'):
+            # Flush pending whitespace before entering/exiting quotes
+            if ws_run:
+                if not after_open_brace:
+                    result.append(" ")
+                ws_run = False
             after_open_brace = False
-            continue
-
-        if ch == "\\":
-            if in_quote:
-                result.append(ch)
-                escaped = True
-            else:
-                # Backslash outside quotes — just emit it
-                if ws_run:
-                    if not after_open_brace:
-                        result.append(" ")
-                    ws_run = False
-                after_open_brace = False
-                result.append(ch)
-            continue
-
-        if ch == '"':
-            if in_quote:
-                result.append(ch)
-                in_quote = False
-            else:
-                if ws_run:
-                    if not after_open_brace:
-                        result.append(" ")
-                    ws_run = False
-                after_open_brace = False
-                result.append(ch)
-                in_quote = True
-            continue
-
-        if in_quote:
             result.append(ch)
             continue
 
@@ -77,6 +91,14 @@ def normalize_expression(expr: str) -> str:
             ws_run = False
             after_open_brace = False
             result.append(ch)
+        elif ch == "\\":
+            # Backslash outside quotes — just emit it
+            if ws_run:
+                if not after_open_brace:
+                    result.append(" ")
+                ws_run = False
+            after_open_brace = False
+            result.append(ch)
         else:
             if ws_run:
                 if not after_open_brace:
@@ -85,7 +107,7 @@ def normalize_expression(expr: str) -> str:
             after_open_brace = ch == "{"
             result.append(ch)
 
-    if in_quote:
+    if scanner.unmatched_quote:
         log.warning("Unmatched quote in expression: %.80s...", expr if len(expr) > 80 else expr)
 
     return "".join(result).strip()
@@ -98,24 +120,9 @@ def normalize_expression(expr: str) -> str:
 
 def _find_closing_brace(expr: str, start: int) -> int:
     """Return index of ``}`` matching the ``{`` at *start*, or -1."""
-    in_quote = False
-    escaped = False
-    for i in range(start + 1, len(expr)):
-        ch = expr[i]
-        if escaped:
-            escaped = False
-            continue
-        if in_quote:
-            if ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_quote = False
-            continue
-        if ch == '"':
-            in_quote = True
-            continue
-        if ch == "}":
-            return i
+    for i, ch, in_quote in QuoteAwareScanner(expr[start + 1 :]):
+        if not in_quote and ch == "}":
+            return start + 1 + i
     return -1
 
 
@@ -123,22 +130,8 @@ def _split_set_items(content: str) -> list[str]:
     """Split set content into items, preserving quoted strings."""
     items: list[str] = []
     current: list[str] = []
-    in_quote = False
-    escaped = False
-    for ch in content:
-        if escaped:
-            current.append(ch)
-            escaped = False
-            continue
+    for _i, ch, in_quote in QuoteAwareScanner(content):
         if in_quote:
-            current.append(ch)
-            if ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_quote = False
-            continue
-        if ch == '"':
-            in_quote = True
             current.append(ch)
             continue
         if ch == " ":
@@ -163,32 +156,25 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
         return expr
 
     out: list[str] = []
-    in_quote = False
-    escaped = False
     depth = 0
     i = 0
     n = len(expr)
 
+    # Use index-based iteration so we can skip ahead for multi-char tokens
+    scanner = QuoteAwareScanner(expr)
+    scan_iter = iter(scanner)
     while i < n:
-        ch = expr[i]
-
-        if escaped:
-            out.append(ch)
-            escaped = False
-            i += 1
-            continue
+        try:
+            _idx, ch, in_quote = next(scan_iter)
+        except StopIteration:
+            break
 
         if in_quote:
             out.append(ch)
-            if ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_quote = False
             i += 1
             continue
 
         if ch == '"':
-            in_quote = True
             out.append(ch)
             i += 1
             continue
@@ -217,6 +203,13 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
                     for item in items:
                         out.append(f"{item_indent}{item}\n")
                     out.append(f"{close_indent}}}")
+                    # Skip ahead in both the string and the scanner
+                    skip = end - i
+                    for _ in range(skip):
+                        try:
+                            next(scan_iter)
+                        except StopIteration:
+                            break
                     i = end + 1
                     continue
             out.append(ch)
@@ -233,6 +226,12 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
             out.append("\n")
             out.append("  " * depth)
             out.append("and ")
+            # Skip 4 more chars (" and" minus the current " ")
+            for _ in range(4):
+                try:
+                    next(scan_iter)
+                except StopIteration:
+                    break
             i += 5
             continue
 
@@ -240,6 +239,11 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
             out.append("\n")
             out.append("  " * depth)
             out.append("or ")
+            for _ in range(3):
+                try:
+                    next(scan_iter)
+                except StopIteration:
+                    break
             i += 4
             continue
 

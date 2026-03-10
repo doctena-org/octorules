@@ -1218,4 +1218,211 @@ class TestProviderErrorScenarios:
         provider = CloudflareProvider("token", client=mock_cf_client)
         scope = Scope(account_id="acct-123")
         with pytest.raises(TimeoutError, match="timed out after 0.01s"):
-            provider.poll_bulk_operation(scope, "op-timeout", timeout=0.01, interval=0.001)
+            provider.poll_bulk_operation(scope, "op-timeout", timeout=0.01)
+
+
+class TestFutureCancellationOnAuthError:
+    """Tests that futures are cancelled when auth errors occur during parallel fetching."""
+
+    @staticmethod
+    def _make_mock_response(status_code: int = 401) -> MagicMock:
+        resp = MagicMock()
+        resp.status_code = status_code
+        return resp
+
+    def test_get_all_phase_rules_cancels_futures_on_auth_error(self, mock_cf_client):
+        """get_all_phase_rules should cancel all futures when AuthenticationError is raised."""
+        from cloudflare import AuthenticationError
+
+        phases = [
+            "http_request_dynamic_redirect",
+            "http_request_origin",
+            "http_request_firewall_custom",
+        ]
+
+        mock_response = self._make_mock_response(401)
+        err = AuthenticationError(message="Invalid API token", response=mock_response, body=None)
+
+        # Track which futures are created and whether cancel() is called
+        mock_futures = []
+        failing_future = MagicMock()
+        failing_future.result.side_effect = err
+
+        ok_future_1 = MagicMock()
+        ok_future_1.result.return_value = [{"ref": "r1"}]
+
+        ok_future_2 = MagicMock()
+        ok_future_2.result.return_value = [{"ref": "r2"}]
+
+        mock_futures = [failing_future, ok_future_1, ok_future_2]
+
+        # Build a mock executor that maps submit calls to our mock futures
+        submit_count = iter(range(len(mock_futures)))
+
+        def mock_submit(fn, *args, **kwargs):
+            idx = next(submit_count)
+            return mock_futures[idx]
+
+        mock_executor = MagicMock()
+        mock_executor.__enter__ = MagicMock(return_value=mock_executor)
+        mock_executor.__exit__ = MagicMock(return_value=False)
+        mock_executor.submit.side_effect = mock_submit
+
+        with (
+            patch("octorules.provider.ThreadPoolExecutor", return_value=mock_executor),
+            patch(
+                "octorules.provider.as_completed",
+                return_value=iter([failing_future, ok_future_1, ok_future_2]),
+            ),
+        ):
+            provider = CloudflareProvider("token", client=mock_cf_client)
+            with pytest.raises(AuthenticationError):
+                provider.get_all_phase_rules(_zs(), cf_phases=phases)
+
+        # All futures should have had cancel() called
+        for f in mock_futures:
+            f.cancel.assert_called_once()
+
+    def test_get_all_phase_rules_cancels_futures_on_permission_denied(self, mock_cf_client):
+        """get_all_phase_rules should cancel all futures when PermissionDeniedError
+        propagates from a future (not the per-phase catch in get_phase_rules)."""
+        from cloudflare import PermissionDeniedError
+
+        phases = [
+            "http_request_dynamic_redirect",
+            "http_request_origin",
+        ]
+
+        mock_response = self._make_mock_response(403)
+        err = PermissionDeniedError(
+            message="Token lacks permission", response=mock_response, body=None
+        )
+
+        failing_future = MagicMock()
+        failing_future.result.side_effect = err
+
+        ok_future = MagicMock()
+        ok_future.result.return_value = []
+
+        mock_futures = [failing_future, ok_future]
+        submit_count = iter(range(len(mock_futures)))
+
+        def mock_submit(fn, *args, **kwargs):
+            return mock_futures[next(submit_count)]
+
+        mock_executor = MagicMock()
+        mock_executor.__enter__ = MagicMock(return_value=mock_executor)
+        mock_executor.__exit__ = MagicMock(return_value=False)
+        mock_executor.submit.side_effect = mock_submit
+
+        with (
+            patch("octorules.provider.ThreadPoolExecutor", return_value=mock_executor),
+            patch(
+                "octorules.provider.as_completed",
+                return_value=iter([failing_future, ok_future]),
+            ),
+        ):
+            provider = CloudflareProvider("token", client=mock_cf_client)
+            with pytest.raises(PermissionDeniedError):
+                provider.get_all_phase_rules(_zs(), cf_phases=phases)
+
+        for f in mock_futures:
+            f.cancel.assert_called_once()
+
+    def test_get_all_custom_rulesets_cancels_futures_on_auth_error(self, mock_cf_client):
+        """get_all_custom_rulesets should cancel all futures when AuthenticationError is raised."""
+        from cloudflare import AuthenticationError
+
+        # list_custom_rulesets must return metadata so get_all_custom_rulesets submits futures
+        mock_cf_client.rulesets.list.return_value = [
+            MockRule({"id": "rs1", "kind": "custom", "name": "A", "phase": "p"}),
+            MockRule({"id": "rs2", "kind": "custom", "name": "B", "phase": "p"}),
+            MockRule({"id": "rs3", "kind": "custom", "name": "C", "phase": "p"}),
+        ]
+
+        mock_response = self._make_mock_response(401)
+        err = AuthenticationError(message="Invalid API token", response=mock_response, body=None)
+
+        failing_future = MagicMock()
+        failing_future.result.side_effect = err
+
+        ok_future_1 = MagicMock()
+        ok_future_1.result.return_value = [{"ref": "r1"}]
+
+        ok_future_2 = MagicMock()
+        ok_future_2.result.return_value = [{"ref": "r2"}]
+
+        mock_futures = [failing_future, ok_future_1, ok_future_2]
+        submit_count = iter(range(len(mock_futures)))
+
+        def mock_submit(fn, *args, **kwargs):
+            return mock_futures[next(submit_count)]
+
+        mock_executor = MagicMock()
+        mock_executor.__enter__ = MagicMock(return_value=mock_executor)
+        mock_executor.__exit__ = MagicMock(return_value=False)
+        mock_executor.submit.side_effect = mock_submit
+
+        with (
+            patch("octorules.provider.ThreadPoolExecutor", return_value=mock_executor),
+            patch(
+                "octorules.provider.as_completed",
+                return_value=iter([failing_future, ok_future_1, ok_future_2]),
+            ),
+        ):
+            provider = CloudflareProvider("token", client=mock_cf_client)
+            scope = Scope(account_id="acct-123")
+            with pytest.raises(AuthenticationError):
+                provider.get_all_custom_rulesets(scope)
+
+        for f in mock_futures:
+            f.cancel.assert_called_once()
+
+    def test_get_all_lists_cancels_futures_on_auth_error(self, mock_cf_client):
+        """get_all_lists should cancel all futures when AuthenticationError is raised."""
+        from cloudflare import AuthenticationError
+
+        # list_lists must return metadata so get_all_lists submits futures
+        mock_cf_client.rules.lists.list.return_value = [
+            MockRule({"id": "lst-1", "name": "list_a", "kind": "ip", "description": "A"}),
+            MockRule({"id": "lst-2", "name": "list_b", "kind": "ip", "description": "B"}),
+            MockRule({"id": "lst-3", "name": "list_c", "kind": "ip", "description": "C"}),
+        ]
+
+        mock_response = self._make_mock_response(401)
+        err = AuthenticationError(message="Invalid API token", response=mock_response, body=None)
+
+        failing_future = MagicMock()
+        failing_future.result.side_effect = err
+
+        ok_future_1 = MagicMock()
+        ok_future_1.result.return_value = [{"ip": "1.1.1.1/32"}]
+
+        ok_future_2 = MagicMock()
+        ok_future_2.result.return_value = [{"ip": "2.2.2.2/32"}]
+
+        mock_futures = [failing_future, ok_future_1, ok_future_2]
+        submit_count = iter(range(len(mock_futures)))
+
+        def mock_submit(fn, *args, **kwargs):
+            return mock_futures[next(submit_count)]
+
+        mock_executor = MagicMock()
+        mock_executor.__enter__ = MagicMock(return_value=mock_executor)
+        mock_executor.__exit__ = MagicMock(return_value=False)
+        mock_executor.submit.side_effect = mock_submit
+
+        with (
+            patch("octorules.provider.ThreadPoolExecutor", return_value=mock_executor),
+            patch(
+                "octorules.provider.as_completed",
+                return_value=iter([failing_future, ok_future_1, ok_future_2]),
+            ),
+        ):
+            provider = CloudflareProvider("token", client=mock_cf_client)
+            scope = Scope(account_id="acct-123")
+            with pytest.raises(AuthenticationError):
+                provider.get_all_lists(scope)
+
+        for f in mock_futures:
+            f.cancel.assert_called_once()

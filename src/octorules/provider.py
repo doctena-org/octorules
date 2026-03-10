@@ -496,15 +496,18 @@ class CloudflareProvider:
         return d.get("operation_id", "")
 
     def poll_bulk_operation(
-        self, scope: Scope, operation_id: str, *, timeout: float = 120.0, interval: float = 2.0
+        self, scope: Scope, operation_id: str, *, timeout: float = 120.0
     ) -> str:
         """Poll a bulk operation until completion.
 
+        Uses graduated backoff: 1s → 2s → 3s → 5s (capped).
         Returns "completed". Raises APIError on "failed", TimeoutError on timeout.
         """
         sl = _fmt_scope(scope)
         log.debug("POLL bulk_operations/%s %s", operation_id, sl)
+        _BACKOFF = (1.0, 2.0, 3.0, 5.0)
         start = time.monotonic()
+        poll_count = 0
         while True:
             result = self._client.rules.lists.bulk_operations.get(operation_id, **scope.api_kwargs)
             d = _ruleset_to_dict(result)
@@ -523,7 +526,9 @@ class CloudflareProvider:
                 raise TimeoutError(
                     f"Bulk operation {operation_id} timed out after {timeout}s (status={status})"
                 )
+            interval = _BACKOFF[min(poll_count, len(_BACKOFF) - 1)]
             time.sleep(interval)
+            poll_count += 1
 
     def get_all_lists(
         self, scope: Scope, *, list_names: list[str] | None = None

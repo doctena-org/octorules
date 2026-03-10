@@ -450,6 +450,8 @@ class TestIncludeDirective:
 class TestPathTraversal:
     """Tests for path traversal protection in file loading."""
 
+    # -- load_zone_rules --
+
     def test_zone_name_traversal_blocked(self, tmp_path):
         """Zone name with ../ should raise ConfigError."""
         rules_dir = tmp_path / "rules"
@@ -457,6 +459,41 @@ class TestPathTraversal:
         config = Config(token="tok", rules_dir=rules_dir, zones={})
         with pytest.raises(ConfigError, match="resolves outside rules directory"):
             config.load_zone_rules("../../etc/passwd")
+
+    def test_zone_name_single_dotdot_blocked(self, tmp_path):
+        """Zone name with a single ../ escape should raise ConfigError."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        with pytest.raises(ConfigError, match="resolves outside rules directory"):
+            config.load_zone_rules("../secret")
+
+    def test_zone_name_absolute_path_blocked(self, tmp_path):
+        """Zone name that is an absolute path should raise ConfigError."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        with pytest.raises(ConfigError, match="resolves outside rules directory"):
+            config.load_zone_rules("/etc/passwd")
+
+    def test_zone_name_embedded_dotdot_blocked(self, tmp_path):
+        """Zone name with embedded ../ segments should raise ConfigError."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        with pytest.raises(ConfigError, match="resolves outside rules directory"):
+            config.load_zone_rules("subdir/../../etc/passwd")
+
+    def test_zone_name_safe_subdirectory_allowed(self, tmp_path):
+        """Zone name that stays within rules_dir should not raise."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        # Normal zone name — no file exists, so returns empty dict (no error)
+        result = config.load_zone_rules("example.com")
+        assert result == {}
+
+    # -- load_account_rules --
 
     def test_account_name_sanitized_by_slugify(self, tmp_path):
         """Account name with traversal chars is sanitized by slugify."""
@@ -467,6 +504,45 @@ class TestPathTraversal:
         # Should not raise — just returns empty (no file found)
         result = config.load_account_rules("../../etc/passwd")
         assert result == {}
+
+    def test_account_name_dotdot_sanitized(self, tmp_path):
+        """Account name with ../ is sanitized to a safe slug by slugify."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        # slugify("../secret") → "secret", which is safe within rules_dir
+        result = config.load_account_rules("../secret")
+        assert result == {}
+
+    def test_account_name_absolute_path_sanitized(self, tmp_path):
+        """Account name that looks like an absolute path is sanitized by slugify."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        # slugify("/etc/passwd") → "etc-passwd", which is safe
+        result = config.load_account_rules("/etc/passwd")
+        assert result == {}
+
+    def test_account_name_slugify_prevents_escape(self, tmp_path):
+        """Verify slugify strips all dangerous characters from account names."""
+        dangerous_names = [
+            "../../etc/passwd",
+            "../secret",
+            "/etc/shadow",
+            "subdir/../../etc/passwd",
+            "....//....//etc/passwd",
+        ]
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        for name in dangerous_names:
+            slug = slugify(name)
+            # Slug must not contain path separators or dot-dot sequences
+            assert "/" not in slug, f"slugify({name!r}) = {slug!r} contains '/'"
+            assert ".." not in slug, f"slugify({name!r}) = {slug!r} contains '..'"
+            # Must not raise — slugified name is always safe
+            result = config.load_account_rules(name)
+            assert result == {}, f"Expected empty dict for account name {name!r}"
 
 
 class TestYamlLoaderEquivalence:

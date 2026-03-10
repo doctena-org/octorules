@@ -5,9 +5,11 @@ from __future__ import annotations
 import pytest
 
 from octorules.linter.ast_linter import lint_expressions
-from octorules.linter.engine import LintContext
+from octorules.linter.engine import LintContext, Severity
 from octorules.linter.expression_bridge import WIREFILTER_AVAILABLE
 from octorules.phases import PHASE_BY_NAME
+
+from .conftest import assert_lint, assert_no_lint
 
 
 def _lint(expression, phase_name="waf_custom_rules", ref="test"):
@@ -25,11 +27,12 @@ def _ids(ctx):
 class TestValueConstraints:
     def test_g001_lowercase_method(self):
         ctx = _lint('http.request.method eq "get"')
-        assert "G001" in _ids(ctx)
+        g001 = assert_lint(ctx, "G001", count=1, severity=Severity.WARNING, ref="test")
+        assert "get" in g001[0].message or "uppercase" in g001[0].message.lower()
 
     def test_g001_uppercase_method_ok(self):
         ctx = _lint('http.request.method eq "GET"')
-        assert "G001" not in _ids(ctx)
+        assert_no_lint(ctx, "G001")
 
     def test_g002_no_false_positive_on_other_field_values(self):
         # Values for cf.zone.name should not trigger G002
@@ -43,8 +46,7 @@ class TestValueConstraints:
 
     def test_g002_fires_on_bad_path_in_set(self):
         ctx = _lint('http.request.uri.path in {"/ok" "bad"}')
-        g002 = [r for r in ctx.results if r.rule_id == "G002"]
-        assert len(g002) == 1
+        g002 = assert_lint(ctx, "G002", count=1, severity=Severity.WARNING, ref="test")
         assert "bad" in g002[0].message
 
     def test_g003_regex_anchor_in_literal(self):
@@ -192,8 +194,11 @@ class TestDeprecatedFields:
 
     def test_g010_two_deprecated_fields(self):
         ctx = _lint('ip.geoip.country eq "DE" and ip.geoip.continent eq "EU"')
-        g010 = [r for r in ctx.results if r.rule_id == "G010"]
-        assert len(g010) == 2
+        g010 = assert_lint(ctx, "G010", count=2, severity=Severity.WARNING)
+        # Both deprecated fields should be mentioned
+        messages = " ".join(r.message for r in g010)
+        assert "ip.geoip.country" in messages
+        assert "ip.geoip.continent" in messages
 
 
 class TestBogonIPs:
@@ -819,12 +824,19 @@ class TestH003RegexCount:
     def test_h003_too_many_regex(self):
         patterns = " or ".join(f'http.request.uri.path matches "^/p{i}/"' for i in range(65))
         ctx = _lint(patterns)
-        assert "H003" in _ids(ctx)
+        h003 = assert_lint(ctx, "H003", count=1, severity=Severity.WARNING)
+        assert "64" in h003[0].message
+
+    def test_h003_exactly_64_ok(self):
+        """Boundary: exactly 64 regex patterns should not fire H003."""
+        patterns = " or ".join(f'http.request.uri.path matches "^/p{i}/"' for i in range(64))
+        ctx = _lint(patterns)
+        assert_no_lint(ctx, "H003")
 
     def test_h003_under_limit_ok(self):
         patterns = " or ".join(f'http.request.uri.path matches "^/p{i}/"' for i in range(10))
         ctx = _lint(patterns)
-        assert "H003" not in _ids(ctx)
+        assert_no_lint(ctx, "H003")
 
 
 class TestE004EncodeBase64Flags:
@@ -980,9 +992,7 @@ class TestF002UnknownField:
     def test_f002_unknown_field_with_suggestion(self):
         """Typo in field name triggers F002 with 'Did you mean?' suggestion."""
         ctx = _lint('http.hoost eq "x"')
-        assert "F002" in _ids(ctx)
-        f002 = [r for r in ctx.results if r.rule_id == "F002"]
-        assert len(f002) == 1
+        f002 = assert_lint(ctx, "F002", count=1, severity=Severity.WARNING, ref="test")
         assert "http.hoost" in f002[0].message
         assert f002[0].suggestion
         assert "http.host" in f002[0].suggestion

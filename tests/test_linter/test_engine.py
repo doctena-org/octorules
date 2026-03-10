@@ -8,6 +8,7 @@ from octorules.linter.engine import (
     LintContext,
     LintResult,
     Severity,
+    check_catch_all,
     is_always_false,
     is_always_true,
     lint_zone_file,
@@ -150,6 +151,96 @@ class TestLintZoneFile:
         )
         b001 = [r for r in ctx.results if r.rule_id == "B001"]
         assert len(b001) == 1
+
+    def test_custom_ruleset_gets_phase_restrictions(self):
+        """Custom ruleset rules should be checked for field/phase restrictions (B001)."""
+        ctx = lint_zone_file(
+            {
+                "custom_rulesets": [
+                    {
+                        "id": "a" * 32,
+                        "name": "my-ruleset",
+                        "phase": "http_request_firewall_custom",
+                        "rules": [
+                            {
+                                "ref": "bad-field",
+                                "expression": "http.response.code eq 403",
+                                "action": "block",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        b001 = [r for r in ctx.results if r.rule_id == "B001"]
+        assert len(b001) == 1
+        assert b001[0].ref == "bad-field"
+
+    def test_custom_ruleset_gets_action_validation(self):
+        """Custom ruleset rules should be checked for invalid actions (C001)."""
+        ctx = lint_zone_file(
+            {
+                "custom_rulesets": [
+                    {
+                        "id": "a" * 32,
+                        "name": "my-ruleset",
+                        "phase": "http_request_firewall_custom",
+                        "rules": [
+                            {
+                                "ref": "bad-action",
+                                "expression": "true",
+                                "action": "redirect",  # invalid for waf_custom_rules
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        c001 = [r for r in ctx.results if r.rule_id == "C001"]
+        assert len(c001) == 1
+
+    def test_custom_ruleset_gets_expression_analysis(self):
+        """Custom ruleset rules should be checked for expression issues (G003)."""
+        ctx = lint_zone_file(
+            {
+                "custom_rulesets": [
+                    {
+                        "id": "a" * 32,
+                        "name": "my-ruleset",
+                        "phase": "http_request_firewall_custom",
+                        "rules": [
+                            {
+                                "ref": "regex-anchor",
+                                "expression": 'http.request.uri.path eq "^/api"',
+                                "action": "block",
+                            }
+                        ],
+                    }
+                ]
+            }
+        )
+        g003 = [r for r in ctx.results if r.rule_id == "G003"]
+        assert len(g003) == 1
+
+    def test_page_shield_gets_phase_restrictions(self):
+        """Page Shield policies with plan-gated fields should fire B003 on free tier."""
+        ctx = lint_zone_file(
+            {
+                "page_shield_policies": [
+                    {
+                        "description": "bot-check",
+                        "action": "allow",
+                        "expression": "cf.bot_management.score gt 30",
+                        "enabled": True,
+                        "value": "script-src 'self'",
+                    }
+                ]
+            },
+            plan_tier="free",
+        )
+        b003 = [r for r in ctx.results if r.rule_id == "B003"]
+        assert len(b003) == 1
+        assert b003[0].ref == "bot-check"
 
     def test_regex_anchor_in_literal(self):
         ctx = lint_zone_file(
@@ -318,6 +409,43 @@ class TestSuppressions:
             suppressions = parse_suppressions(f, known_rules={"M001", "M002"})
         assert "Unknown rule ID" not in caplog.text
         assert "M001" in suppressions.get("foo", set())
+
+
+class TestCheckCatchAll:
+    """Tests for the DRY check_catch_all() helper."""
+
+    def test_always_true_fires_m013(self):
+        ctx = LintContext()
+        check_catch_all("true", "waf_custom_rules", "test-ref", ctx)
+        m013 = [r for r in ctx.results if r.rule_id == "M013"]
+        assert len(m013) == 1
+        assert m013[0].phase == "waf_custom_rules"
+        assert m013[0].ref == "test-ref"
+        assert "catch-all rule" in m013[0].message
+
+    def test_always_false_fires_m014(self):
+        ctx = LintContext()
+        check_catch_all("false", "redirect_rules", "dead-rule", ctx)
+        m014 = [r for r in ctx.results if r.rule_id == "M014"]
+        assert len(m014) == 1
+        assert "never match" in m014[0].message
+
+    def test_entity_policy(self):
+        ctx = LintContext()
+        check_catch_all("true", "page_shield_policies", "my-policy", ctx, entity="policy")
+        m013 = [r for r in ctx.results if r.rule_id == "M013"]
+        assert len(m013) == 1
+        assert "catch-all policy" in m013[0].message
+
+    def test_normal_expression_no_findings(self):
+        ctx = LintContext()
+        check_catch_all('http.host eq "example.com"', "waf_custom_rules", "r", ctx)
+        assert len(ctx.results) == 0
+
+    def test_parenthesized_true(self):
+        ctx = LintContext()
+        check_catch_all("((true))", "redirect_rules", "r", ctx)
+        assert any(r.rule_id == "M013" for r in ctx.results)
 
 
 class TestIsAlwaysTrue:

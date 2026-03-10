@@ -19,6 +19,8 @@ from octorules.linter.schemas.fields import (
 )
 from octorules.phases import Phase
 
+RULE_IDS = frozenset({"B001", "B002", "B003"})
+
 # Plan tier hierarchy for comparison
 _PLAN_TIERS = {"free": 0, "pro": 1, "business": 2, "enterprise": 3}
 
@@ -42,13 +44,15 @@ _REQUEST_ONLY_PHASES = frozenset(
 )
 
 
-def lint_phase_restrictions(rule: dict[str, Any], phase: Phase, ctx: LintContext) -> None:
+def lint_phase_restrictions(
+    rule: dict[str, Any], phase: Phase, ctx: LintContext, *, ref_override: str | None = None
+) -> None:
     """Check field/function availability for the rule's phase."""
     expr = rule.get("expression")
     if not isinstance(expr, str) or not expr:
         return
 
-    ref = rule.get("ref", "")
+    ref = ref_override or rule.get("ref", "")
     phase_name = phase.friendly_name
 
     info = parse_expression(expr)

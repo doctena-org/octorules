@@ -8,13 +8,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from octorules.expression import normalize_expression
 from octorules.linter.engine import (
     LintContext,
     LintResult,
     Severity,
-    is_always_false,
-    is_always_true,
+    check_catch_all,
 )
 from octorules.phases import (
     KNOWN_NON_PHASE_KEYS,
@@ -22,6 +20,27 @@ from octorules.phases import (
     PHASE_BY_NAME,
     RENAMED_PHASES,
     suggest_phase,
+)
+
+RULE_IDS = frozenset(
+    {
+        "M001",
+        "M002",
+        "M003",
+        "M004",
+        "M005",
+        "M006",
+        "M007",
+        "M008",
+        "M009",
+        "M010",
+        "M011",
+        "M012",
+        "M013",
+        "M014",
+        "M015",
+        "M016",
+    }
 )
 
 # Maximum recommended description length
@@ -251,28 +270,4 @@ def _check_rule_fields(phase_name: str, rule: dict, index: int, ctx: LintContext
     # M013 / M014: always-true / always-false expressions
     expr = rule.get("expression")
     if isinstance(expr, str):
-        normalized_expr = normalize_expression(expr).lower()
-        if is_always_true(normalized_expr):
-            ctx.add(
-                LintResult(
-                    rule_id="M013",
-                    severity=Severity.WARNING,
-                    message="Expression is always true — this is a catch-all rule",
-                    phase=phase_name,
-                    ref=ref_label,
-                    field="expression",
-                    suggestion="Verify this is intentional (catch-all rules affect all traffic)",
-                )
-            )
-        elif is_always_false(normalized_expr):
-            ctx.add(
-                LintResult(
-                    rule_id="M014",
-                    severity=Severity.WARNING,
-                    message="Expression is always false — this rule will never match",
-                    phase=phase_name,
-                    ref=ref_label,
-                    field="expression",
-                    suggestion="Remove the rule or fix the expression",
-                )
-            )
+        check_catch_all(expr, phase_name, ref_label, ctx)

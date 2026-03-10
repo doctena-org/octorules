@@ -375,7 +375,7 @@ class TestListMethods:
         provider = CloudflareProvider("token", client=mock_cf_client)
         scope = Scope(account_id="acct-123")
         with pytest.raises(TimeoutError, match="Bulk operation op-123 timed out after 0.01s"):
-            provider.poll_bulk_operation(scope, "op-123", timeout=0.01, interval=0.001)
+            provider.poll_bulk_operation(scope, "op-123", timeout=0.01)
 
     def test_poll_bulk_operation_completes_after_retries(self, mock_cf_client):
         """poll_bulk_operation succeeds after polling through pending status."""
@@ -386,7 +386,7 @@ class TestListMethods:
         ]
         provider = CloudflareProvider("token", client=mock_cf_client)
         scope = Scope(account_id="acct-123")
-        result = provider.poll_bulk_operation(scope, "op-123", timeout=10.0, interval=0.001)
+        result = provider.poll_bulk_operation(scope, "op-123", timeout=10.0)
         assert result == "completed"
         assert mock_cf_client.rules.lists.bulk_operations.get.call_count == 3
 

@@ -20,6 +20,57 @@ from octorules.linter.schemas.fields import FIELDS
 from octorules.linter.schemas.functions import get_function
 from octorules.phases import Phase
 
+RULE_IDS = frozenset(
+    {
+        "A001",
+        "A002",
+        "B003",
+        "E001",
+        "E002",
+        "E003",
+        "E004",
+        "E005",
+        "E006",
+        "E007",
+        "F001",
+        "F002",
+        "F003",
+        "G001",
+        "G002",
+        "G003",
+        "G004",
+        "G005",
+        "G006",
+        "G007",
+        "G008",
+        "G009",
+        "G010",
+        "G011",
+        "G012",
+        "G013",
+        "G014",
+        "G015",
+        "G016",
+        "G017",
+        "G018",
+        "G019",
+        "G020",
+        "G021",
+        "G022",
+        "G023",
+        "G024",
+        "G025",
+        "G026",
+        "H003",
+        "O001",
+        "O002",
+        "O003",
+        "O004",
+        "O005",
+        "O006",
+    }
+)
+
 # Deprecated fields and their replacements
 _DEPRECATED_FIELDS: dict[str, str] = {
     "ip.geoip.asnum": "ip.src.asnum",
