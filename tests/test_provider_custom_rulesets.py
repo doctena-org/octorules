@@ -13,30 +13,7 @@ from octorules.provider import (
     _ruleset_to_dict,
 )
 
-
-class MockRuleset:
-    def __init__(self, rules=None):
-        self.rules = rules
-
-
-class MockRule:
-    def __init__(self, data: dict):
-        self._data = data
-
-    def model_dump(self, exclude_none=False):
-        if exclude_none:
-            return {k: v for k, v in self._data.items() if v is not None}
-        return dict(self._data)
-
-
-class MockRuleWithToDict:
-    """Mock rule that only has to_dict (no model_dump)."""
-
-    def __init__(self, data: dict):
-        self._data = data
-
-    def to_dict(self):
-        return dict(self._data)
+from .mocks import MockRule, MockRuleset, MockRuleWithToDict
 
 
 class TestRulesetToDict:

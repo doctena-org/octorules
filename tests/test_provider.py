@@ -15,40 +15,7 @@ from octorules.provider import (
     _rule_to_dict,
 )
 
-
-class MockRuleset:
-    def __init__(self, rules=None):
-        self.rules = rules
-
-
-class MockRule:
-    def __init__(self, data: dict):
-        self._data = data
-
-    def model_dump(self, exclude_none=False):
-        if exclude_none:
-            return {k: v for k, v in self._data.items() if v is not None}
-        return dict(self._data)
-
-
-class MockRuleWithToDict:
-    """Mock rule that only has to_dict (no model_dump)."""
-
-    def __init__(self, data: dict):
-        self._data = data
-
-    def to_dict(self):
-        return dict(self._data)
-
-
-class MockRuleIterableOnly:
-    """Mock rule that is iterable (has __iter__) but no model_dump or to_dict."""
-
-    def __init__(self, data: dict):
-        self._data = data
-
-    def __iter__(self):
-        return iter(self._data.items())
+from .mocks import MockRule, MockRuleIterableOnly, MockRuleset, MockRuleWithToDict
 
 
 # Helper to create a zone scope for tests
@@ -1184,7 +1151,7 @@ class TestMaxWorkersInit:
 
 
 class TestProviderErrorScenarios:
-    """Additional error scenario tests (audit TODO 9)."""
+    """Additional error scenario tests."""
 
     def test_put_phase_rules_empty_response_rules(self, mock_cf_client, caplog):
         """put_phase_rules with None response rules logs warning about count mismatch."""
@@ -1219,6 +1186,114 @@ class TestProviderErrorScenarios:
         scope = Scope(account_id="acct-123")
         with pytest.raises(TimeoutError, match="timed out after 0.01s"):
             provider.poll_bulk_operation(scope, "op-timeout", timeout=0.01)
+
+
+class TestGetListItemsRetry:
+    """Tests for get_list_items retry/backoff behavior."""
+
+    @staticmethod
+    def _mock_raw_items_response(items):
+        import json
+
+        body = {"result": items, "result_info": {}}
+        raw = MagicMock()
+        raw.http_response.text = json.dumps(body)
+        return raw
+
+    def test_auth_error_no_retry(self, mock_cf_client):
+        """AuthenticationError propagates immediately without retrying."""
+        from cloudflare import AuthenticationError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = AuthenticationError(
+            message="bad token", response=mock_response, body=None
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with pytest.raises(AuthenticationError):
+            provider.get_list_items(Scope(account_id="a"), "lst-1", _page_retries=2)
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 1
+
+    def test_permission_denied_no_retry(self, mock_cf_client):
+        """PermissionDeniedError propagates immediately without retrying."""
+        from cloudflare import PermissionDeniedError
+
+        mock_response = MagicMock()
+        mock_response.status_code = 403
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = PermissionDeniedError(
+            message="forbidden", response=mock_response, body=None
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with pytest.raises(PermissionDeniedError):
+            provider.get_list_items(Scope(account_id="a"), "lst-1", _page_retries=2)
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 1
+
+    def test_json_decode_error_no_retry(self, mock_cf_client):
+        """JSONDecodeError raises ValueError immediately without retrying."""
+        raw = MagicMock()
+        raw.http_response.text = "not json {"
+        mock_cf_client.rules.lists.items.with_raw_response.list.return_value = raw
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with pytest.raises(ValueError, match="Invalid JSON"):
+            provider.get_list_items(Scope(account_id="a"), "lst-1", _page_retries=2)
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 1
+
+    def test_api_connection_error_retried(self, mock_cf_client):
+        """APIConnectionError is retried, then succeeds."""
+        from cloudflare import APIConnectionError
+
+        raw_ok = self._mock_raw_items_response([{"ip": "1.1.1.1/32"}])
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = [
+            APIConnectionError(request=MagicMock()),
+            raw_ok,
+        ]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with patch("octorules.provider.time.sleep") as mock_sleep:
+            items = provider.get_list_items(Scope(account_id="a"), "lst-1", _page_retries=2)
+        assert len(items) == 1
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+
+    def test_retry_succeeds_on_second_attempt(self, mock_cf_client):
+        """APIError on first attempt, success on second."""
+        from cloudflare import APIError
+
+        raw_ok = self._mock_raw_items_response([{"ip": "2.2.2.2/32"}])
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = [
+            APIError("Server Error", request=MagicMock(), body=None),
+            raw_ok,
+        ]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with patch("octorules.provider.time.sleep") as mock_sleep:
+            items = provider.get_list_items(Scope(account_id="a"), "lst-1", _page_retries=2)
+        assert items == [{"ip": "2.2.2.2/32"}]
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("octorules.provider.time.sleep")
+    def test_backoff_timing_linear(self, mock_sleep, mock_cf_client):
+        """Backoff delays are linear: 1s, 2s."""
+        from cloudflare import APIError
+
+        err = APIError("fail", request=MagicMock(), body=None)
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = err
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with pytest.raises(APIError):
+            provider.get_list_items(Scope(account_id="a"), "lst-1", _page_retries=2)
+        assert mock_sleep.call_count == 2
+        assert mock_sleep.call_args_list[0] == ((1.0,),)
+        assert mock_sleep.call_args_list[1] == ((2.0,),)
+
+    def test_default_page_retries_is_two(self, mock_cf_client):
+        """Default _page_retries=2 means 3 total attempts."""
+        from cloudflare import APIError
+
+        err = APIError("fail", request=MagicMock(), body=None)
+        mock_cf_client.rules.lists.items.with_raw_response.list.side_effect = err
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        with patch("octorules.provider.time.sleep"):
+            with pytest.raises(APIError):
+                provider.get_list_items(Scope(account_id="a"), "lst-1")
+        assert mock_cf_client.rules.lists.items.with_raw_response.list.call_count == 3
 
 
 class TestFutureCancellationOnAuthError:

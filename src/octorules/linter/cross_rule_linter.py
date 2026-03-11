@@ -6,6 +6,7 @@ duplicate expressions, unreachable rules after terminating actions, etc.
 
 from __future__ import annotations
 
+import functools
 import re
 from typing import Any
 
@@ -19,22 +20,20 @@ RULE_IDS = frozenset({"P001", "P002", "P003", "P004", "P005"})
 _LIST_REF_PATTERN = re.compile(r"\$([a-zA-Z_][a-zA-Z0-9_.]*)")
 
 
-def _load_managed_lists() -> frozenset[str]:
-    """Load valid managed list names from overlay.toml (cached at module level)."""
+@functools.lru_cache(maxsize=1)
+def _get_managed_lists() -> frozenset[str]:
+    """Load valid managed list names from overlay.toml (cached)."""
     from octorules.linter.schemas._registry import load_managed_lists
 
     return load_managed_lists()
 
 
-# Lazily cached — computed once on first access.
-_managed_lists: frozenset[str] | None = None
+@functools.lru_cache(maxsize=1)
+def _get_managed_list_kinds() -> dict[str, str]:
+    """Load managed list name → kind mapping from overlay.toml (cached)."""
+    from octorules.linter.schemas._registry import load_managed_list_kinds
 
-
-def _get_managed_lists() -> frozenset[str]:
-    global _managed_lists  # noqa: PLW0603
-    if _managed_lists is None:
-        _managed_lists = _load_managed_lists()
-    return _managed_lists
+    return load_managed_list_kinds()
 
 
 # Actions that terminate request processing (subsequent rules won't execute)
@@ -246,14 +245,14 @@ _LIST_KIND_FIELD_MAP: dict[str, frozenset[str]] = {
     "redirect": frozenset({"http.request.full_uri"}),
 }
 
-# Pattern: field in $list_name or field not in $list_name
-_FIELD_LIST_REF_PATTERN = re.compile(r"([\w.]+)\s+(?:not\s+)?in\s+\$([a-zA-Z_][a-zA-Z0-9_]*)")
+# Pattern: field in $list_name or field not in $list_name (dots allowed for managed lists)
+_FIELD_LIST_REF_PATTERN = re.compile(r"([\w.]+)\s+(?:not\s+)?in\s+\$([a-zA-Z_][a-zA-Z0-9_.]*)")
 
 
 def _check_list_type_mismatch(rules_data: dict[str, Any], ctx: LintContext) -> None:
     """P005: Detect list references where the field type doesn't match the list kind."""
-    # Build kind map from lists section
-    list_kinds: dict[str, str] = {}
+    # Build kind map from lists section + managed lists
+    list_kinds: dict[str, str] = dict(_get_managed_list_kinds())
     lists_section = rules_data.get("lists")
     if isinstance(lists_section, list):
         for item in lists_section:

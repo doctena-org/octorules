@@ -262,12 +262,16 @@ class Config:
         max_retries = int(cf_section.get("max_retries", 2))
         if max_retries < 0:
             raise ConfigError("'providers.cloudflare.max_retries' must be >= 0")
+        if max_retries > 10:
+            raise ConfigError("'providers.cloudflare.max_retries' must be <= 10")
 
         raw_timeout = cf_section.get("timeout")
         if raw_timeout is not None:
             timeout = float(raw_timeout)
             if timeout <= 0:
                 raise ConfigError("'providers.cloudflare.timeout' must be > 0")
+            if timeout > 300:
+                raise ConfigError("'providers.cloudflare.timeout' must be <= 300")
         else:
             timeout = None
 

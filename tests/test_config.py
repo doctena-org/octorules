@@ -688,6 +688,18 @@ class TestMaxRetries:
         with pytest.raises(ConfigError, match="max_retries"):
             Config.from_file(config_file)
 
+    def test_max_retries_upper_bound(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    max_retries: 10\n"))
+        config = Config.from_file(config_file)
+        assert config.max_retries == 10
+
+    def test_max_retries_above_upper_bound_raises(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    max_retries: 11\n"))
+        with pytest.raises(ConfigError, match="max_retries"):
+            Config.from_file(config_file)
+
 
 class TestTimeout:
     """Tests for providers.cloudflare.timeout config parsing."""
@@ -719,6 +731,18 @@ class TestTimeout:
     def test_negative_timeout_raises(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg(extra_cf="    timeout: -5\n"))
+        with pytest.raises(ConfigError, match="timeout"):
+            Config.from_file(config_file)
+
+    def test_timeout_upper_bound(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    timeout: 300\n"))
+        config = Config.from_file(config_file)
+        assert config.timeout == 300.0
+
+    def test_timeout_above_upper_bound_raises(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    timeout: 301\n"))
         with pytest.raises(ConfigError, match="timeout"):
             Config.from_file(config_file)
 

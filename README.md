@@ -422,6 +422,14 @@ Exports existing Cloudflare rules to YAML files. Useful for bootstrapping or imp
 octorules dump [--zone example.com] [--output-dir ./rules]
 ```
 
+### `octorules versions`
+
+Print versions of octorules and key dependencies.
+
+```bash
+octorules versions
+```
+
 ### `octorules lint`
 
 Lint rules files offline for errors, warnings, and style issues. Supports text, JSON, and SARIF output.
@@ -446,6 +454,7 @@ octorules lint [--format text|json|sarif] [--severity error|warning|info] [--pla
 | `--config PATH` | Path to config file (default: `config.yaml`) |
 | `--zone NAME` | Process a single zone (default: all) |
 | `--phase NAME` | Limit to specific phase(s); can be repeated |
+| `--scope SCOPE` | Scope: `all` (default), `zones`, or `account` |
 | `--debug` | Enable debug logging |
 | `--quiet` | Only show errors |
 
@@ -463,8 +472,8 @@ octorules lint [--format text|json|sarif] [--severity error|warning|info] [--pla
 providers:
   cloudflare:
     token: env/CLOUDFLARE_API_TOKEN  # env/ prefix reads from environment
-    max_retries: 2                   # API retry count (default: 2)
-    timeout: 30                      # API timeout in seconds (optional)
+    max_retries: 2                   # API retry count (default: 2, max: 10)
+    timeout: 30                      # API timeout in seconds (optional, max: 300)
     safety:
       delete_threshold: 30.0        # Max % of rules that can be deleted (default: 30)
       update_threshold: 30.0        # Max % of rules that can be updated (default: 30)

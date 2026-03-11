@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.15.0] - 2026-03-11
+
+### Added
+- **P005 now validates managed lists** (`$cf.*`): field/kind mismatch detection
+  extended to Cloudflare managed lists (all `ip` kind). Managed list kinds are
+  tracked in `overlay.toml` via the new `[managed_lists.kinds]` section.
+- **Page Shield suppression support**: `# octorules:disable=RULE` directives now
+  work with `- description:` lines (bare, double-quoted, and single-quoted),
+  enabling per-policy suppression for Page Shield policies.
+- **`tests/test_commands.py`**: 11 unit tests for the new `_plan_all_scopes()`
+  helper and `_PlanAllResult` dataclass.
+- **Provider retry/backoff tests**: 9 new tests covering `AuthenticationError`
+  immediate propagation, `JSONDecodeError` no-retry, `APIConnectionError` retry,
+  linear backoff timing, graduated backoff sequence, and API error during polling.
+- **Config upper bounds**: `max_retries` capped at 10, `timeout` capped at 300s.
+  Prevents misconfiguration (e.g. milliseconds instead of seconds).
+- **Suppressions unit tests** (`tests/test_linter/test_suppressions.py`): 17 tests
+  covering `parse_suppressions()` and `is_suppressed()` directly — empty files,
+  OSError, unknown IDs, pending IDs at EOF, mixed anchor types, whitespace tolerance.
+- **Dumper error path tests**: 5 tests for mkdir failure, path traversal zone names,
+  file write OSError, and list write failures.
+- **`octorules versions` documented in README**.
+- **Registry unit tests** (`tests/test_linter/test_registry.py`): 8 tests covering
+  `load_managed_lists()`, `load_managed_list_kinds()`, `load_schema()`, and
+  `_load_fallback()` — the schema loading backbone previously without direct tests.
+- **`--scope` flag documented in README** common flags table.
+
+### Changed
+- **commands.py DRY refactor**: extracted `_PlanAllResult` class and
+  `_plan_all_scopes()` helper, replacing 3 near-identical zone/account planning
+  blocks in `_cmd_plan_or_compare`, `cmd_report`, and `_cmd_sync_inner`.
+- **Test fixture DRY**: shared mock classes (`MockRule`, `MockRuleset`,
+  `MockRuleWithToDict`, `MockRuleIterableOnly`) moved to `tests/mocks.py`,
+  eliminating duplication across 4 provider test files.
+- **`global` caching replaced with `@functools.lru_cache`** in
+  `cross_rule_linter.py` (2 loaders) and `engine.py` (1 loader) — eliminates
+  module-level sentinel variables, `global` statements, and `noqa` comments.
+
+### Fixed
+- **`__import__("re")` cleanup** in `action_validator.py`: replaced inline
+  `__import__("re")` hack with standard `import re` at module top.
+- Stale TODO prefixes removed from test docstrings in `test_expression.py`
+  and `test_provider.py`.
+
 ## [0.14.0] - 2026-03-10
 
 ### Added

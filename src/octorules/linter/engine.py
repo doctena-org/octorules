@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 from dataclasses import dataclass, field
 from enum import IntEnum
@@ -167,8 +168,9 @@ def check_catch_all(
         )
 
 
-def _collect_known_rule_ids() -> frozenset[str]:
-    """Collect all rule IDs from the RULE_IDS constants in each linter module."""
+@functools.lru_cache(maxsize=1)
+def get_known_rule_ids() -> frozenset[str]:
+    """Return the set of all known lint rule IDs (cached)."""
     from octorules.linter.action_validator import RULE_IDS as _av
     from octorules.linter.ast_linter import RULE_IDS as _al
     from octorules.linter.cross_rule_linter import RULE_IDS as _cr
@@ -180,18 +182,6 @@ def _collect_known_rule_ids() -> frozenset[str]:
     from octorules.linter.yaml_validator import RULE_IDS as _yv
 
     return _av | _al | _cr | _crl | _ll | _psl | _pl | _pll | _yv
-
-
-# Lazily cached — computed once on first access.
-_known_rule_ids: frozenset[str] | None = None
-
-
-def get_known_rule_ids() -> frozenset[str]:
-    """Return the set of all known lint rule IDs."""
-    global _known_rule_ids  # noqa: PLW0603
-    if _known_rule_ids is None:
-        _known_rule_ids = _collect_known_rule_ids()
-    return _known_rule_ids
 
 
 def lint_zone_file(

@@ -341,6 +341,53 @@ class TestListTypeMismatch:
         )
         assert "P005" not in _ids(ctx)
 
+    def test_p005_managed_list_wrong_field(self):
+        """P005 detects type mismatch for $cf.* managed lists (all are ip kind)."""
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src.asnum in $cf.anonymizer"},
+                ],
+            }
+        )
+        assert "P005" in _ids(ctx)
+        p005 = [r for r in ctx.results if r.rule_id == "P005"]
+        assert len(p005) == 1
+        assert "cf.anonymizer" in p005[0].message
+
+    def test_p005_managed_list_correct_field(self):
+        """P005 does not fire when managed list field matches (ip.src with ip kind)."""
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src in $cf.anonymizer"},
+                ],
+            }
+        )
+        assert "P005" not in _ids(ctx)
+
+    def test_p005_managed_list_not_in(self):
+        """P005 detects managed list type mismatch with 'not in' operator."""
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.geoip.asnum not in $cf.vpn"},
+                ],
+            }
+        )
+        assert "P005" in _ids(ctx)
+
+    def test_p005_managed_list_no_lists_section(self):
+        """P005 fires for managed lists even without a 'lists' section."""
+        ctx = _lint(
+            {
+                "waf_custom_rules": [
+                    {"ref": "rule1", "expression": "ip.src.asnum in $cf.malware"},
+                ],
+            }
+        )
+        assert "P005" in _ids(ctx)
+
 
 class TestPhaseFilter:
     def test_filter_skips_unmatched_phase(self):

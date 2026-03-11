@@ -2,10 +2,11 @@
 
 Supports two scopes:
 
-* **File-level** — a directive before any ``- ref:`` line suppresses the rule
-  for the entire file.
+* **File-level** — a directive before any ``- ref:`` or ``- description:`` line
+  suppresses the rule for the entire file.
 * **Rule-level** — a directive immediately before (or on the same line as) a
-  ``- ref:`` line suppresses the rule for that specific ref only.
+  ``- ref:`` or ``- description:`` line suppresses the rule for that specific
+  ref/description only.
 
 Syntax::
 
@@ -30,6 +31,10 @@ _DIRECTIVE_RE = re.compile(r"#\s*octorules:disable\s*=\s*([A-Z]\d{3}(?:\s*,\s*[A
 # Matches a YAML list item with a ref key
 _REF_RE = re.compile(r"^\s*-\s*ref:\s*(\S+)")
 
+# Matches a YAML list item with a description key (for Page Shield policies).
+# Handles bare (with or without spaces), double-quoted, and single-quoted descriptions.
+_DESC_RE = re.compile(r"^\s*-\s*description:\s*(?:\"(.+?)\"|'(.+?)'|(.+?))\s*$")
+
 
 def parse_suppressions(
     file_path: str | Path,
@@ -52,7 +57,7 @@ def parse_suppressions(
     except OSError:
         return suppressions
 
-    seen_first_ref = False
+    seen_first_anchor = False
 
     for line in lines:
         # Check for directive comments
@@ -66,27 +71,35 @@ def parse_suppressions(
                 ids -= unknown
             pending_ids.update(ids)
 
-        # Check for ref line
+        # Check for ref or description anchor line
+        anchor: str | None = None
         m_ref = _REF_RE.match(line)
         if m_ref:
-            seen_first_ref = True
+            anchor = m_ref.group(1)
+        else:
+            m_desc = _DESC_RE.match(line)
+            if m_desc:
+                # First non-None group among the 3 alternatives
+                anchor = m_desc.group(1) or m_desc.group(2) or m_desc.group(3)
+
+        if anchor is not None:
+            seen_first_anchor = True
             if pending_ids:
-                ref = m_ref.group(1)
-                suppressions.setdefault(ref, set()).update(pending_ids)
+                suppressions.setdefault(anchor, set()).update(pending_ids)
                 pending_ids.clear()
         elif not m_dir and line.strip() and not line.strip().startswith("#"):
-            # Non-comment, non-empty, non-ref line: if we had pending IDs
-            # before any ref was seen, they're file-level suppressions.
-            if pending_ids and not seen_first_ref:
+            # Non-comment, non-empty, non-anchor line: if we had pending IDs
+            # before any anchor was seen, they're file-level suppressions.
+            if pending_ids and not seen_first_anchor:
                 suppressions.setdefault("*", set()).update(pending_ids)
                 pending_ids.clear()
-            elif pending_ids and seen_first_ref:
-                # Directive wasn't followed by a ref — discard to avoid
+            elif pending_ids and seen_first_anchor:
+                # Directive wasn't followed by an anchor — discard to avoid
                 # accidental suppression of the wrong rule.
                 pending_ids.clear()
 
-    # Any remaining pending IDs at EOF that were never matched to a ref
-    if pending_ids and not seen_first_ref:
+    # Any remaining pending IDs at EOF that were never matched to an anchor
+    if pending_ids and not seen_first_anchor:
         suppressions.setdefault("*", set()).update(pending_ids)
 
     return suppressions

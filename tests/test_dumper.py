@@ -835,6 +835,59 @@ class TestRoundTripResilience:
         assert not zp.has_changes, f"Unexpected changes: {zp.phase_plans}"
 
 
+class TestDumpErrorPaths:
+    """Tests for dump_zone_rules error handling."""
+
+    def test_mkdir_failure(self, tmp_path, monkeypatch):
+        """dump_zone_rules returns None when output dir cannot be created."""
+        # Create a file where the directory should be, so mkdir fails
+        blocker = tmp_path / "output"
+        blocker.write_text("not a directory")
+        result = dump_zone_rules("example.com", {}, blocker / "sub")
+        assert result is None
+
+    def test_path_traversal_zone_name(self, tmp_path):
+        """Zone name with path traversal returns None."""
+        result = dump_zone_rules("../../../etc/passwd", {}, tmp_path)
+        assert result is None
+
+    def test_file_write_oserror(self, tmp_path, monkeypatch):
+        """dump_zone_rules returns None when file write fails."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        # Make the output file path a directory so open() fails
+        bad_path = output_dir / "example.com.yaml"
+        bad_path.mkdir()
+
+        rules = {
+            "http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+        }
+        result = dump_zone_rules("example.com", rules, output_dir)
+        assert result is None
+
+    def test_list_write_mkdir_failure(self, tmp_path):
+        """_write_list_file returns None when lists dir cannot be created."""
+        from octorules.dumper import _write_list_file
+
+        # Create a file where the lists directory should be
+        blocker = tmp_path / "lists"
+        blocker.write_text("not a directory")
+        entry = {"name": "mylist", "kind": "ip", "items": []}
+        result = _write_list_file(tmp_path, blocker, "mylist", entry)
+        assert result is None
+
+    def test_list_write_path_traversal(self, tmp_path):
+        """_write_list_file returns None for path-traversal list names."""
+        from octorules.dumper import _write_list_file
+
+        lists_dir = tmp_path / "lists"
+        result = _write_list_file(tmp_path, lists_dir, "../../etc/passwd", {"name": "bad"})
+        assert result is None
+
+
 class TestEnsureRef:
     """Tests for _ensure_ref helper."""
 

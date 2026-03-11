@@ -20,6 +20,18 @@ request_header_rules:
           value: max-age=31536000
 ```
 
+**Page Shield policy suppression** — works with `- description:` lines (since policies use description as identity):
+
+```yaml
+page_shield_policies:
+  # octorules:disable=M013
+  - description: "Allow all scripts"
+    expression: (true)
+    action: allow
+    value: "script-src 'self'"
+    enabled: true
+```
+
 **File-level suppression** — place the directive before any rules to suppress across the entire file:
 
 ```yaml
