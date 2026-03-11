@@ -475,6 +475,83 @@ def _plan_account(
             bg.shutdown(wait=True)
 
 
+class _PlanAllResult:
+    """Aggregated result from planning zones and/or account."""
+
+    __slots__ = (
+        "zone_plans",
+        "desired_by_zone",
+        "current_by_zone",
+        "failed",
+        "scope_map",
+        "account_label",
+    )
+
+    def __init__(self) -> None:
+        self.zone_plans: list[ZonePlan] = []
+        self.desired_by_zone: dict[str, dict] = {}
+        self.current_by_zone: dict[str, dict] = {}
+        self.failed: list[str] = []
+        self.scope_map: dict[str, Scope] = {}
+        self.account_label: str | None = None
+
+    def _add_zones(
+        self, zp_list: list[ZonePlan], d_by_z: dict, c_by_z: dict, zone_failed: list[str]
+    ) -> None:
+        self.zone_plans.extend(zp_list)
+        self.desired_by_zone.update(d_by_z)
+        self.current_by_zone.update(c_by_z)
+        self.failed.extend(zone_failed)
+
+    def _add_account(
+        self,
+        acct_plan: ZonePlan | None,
+        acct_desired: dict,
+        acct_current: dict,
+        provider: CloudflareProvider,
+    ) -> None:
+        if acct_plan is not None:
+            self.zone_plans.append(acct_plan)
+            self.desired_by_zone[acct_plan.zone_name] = acct_desired
+            self.current_by_zone[acct_plan.zone_name] = acct_current
+            self.account_label = acct_plan.zone_name
+            self.scope_map[acct_plan.zone_name] = Scope(
+                account_id=provider.account_id, label=provider.account_name
+            )
+
+
+def _plan_all_scopes(
+    config: Config,
+    provider: CloudflareProvider,
+    zone_filter: list[str] | None,
+    phase_filter: list[str] | None,
+    scope_filter: str = "all",
+    executor: ThreadPoolExecutor | None = None,
+) -> _PlanAllResult:
+    """Plan zones and/or account based on scope_filter.
+
+    Runs account planning concurrently with zone planning when both are requested.
+    """
+    result = _PlanAllResult()
+    do_zones = scope_filter in ("all", "zones")
+    do_account = scope_filter in ("all", "account")
+
+    if do_zones and do_account:
+        with ThreadPoolExecutor(max_workers=1) as acct_executor:
+            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
+            zone_names = _get_zones(config, zone_filter)
+            result._add_zones(*_plan_zones(config, provider, zone_names, phase_filter, executor))
+            result._add_account(*acct_future.result(), provider)
+    else:
+        if do_zones:
+            zone_names = _get_zones(config, zone_filter)
+            result._add_zones(*_plan_zones(config, provider, zone_names, phase_filter, executor))
+        if do_account:
+            result._add_account(*_plan_account(config, provider, phase_filter), provider)
+
+    return result
+
+
 def _cmd_plan_or_compare(
     config: Config,
     zone_filter: list[str] | None,
@@ -486,43 +563,17 @@ def _cmd_plan_or_compare(
 ) -> int:
     """Shared implementation for plan and compare commands."""
     provider = _init_provider(config)
-    failed: list[str] = []
+    r = _plan_all_scopes(config, provider, zone_filter, phase_filter, scope_filter)
 
-    zone_plans: list[ZonePlan] = []
-    do_zones = scope_filter in ("all", "zones")
-    do_account = scope_filter in ("all", "account")
-
-    if do_zones and do_account:
-        # Run account planning concurrently with zone planning
-        with ThreadPoolExecutor(max_workers=1) as acct_executor:
-            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
-            zone_names = _get_zones(config, zone_filter)
-            zp_list, _, _, zone_failed = _plan_zones(config, provider, zone_names, phase_filter)
-            zone_plans.extend(zp_list)
-            failed.extend(zone_failed)
-            acct_plan, _, _ = acct_future.result()
-            if acct_plan is not None:
-                zone_plans.append(acct_plan)
-    else:
-        if do_zones:
-            zone_names = _get_zones(config, zone_filter)
-            zp_list, _, _, zone_failed = _plan_zones(config, provider, zone_names, phase_filter)
-            zone_plans.extend(zp_list)
-            failed.extend(zone_failed)
-        if do_account:
-            acct_plan, _, _ = _plan_account(config, provider, phase_filter)
-            if acct_plan is not None:
-                zone_plans.append(acct_plan)
-
-    if not _emit_plan_outputs(config, zone_plans):
+    if not _emit_plan_outputs(config, r.zone_plans):
         return 1
 
     if checksum:
-        log.info("checksum=%s", compute_checksum(zone_plans))
+        log.info("checksum=%s", compute_checksum(r.zone_plans))
 
-    if failed:
+    if r.failed:
         return 1
-    has_changes = any(zp.has_changes for zp in zone_plans)
+    has_changes = any(zp.has_changes for zp in r.zone_plans)
     return changes_exit_code if has_changes else 0
 
 
@@ -572,50 +623,12 @@ def cmd_report(
 ) -> int:
     """Run the report command. Returns 0 normally, 1 if any zone failed."""
     provider = _init_provider(config)
-    failed: list[str] = []
+    r = _plan_all_scopes(config, provider, zone_filter, phase_filter, scope_filter)
 
-    zone_plans: list[ZonePlan] = []
-    desired_by_zone: dict[str, dict] = {}
-    current_by_zone: dict[str, dict] = {}
-
-    do_zones = scope_filter in ("all", "zones")
-    do_account = scope_filter in ("all", "account")
-
-    def _collect_account(acct_plan, acct_desired, acct_current):
-        if acct_plan is not None:
-            zone_plans.append(acct_plan)
-            desired_by_zone[acct_plan.zone_name] = acct_desired
-            current_by_zone[acct_plan.zone_name] = acct_current
-
-    if do_zones and do_account:
-        with ThreadPoolExecutor(max_workers=1) as acct_executor:
-            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
-            zone_names = _get_zones(config, zone_filter)
-            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-                config, provider, zone_names, phase_filter
-            )
-            zone_plans.extend(zp_list)
-            desired_by_zone.update(d_by_z)
-            current_by_zone.update(c_by_z)
-            failed.extend(zone_failed)
-            _collect_account(*acct_future.result())
-    else:
-        if do_zones:
-            zone_names = _get_zones(config, zone_filter)
-            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-                config, provider, zone_names, phase_filter
-            )
-            zone_plans.extend(zp_list)
-            desired_by_zone.update(d_by_z)
-            current_by_zone.update(c_by_z)
-            failed.extend(zone_failed)
-        if do_account:
-            _collect_account(*_plan_account(config, provider, phase_filter))
-
-    report_data = build_report_data(zone_plans, desired_by_zone, current_by_zone)
+    report_data = build_report_data(r.zone_plans, r.desired_by_zone, r.current_by_zone)
     print_report(report_data, fmt=report_format)
 
-    return 1 if failed else 0
+    return 1 if r.failed else 0
 
 
 def _make_account_zone_config(config: Config) -> ZoneConfig:
@@ -1087,80 +1100,36 @@ def _cmd_sync_inner(
     executor: ThreadPoolExecutor | None,
 ) -> int:
     """Inner sync logic using an optional shared executor."""
-    failed: list[str] = []
+    r = _plan_all_scopes(config, provider, zone_filter, phase_filter, scope_filter, executor)
 
-    zone_plans: list[ZonePlan] = []
-    desired_by_zone: dict[str, dict] = {}
-    current_by_zone: dict[str, dict] = {}
-    scope_map: dict[str, Scope] = {}
-    account_label: str | None = None
-    do_zones = scope_filter in ("all", "zones")
-    do_account = scope_filter in ("all", "account")
-
-    def _collect_account(acct_plan, acct_desired, acct_current):
-        nonlocal account_label
-        if acct_plan is not None:
-            zone_plans.append(acct_plan)
-            desired_by_zone[acct_plan.zone_name] = acct_desired
-            current_by_zone[acct_plan.zone_name] = acct_current
-            account_label = acct_plan.zone_name
-            scope_map[acct_plan.zone_name] = Scope(
-                account_id=provider.account_id, label=provider.account_name
-            )
-
-    if do_zones and do_account:
-        with ThreadPoolExecutor(max_workers=1) as acct_executor:
-            acct_future = acct_executor.submit(_plan_account, config, provider, phase_filter)
-            zone_names = _get_zones(config, zone_filter)
-            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-                config, provider, zone_names, phase_filter, executor=executor
-            )
-            zone_plans.extend(zp_list)
-            desired_by_zone.update(d_by_z)
-            current_by_zone.update(c_by_z)
-            failed.extend(zone_failed)
-            _collect_account(*acct_future.result())
-    else:
-        if do_zones:
-            zone_names = _get_zones(config, zone_filter)
-            zp_list, d_by_z, c_by_z, zone_failed = _plan_zones(
-                config, provider, zone_names, phase_filter, executor=executor
-            )
-            zone_plans.extend(zp_list)
-            desired_by_zone.update(d_by_z)
-            current_by_zone.update(c_by_z)
-            failed.extend(zone_failed)
-        if do_account:
-            _collect_account(*_plan_account(config, provider, phase_filter))
-
-    if failed:
-        log.error("Aborting sync: failed to plan %d zone(s)", len(failed))
+    if r.failed:
+        log.error("Aborting sync: failed to plan %d zone(s)", len(r.failed))
         return 1
 
-    if not _emit_plan_outputs(config, zone_plans):
+    if not _emit_plan_outputs(config, r.zone_plans):
         return 1
 
-    has_changes = any(zp.has_changes for zp in zone_plans)
+    has_changes = any(zp.has_changes for zp in r.zone_plans)
     if not has_changes:
         return 0
 
     if checksum:
-        actual = compute_checksum(zone_plans)
+        actual = compute_checksum(r.zone_plans)
         if actual != checksum:
             log.error("Checksum mismatch: expected %s, got %s", checksum, actual)
             return 1
 
     if not force:
         violations = _check_safety_violations(
-            zone_plans, current_by_zone, config, account_label=account_label
+            r.zone_plans, r.current_by_zone, config, account_label=r.account_label
         )
         if violations:
             _log_safety_violations(violations)
             return 1
 
-    actionable = [zp for zp in zone_plans if zp.has_changes]
+    actionable = [zp for zp in r.zone_plans if zp.has_changes]
     return _apply_zone_changes(
-        actionable, desired_by_zone, config, provider, scope_map=scope_map, executor=executor
+        actionable, r.desired_by_zone, config, provider, scope_map=r.scope_map, executor=executor
     )
 
 

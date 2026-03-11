@@ -98,5 +98,16 @@ def load_schema() -> dict:
 def load_managed_lists() -> frozenset[str]:
     """Load valid Cloudflare managed list names from overlay.toml."""
     overlay = _load_overlay()
-    names = overlay.get("managed_lists", {}).get("names", [])
-    return frozenset(names)
+    ml = overlay.get("managed_lists", {})
+    # New format: kinds = {name: kind}
+    kinds = ml.get("kinds", {})
+    if kinds:
+        return frozenset(kinds.keys())
+    # Legacy format: names = [...]
+    return frozenset(ml.get("names", []))
+
+
+def load_managed_list_kinds() -> dict[str, str]:
+    """Load managed list name → kind mapping from overlay.toml."""
+    overlay = _load_overlay()
+    return dict(overlay.get("managed_lists", {}).get("kinds", {}))

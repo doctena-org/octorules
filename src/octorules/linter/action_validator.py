@@ -10,6 +10,7 @@ missing sub-field) continue so multiple issues are reported at once.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from octorules.linter.engine import LintContext, LintResult, Severity
@@ -864,7 +865,7 @@ def _lint_serve_error_params(params: dict, phase_name: str, ref: str, ctx: LintC
             )
 
 
-_EXECUTE_ID_PATTERN = __import__("re").compile(r"^[0-9a-f]{32}$")
+_EXECUTE_ID_PATTERN = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _lint_execute_params(params: dict, phase_name: str, ref: str, ctx: LintContext) -> None:

@@ -7,15 +7,7 @@ from octorules.provider import (
     Scope,
 )
 
-
-class MockRule:
-    def __init__(self, data: dict):
-        self._data = data
-
-    def model_dump(self, exclude_none=False):
-        if exclude_none:
-            return {k: v for k, v in self._data.items() if v is not None}
-        return dict(self._data)
+from .mocks import MockRule
 
 
 class TestPageShieldPolicies:

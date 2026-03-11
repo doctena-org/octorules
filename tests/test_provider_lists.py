@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -12,25 +12,7 @@ from octorules.provider import (
     Scope,
 )
 
-
-class MockRule:
-    def __init__(self, data: dict):
-        self._data = data
-
-    def model_dump(self, exclude_none=False):
-        if exclude_none:
-            return {k: v for k, v in self._data.items() if v is not None}
-        return dict(self._data)
-
-
-class MockRuleWithToDict:
-    """Mock rule that only has to_dict (no model_dump)."""
-
-    def __init__(self, data: dict):
-        self._data = data
-
-    def to_dict(self):
-        return dict(self._data)
+from .mocks import MockRule, MockRuleWithToDict
 
 
 class TestListMethods:
@@ -389,6 +371,44 @@ class TestListMethods:
         result = provider.poll_bulk_operation(scope, "op-123", timeout=10.0)
         assert result == "completed"
         assert mock_cf_client.rules.lists.bulk_operations.get.call_count == 3
+
+    @patch("octorules.provider.time.sleep")
+    def test_poll_bulk_operation_graduated_backoff(self, mock_sleep, mock_cf_client):
+        """poll_bulk_operation uses graduated backoff: 1s, 2s, 3s, 5s cap."""
+        mock_cf_client.rules.lists.bulk_operations.get.side_effect = [
+            MockRule({"status": "running"}),
+            MockRule({"status": "running"}),
+            MockRule({"status": "running"}),
+            MockRule({"status": "running"}),
+            MockRule({"status": "running"}),
+            MockRule({"status": "completed"}),
+        ]
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        result = provider.poll_bulk_operation(scope, "op-123", timeout=60.0)
+        assert result == "completed"
+        assert mock_sleep.call_count == 5
+        assert mock_sleep.call_args_list == [
+            ((1.0,),),
+            ((2.0,),),
+            ((3.0,),),
+            ((5.0,),),
+            ((5.0,),),  # capped at 5s
+        ]
+
+    @patch("octorules.provider.time.sleep")
+    def test_poll_bulk_operation_api_error_during_poll(self, mock_sleep, mock_cf_client):
+        """APIError raised by the bulk_operations.get call propagates immediately."""
+        from cloudflare import APIError
+
+        mock_cf_client.rules.lists.bulk_operations.get.side_effect = APIError(
+            "Server Error", request=MagicMock(), body=None
+        )
+        provider = CloudflareProvider("token", client=mock_cf_client)
+        scope = Scope(account_id="acct-123")
+        with pytest.raises(APIError, match="Server Error"):
+            provider.poll_bulk_operation(scope, "op-123")
+        mock_sleep.assert_not_called()
 
     # --- get_all_lists ---
 

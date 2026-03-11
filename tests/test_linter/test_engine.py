@@ -411,6 +411,87 @@ class TestSuppressions:
         assert "M001" in suppressions.get("foo", set())
 
 
+class TestDescriptionSuppressions:
+    """Tests for Page Shield description-based suppression anchors."""
+
+    def test_bare_description_suppression(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "page_shield_policies:\n"
+            "  # octorules:disable=M013\n"
+            "  - description: my-csp-policy\n"
+            "    expression: 'true'\n"
+        )
+        suppressions = parse_suppressions(f)
+        assert "M013" in suppressions.get("my-csp-policy", set())
+
+    def test_bare_multiword_description_suppression(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "page_shield_policies:\n"
+            "  # octorules:disable=M013\n"
+            "  - description: Allow all scripts\n"
+            "    expression: 'true'\n"
+        )
+        suppressions = parse_suppressions(f)
+        assert "M013" in suppressions.get("Allow all scripts", set())
+
+    def test_double_quoted_description_suppression(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "page_shield_policies:\n"
+            "  # octorules:disable=M013\n"
+            '  - description: "Allow all scripts"\n'
+            "    expression: 'true'\n"
+        )
+        suppressions = parse_suppressions(f)
+        assert "M013" in suppressions.get("Allow all scripts", set())
+
+    def test_single_quoted_description_suppression(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "page_shield_policies:\n"
+            "  # octorules:disable=M013\n"
+            "  - description: 'Block bad scripts'\n"
+            "    expression: 'true'\n"
+        )
+        suppressions = parse_suppressions(f)
+        assert "M013" in suppressions.get("Block bad scripts", set())
+
+    def test_description_suppression_filters_results(self):
+        ctx = LintContext(suppressions={"Allow all scripts": {"M013"}})
+        ctx.add(
+            LintResult(
+                rule_id="M013",
+                severity=Severity.WARNING,
+                message="always true",
+                ref="Allow all scripts",
+            )
+        )
+        ctx.add(
+            LintResult(
+                rule_id="M013",
+                severity=Severity.WARNING,
+                message="always true",
+                ref="Other policy",
+            )
+        )
+        assert len(ctx.results) == 1
+        assert ctx.results[0].ref == "Other policy"
+        assert ctx.suppressed_count == 1
+
+    def test_file_level_suppression_still_works_with_descriptions(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "# octorules:disable=O002\n"
+            "page_shield_policies:\n"
+            "  - description: my-policy\n"
+            "    expression: 'true'\n"
+        )
+        suppressions = parse_suppressions(f)
+        assert "O002" in suppressions.get("*", set())
+
+
 class TestCheckCatchAll:
     """Tests for the DRY check_catch_all() helper."""
 

@@ -84,7 +84,9 @@ Fix: Use a valid managed list name. Known managed lists: `$cf.anonymizer`, `$cf.
 |----------|----------|
 | WARNING | cross_rule |
 
-Triggers when a rule expression references a list via `$list_name` but the wirefilter field used with the list is incompatible with the list's `kind`. For example, using `ip.src in $my_asns` where `my_asns` is an ASN list — `ip.src` expects an IP list.
+Triggers when a rule expression references a list via `$list_name` or a managed list via `$cf.*` but the wirefilter field used with the list is incompatible with the list's `kind`. For example, using `ip.src in $my_asns` where `my_asns` is an ASN list — `ip.src` expects an IP list.
+
+Also validates Cloudflare managed lists (`$cf.anonymizer`, `$cf.botnetcc`, `$cf.malware`, `$cf.open_proxies`, `$cf.vpn`) — all of which are `ip` kind.
 
 Compatible field/kind mappings:
 - **IP lists** (`kind: ip`): `ip.src`
@@ -101,6 +103,8 @@ lists:
 waf_custom_rules:
   - ref: block-asns
     expression: 'ip.src in $my_asns'    # ip.src expects IP list, not ASN
+  - ref: block-anon
+    expression: 'ip.src.asnum in $cf.anonymizer'  # asnum expects ASN, $cf.anonymizer is IP
 ```
 
 Fix: Use the correct field for the list kind (e.g., `ip.src.asnum in $my_asns`), or change the list kind.

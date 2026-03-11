@@ -606,7 +606,7 @@ class TestDisplayPreservesQuotes:
 
 
 class TestUnmatchedQuotes:
-    """TODO 1/10: Unmatched quotes should produce a warning, not crash."""
+    """Unmatched quotes should produce a warning, not crash."""
 
     def test_unmatched_quote_warns(self, caplog):
         import logging

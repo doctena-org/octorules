@@ -105,7 +105,12 @@
 "cf.bot_management.score" = { requires_plan = "enterprise" }
 
 # Cloudflare managed list names referenced in expressions as $cf.<name>.
+# Maps name → kind for P005 type-mismatch validation.
 # Source: https://developers.cloudflare.com/waf/tools/lists/managed-lists/
 # Last verified: 2026-03-07
-[managed_lists]
-names = ["cf.anonymizer", "cf.botnetcc", "cf.malware", "cf.open_proxies", "cf.vpn"]
+[managed_lists.kinds]
+"cf.anonymizer" = "ip"
+"cf.botnetcc" = "ip"
+"cf.malware" = "ip"
+"cf.open_proxies" = "ip"
+"cf.vpn" = "ip"
