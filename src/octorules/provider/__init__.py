@@ -35,8 +35,14 @@ from octorules.provider.exceptions import (
     PermissionDeniedError,
 )
 
-_ZONE_PHASE_SET: frozenset[str] = frozenset(ZONE_CF_PHASES)
-_ACCOUNT_PHASE_SET: frozenset[str] = frozenset(ACCOUNT_CF_PHASES)
+
+def _zone_phase_set() -> set[str]:
+    return set(ZONE_CF_PHASES)
+
+
+def _account_phase_set() -> set[str]:
+    return set(ACCOUNT_CF_PHASES)
+
 
 log = logging.getLogger("octorules")
 
@@ -274,9 +280,11 @@ class CloudflareProvider:
         """
         phases_to_fetch = cf_phases if cf_phases is not None else ALL_CF_PHASES
         if scope.is_account:
-            phases_to_fetch = [p for p in phases_to_fetch if p in _ACCOUNT_PHASE_SET]
+            account_set = _account_phase_set()
+            phases_to_fetch = [p for p in phases_to_fetch if p in account_set]
         else:
-            phases_to_fetch = [p for p in phases_to_fetch if p in _ZONE_PHASE_SET]
+            zone_set = _zone_phase_set()
+            phases_to_fetch = [p for p in phases_to_fetch if p in zone_set]
         sl = _fmt_scope(scope)
         log.debug("Fetching %d phase(s) for %s", len(phases_to_fetch), sl)
 
