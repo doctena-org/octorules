@@ -61,7 +61,6 @@ octorules = "octorules.cli:main"
 "octorules.linter.schemas" = ["overlay.toml", "schemas.json"]
 
 [tool.setuptools.packages.find]
-where = ["src"]
 
 [tool.ruff]
 target-version = "py310"
