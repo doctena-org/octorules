@@ -214,6 +214,7 @@ class Config:
     max_workers: int = 1
     max_retries: int = 2
     timeout: float | None = None
+    provider_class: str | None = None
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
     _rules_cache: dict[str, dict] = field(default_factory=dict, repr=False, compare=False)
 
@@ -274,6 +275,10 @@ class Config:
                 raise ConfigError("'providers.cloudflare.timeout' must be <= 300")
         else:
             timeout = None
+
+        provider_class: str | None = cf_section.get("class")
+        if provider_class is not None and not isinstance(provider_class, str):
+            raise ConfigError("'providers.cloudflare.class' must be a string")
 
         # providers.cloudflare.safety (provider-level defaults)
         global_safety = cf_section.get("safety", {})
@@ -363,6 +368,7 @@ class Config:
             max_workers=max_workers,
             max_retries=max_retries,
             timeout=timeout,
+            provider_class=provider_class,
             plan_outputs=plan_outputs,
         )
 
