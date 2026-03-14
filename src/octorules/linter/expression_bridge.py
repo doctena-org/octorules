@@ -209,7 +209,7 @@ def _parse_with_wirefilter(expr: str, *, expect_parse_error: bool = False) -> Ex
             info.int_literals = result.get("int_literals", [])
             info.has_regex = bool(info.regex_literals)
             info.depth_exceeded = result.get("depth_exceeded", False)
-    except Exception as e:
+    except (RuntimeError, TypeError, ValueError, OSError) as e:
         # FFI call crashed — fall back to regex extraction.
         log.warning("Wirefilter FFI crashed, falling back to regex: %s", e, exc_info=True)
         info = _parse_with_regex(expr)

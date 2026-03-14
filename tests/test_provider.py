@@ -1080,6 +1080,39 @@ class TestConcurrentResolveZoneId:
         provider = CloudflareProvider("token", client=mock_cf_client)
         assert isinstance(provider._lock, type(threading.Lock()))
 
+    def test_high_contention_all_zone_plans_populated(self, mock_cf_client):
+        """50 concurrent resolve_zone_id calls should all populate zone_plans."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        zone_names = [f"zone{i}.com" for i in range(50)]
+        zones = {}
+        for name in zone_names:
+            zone = MagicMock()
+            zone.name = name
+            zone.id = f"id-{name}"
+            zone.plan.name = "Enterprise"
+            zone.account.id = "acct-1"
+            zone.account.name = "Test Account"
+            zones[name] = zone
+
+        def mock_list(name):
+            return [zones[name]]
+
+        mock_cf_client.zones.list.side_effect = mock_list
+        provider = CloudflareProvider("token", client=mock_cf_client)
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = {executor.submit(provider.resolve_zone_id, n): n for n in zone_names}
+            results = {}
+            for future in as_completed(futures):
+                results[futures[future]] = future.result()
+
+        assert len(results) == 50
+        assert len(provider.zone_plans) == 50
+        for name in zone_names:
+            assert provider.zone_plans[name] == "enterprise"
+        assert provider.account_id == "acct-1"
+
 
 class TestNormalizePlanName:
     @pytest.mark.parametrize(
