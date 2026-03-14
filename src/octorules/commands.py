@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import re
 import sys
@@ -48,9 +49,40 @@ from octorules.provider.exceptions import (
 log = logging.getLogger("octorules")
 
 
-def _init_provider(config: Config) -> CloudflareProvider:
-    """Create a CloudflareProvider from config and resolve missing zone IDs."""
-    provider = CloudflareProvider(
+def _load_provider_class(dotted_path: str) -> type:
+    """Import a provider class from a dotted module path.
+
+    Example: ``'octorules.provider.CloudflareProvider'``
+    """
+    module_path, _, class_name = dotted_path.rpartition(".")
+    if not module_path:
+        raise ConfigError(
+            f"Invalid provider class path: {dotted_path!r} (must be module.ClassName)"
+        )
+    module = importlib.import_module(module_path)
+    try:
+        return getattr(module, class_name)
+    except AttributeError:
+        raise ConfigError(
+            f"Provider class {class_name!r} not found in module {module_path!r}"
+        ) from None
+
+
+def _init_provider(config: Config, *, provider_cls: type | None = None) -> CloudflareProvider:
+    """Create a provider from config and resolve missing zone IDs.
+
+    Args:
+        config: Application config.
+        provider_cls: Optional provider class override. If not provided,
+            uses ``config.provider_class`` (dynamic import) or falls back
+            to ``CloudflareProvider``.
+    """
+    if provider_cls is None:
+        if config.provider_class:
+            provider_cls = _load_provider_class(config.provider_class)
+        else:
+            provider_cls = CloudflareProvider
+    provider = provider_cls(
         config.token,
         max_retries=config.max_retries,
         timeout=config.timeout,
