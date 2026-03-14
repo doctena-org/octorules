@@ -37,10 +37,8 @@ from octorules.commands import (
 )
 from octorules.config import Config, ConfigError
 from octorules.provider.exceptions import (
-    APIConnectionError,
-    APIError,
-    AuthenticationError,
-    PermissionDeniedError,
+    ProviderAuthError,
+    ProviderError,
 )
 
 log = logging.getLogger("octorules")
@@ -359,7 +357,7 @@ def main(argv: list[str] | None = None) -> None:
                 try:
                     provider = _init_provider(config)
                     zone_plans = provider.zone_plans
-                except (APIError, APIConnectionError) as e:
+                except ProviderError as e:
                     log.warning(
                         "Could not resolve zone plans from Cloudflare API (%s); "
                         "using 'enterprise' as default. Pass --plan to set explicitly.",
@@ -401,6 +399,6 @@ def main(argv: list[str] | None = None) -> None:
     except ConfigError as e:
         log.error("Config error: %s", e)
         sys.exit(1)
-    except (AuthenticationError, PermissionDeniedError) as e:
-        log.error("Cloudflare authentication failed: %s", _format_api_error(e))
+    except ProviderAuthError as e:
+        log.error("Authentication failed: %s", _format_api_error(e))
         sys.exit(1)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.15.1"
+version = "0.16.0"
 description = "Manage Cloudflare Rules as IaC"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -28,11 +28,13 @@ classifiers = [
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "cloudflare~=4.3",
     "pyyaml~=6.0",
 ]
 
 [project.optional-dependencies]
+cloudflare = [
+    "octorules-cloudflare>=0.1",
+]
 # Install octorules[wirefilter] for full expression lint coverage.
 # Without it, expression validation uses a regex fallback that can only
 # extract field/function names, missing syntax errors, type mismatches,
@@ -41,6 +43,7 @@ wirefilter = [
     "octorules-wirefilter>=0.3.2,<1.0",
 ]
 dev = [
+    "octorules-cloudflare>=0.1",
     "pytest>=7.0",
     "ruff>=0.4.0",
     "build",

@@ -1,16 +1,16 @@
-"""Provider exception hierarchy.
+"""Provider-agnostic exception hierarchy.
 
-Re-exports Cloudflare SDK exceptions for backward compatibility and defines
-base exception classes for future provider-agnostic error handling (Phase 4).
+These base exception types are used by commands.py and cli.py to catch
+provider errors without depending on any specific SDK.  Provider
+implementations (e.g. octorules-cloudflare) map their SDK exceptions
+to these base types.
 """
 
 from __future__ import annotations
 
-# Base exception classes — provider-agnostic (Phase 4 migration target)
-
 
 class ProviderError(Exception):
-    """Base class for all provider errors."""
+    """Base class for all provider errors (transient API failures, etc.)."""
 
 
 class ProviderAuthError(ProviderError):
@@ -21,28 +21,8 @@ class ProviderConnectionError(ProviderError):
     """Connection error from the provider."""
 
 
-# Re-exports from cloudflare SDK — these are the exception types currently used
-# throughout commands.py and cli.py.  Importing from here instead of directly
-# from ``cloudflare`` keeps the SDK dependency confined to provider/.
-from cloudflare import (  # noqa: E402
-    APIConnectionError,
-    APIError,
-    AuthenticationError,
-    BadRequestError,
-    NotFoundError,
-    PermissionDeniedError,
-)
-
 __all__ = [
-    # Base classes
-    "ProviderError",
     "ProviderAuthError",
     "ProviderConnectionError",
-    # Cloudflare SDK re-exports
-    "APIConnectionError",
-    "APIError",
-    "AuthenticationError",
-    "BadRequestError",
-    "NotFoundError",
-    "PermissionDeniedError",
+    "ProviderError",
 ]
