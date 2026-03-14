@@ -6,13 +6,6 @@ import argparse
 import logging
 import sys
 
-from cloudflare import (
-    APIConnectionError,
-    APIError,
-    AuthenticationError,
-    PermissionDeniedError,
-)
-
 from octorules import __version__
 from octorules.commands import (
     _CHECKSUM_RE,
@@ -43,6 +36,12 @@ from octorules.commands import (
     cmd_versions,
 )
 from octorules.config import Config, ConfigError
+from octorules.provider.exceptions import (
+    APIConnectionError,
+    APIError,
+    AuthenticationError,
+    PermissionDeniedError,
+)
 
 log = logging.getLogger("octorules")
 
