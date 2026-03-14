@@ -204,9 +204,8 @@ class TestCustomRulesetsPlanAccount:
         self, mock_provider_cls, tmp_path, caplog
     ):
         """API error fetching custom rulesets should warn but still plan phases."""
-        from cloudflare import APIError
-
         from octorules.commands import _plan_account
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_config(
             tmp_path,
@@ -223,9 +222,7 @@ class TestCustomRulesetsPlanAccount:
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.side_effect = APIError(
-            "Server error", request=MagicMock(), body=None
-        )
+        provider.get_all_custom_rulesets.side_effect = ProviderError("Server error")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             zp, desired, current = _plan_account(config, provider, None)
@@ -277,7 +274,7 @@ class TestCustomRulesetsDump:
     @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_custom_rulesets_api_error(self, mock_provider_cls, tmp_path, caplog):
         """API error fetching custom rulesets should warn but still dump phases."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -294,9 +291,7 @@ class TestCustomRulesetsDump:
                 {"ref": "deploy1", "expression": "true", "action": "execute", "enabled": True}
             ],
         }
-        provider.get_all_custom_rulesets.side_effect = APIError(
-            "Timeout", request=MagicMock(), body=None
-        )
+        provider.get_all_custom_rulesets.side_effect = ProviderError("Timeout")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -352,7 +347,7 @@ class TestCustomRulesetsSync:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_custom_rulesets_api_error(self, mock_provider_cls, tmp_path, caplog):
         """API error applying custom ruleset should return 1."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_account_config(
             tmp_path,
@@ -371,9 +366,7 @@ class TestCustomRulesetsSync:
         provider.max_workers = 1
         provider.get_all_phase_rules.return_value = {}
         provider.get_all_custom_rulesets.return_value = {}
-        provider.put_custom_ruleset.side_effect = APIError(
-            "Forbidden", request=MagicMock(), body=None
-        )
+        provider.put_custom_ruleset.side_effect = ProviderError("Forbidden")
 
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
@@ -443,10 +436,9 @@ class TestApplyCustomRulesets:
         provider.put_custom_ruleset.assert_called_once_with(scope, "rs1", crp.prepared_rules)
 
     def test_apply_api_error(self):
-        from cloudflare import APIError
-
         from octorules.commands import _apply_custom_rulesets
         from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.provider.exceptions import ProviderError
 
         phase = _make_synthetic_phase(
             "custom_ruleset",
@@ -463,9 +455,7 @@ class TestApplyCustomRulesets:
         zp = ZonePlan(zone_name="test-account", custom_ruleset_plans=[crp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
-        provider.put_custom_ruleset.side_effect = APIError(
-            "Forbidden", request=MagicMock(), body=None
-        )
+        provider.put_custom_ruleset.side_effect = ProviderError("Forbidden")
 
         synced, error = _apply_custom_rulesets(zp, scope, provider)
         assert error is not None

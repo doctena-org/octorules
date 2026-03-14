@@ -40,24 +40,14 @@ class TestScopeImportPaths:
 
 class TestExceptionsImportPaths:
     def test_exceptions_importable_from_provider_exceptions(self):
-        # Verify they're the actual cloudflare SDK exceptions
-        import cloudflare
-
         from octorules.provider.exceptions import (
-            APIConnectionError,
-            APIError,
-            AuthenticationError,
-            BadRequestError,
-            NotFoundError,
-            PermissionDeniedError,
+            ProviderAuthError,
+            ProviderConnectionError,
+            ProviderError,
         )
 
-        assert APIError is cloudflare.APIError
-        assert APIConnectionError is cloudflare.APIConnectionError
-        assert AuthenticationError is cloudflare.AuthenticationError
-        assert BadRequestError is cloudflare.BadRequestError
-        assert NotFoundError is cloudflare.NotFoundError
-        assert PermissionDeniedError is cloudflare.PermissionDeniedError
+        assert issubclass(ProviderAuthError, ProviderError)
+        assert issubclass(ProviderConnectionError, ProviderError)
 
     def test_base_exceptions_defined(self):
         from octorules.provider.exceptions import (

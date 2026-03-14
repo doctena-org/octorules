@@ -363,13 +363,13 @@ class TestCmdSync:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_api_error_returns_1(self, mock_provider_cls, sample_config, caplog):
         """When the CF API fails during sync, abort immediately and return 1."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value.put_phase_rules.side_effect = APIError(
-            "API rate limited", request=MagicMock(), body=None
+        mock_provider_cls.return_value.put_phase_rules.side_effect = ProviderError(
+            "API rate limited"
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
@@ -378,14 +378,14 @@ class TestCmdSync:
 
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_connection_error_returns_1(self, mock_provider_cls, sample_config, caplog):
-        """APIConnectionError during sync should return 1."""
-        from cloudflare import APIConnectionError
+        """Connection error during sync should return 1."""
+        from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value.put_phase_rules.side_effect = APIConnectionError(
-            request=MagicMock()
+        mock_provider_cls.return_value.put_phase_rules.side_effect = ProviderError(
+            "Connection error"
         )
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
@@ -404,7 +404,7 @@ class TestCmdSync:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_aborts_on_first_failure(self, mock_provider_cls, sample_config):
         """Fail-fast: second phase should not be attempted after first fails."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -416,9 +416,7 @@ class TestCmdSync:
             "    expression: 'true'\n"
         )
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value.put_phase_rules.side_effect = APIError(
-            "Forbidden", request=MagicMock(), body=None
-        )
+        mock_provider_cls.return_value.put_phase_rules.side_effect = ProviderError("Forbidden")
         result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
         # Fail-fast: only one PUT attempted, second phase never reached
@@ -427,7 +425,7 @@ class TestCmdSync:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_logs_partial_success_on_failure(self, mock_provider_cls, sample_config, caplog):
         """When a phase fails, previously synced phases should be logged."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -445,7 +443,7 @@ class TestCmdSync:
             nonlocal call_count
             call_count += 1
             if call_count == 2:
-                raise APIError("Server error", request=MagicMock(), body=None)
+                raise ProviderError("Server error")
 
         mock_provider_cls.return_value.put_phase_rules.side_effect = put_side_effect
         with caplog.at_level(logging.ERROR, logger="octorules"):
@@ -568,7 +566,7 @@ class TestCmdDump:
     @patch("octorules.commands.CloudflareProvider")
     def test_dump_api_error_continues(self, mock_provider_cls, tmp_path, caplog):
         """API error on one zone should not prevent dumping others."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -583,7 +581,7 @@ class TestCmdDump:
 
         def mock_get_all(scope, **kwargs):
             if scope.zone_id == "zone-fail":
-                raise APIError("Forbidden", request=MagicMock(), body=None)
+                raise ProviderError("Forbidden")
             return {
                 "http_request_dynamic_redirect": [
                     {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
@@ -1758,7 +1756,7 @@ class TestPlanErrorIsolation:
     @patch("octorules.commands.CloudflareProvider")
     def test_sequential_plan_api_error_continues(self, mock_provider_cls, tmp_path, caplog):
         """Sequential planning: API error on one zone should not kill others."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1777,7 +1775,7 @@ class TestPlanErrorIsolation:
 
         def mock_get_all(scope, **kwargs):
             if scope.zone_id == "zone-fail":
-                raise APIError("Forbidden", request=MagicMock(), body=None)
+                raise ProviderError("Forbidden")
             return {}
 
         mock_provider_cls.return_value.get_all_phase_rules.side_effect = mock_get_all
@@ -1789,7 +1787,7 @@ class TestPlanErrorIsolation:
     @patch("octorules.commands.CloudflareProvider")
     def test_parallel_plan_api_error_continues(self, mock_provider_cls, tmp_path, caplog):
         """Parallel planning: API error on one zone should not kill others."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1808,7 +1806,7 @@ class TestPlanErrorIsolation:
 
         def mock_get_all(scope, **kwargs):
             if scope.zone_id == "zone-fail":
-                raise APIError("Forbidden", request=MagicMock(), body=None)
+                raise ProviderError("Forbidden")
             return {}
 
         mock_provider_cls.return_value.get_all_phase_rules.side_effect = mock_get_all
@@ -1820,7 +1818,7 @@ class TestPlanErrorIsolation:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_aborts_on_plan_failure(self, mock_provider_cls, tmp_path, caplog):
         """Sync should abort entirely if any zone fails during planning."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1838,7 +1836,7 @@ class TestPlanErrorIsolation:
 
         def mock_get_all(scope, **kwargs):
             if scope.zone_id == "zone-fail":
-                raise APIError("Forbidden", request=MagicMock(), body=None)
+                raise ProviderError("Forbidden")
             return {}
 
         mock_provider_cls.return_value.get_all_phase_rules.side_effect = mock_get_all
@@ -1868,26 +1866,29 @@ class TestFormatApiError:
     """Tests for _format_api_error helper."""
 
     def test_with_status_code(self):
-        from cloudflare import AuthenticationError
+        from octorules.provider.exceptions import ProviderAuthError
 
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        e = AuthenticationError(message="Invalid API token", response=mock_response, body=None)
+        class _FakeHTTPError(Exception):
+            status_code = 401
+
+        cause = _FakeHTTPError("Invalid API token")
+        e = ProviderAuthError("Invalid API token")
+        e.__cause__ = cause
         result = _format_api_error(e)
         assert "[HTTP 401]" in result
         assert "Invalid API token" in result
 
     def test_without_status_code(self):
-        from cloudflare import APIConnectionError
+        from octorules.provider.exceptions import ProviderError
 
-        e = APIConnectionError(request=MagicMock())
+        e = ProviderError("Connection error")
         result = _format_api_error(e)
         assert "[HTTP" not in result
 
     def test_api_error_base(self):
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
-        e = APIError("Server Error", request=MagicMock(), body=None)
+        e = ProviderError("Server Error")
         result = _format_api_error(e)
         assert "Server Error" in result
 
@@ -1897,43 +1898,42 @@ class TestAuthErrorPropagation:
 
     @patch("octorules.commands.CloudflareProvider")
     def test_plan_auth_error_propagates(self, mock_provider_cls, sample_config):
-        """AuthenticationError during plan should not be silently caught."""
-        from cloudflare import AuthenticationError
+        """ProviderAuthError during plan should not be silently caught."""
+        from octorules.provider.exceptions import ProviderAuthError
 
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_provider_cls.return_value.get_all_phase_rules.side_effect = AuthenticationError(
-            message="Invalid API token", response=mock_response, body=None
+        mock_provider_cls.return_value.get_all_phase_rules.side_effect = ProviderAuthError(
+            "Invalid API token"
         )
-        with pytest.raises(AuthenticationError):
+        with pytest.raises(ProviderAuthError):
             cmd_plan(sample_config, ["example.com"])
 
     @patch("octorules.commands.CloudflareProvider")
     def test_plan_permission_error_propagates(self, mock_provider_cls, sample_config):
-        """PermissionDeniedError during plan should not be silently caught."""
-        from cloudflare import PermissionDeniedError
+        """ProviderAuthError (permission denied) during plan should not be silently caught."""
+        from octorules.provider.exceptions import ProviderAuthError
 
-        mock_response = MagicMock()
-        mock_response.status_code = 403
-        mock_provider_cls.return_value.get_all_phase_rules.side_effect = PermissionDeniedError(
-            message="Missing zone permission", response=mock_response, body=None
+        mock_provider_cls.return_value.get_all_phase_rules.side_effect = ProviderAuthError(
+            "Permission denied"
         )
-        with pytest.raises(PermissionDeniedError):
+        with pytest.raises(ProviderAuthError):
             cmd_plan(sample_config, ["example.com"])
 
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_auth_error_during_apply_returns_1(self, mock_provider_cls, sample_config, caplog):
-        """AuthenticationError during sync apply should return 1 with clear message."""
-        from cloudflare import AuthenticationError
+        """ProviderAuthError during sync apply should return 1 with clear message."""
+        from octorules.provider.exceptions import ProviderAuthError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_provider_cls.return_value.put_phase_rules.side_effect = AuthenticationError(
-            message="Token expired", response=mock_response, body=None
-        )
+
+        class _FakeHTTPError(Exception):
+            status_code = 401
+
+        cause = _FakeHTTPError("Token expired")
+        auth_err = ProviderAuthError("Token expired")
+        auth_err.__cause__ = cause
+        mock_provider_cls.return_value.put_phase_rules.side_effect = auth_err
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
@@ -1943,7 +1943,7 @@ class TestAuthErrorPropagation:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_auth_error_no_partial_success_msg(self, mock_provider_cls, sample_config, caplog):
         """Auth errors should NOT log 'Successfully synced before failure'."""
-        from cloudflare import AuthenticationError
+        from octorules.provider.exceptions import ProviderAuthError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -1957,11 +1957,7 @@ class TestAuthErrorPropagation:
             nonlocal call_count
             call_count += 1
             if call_count == 2:
-                mock_response = MagicMock()
-                mock_response.status_code = 401
-                raise AuthenticationError(
-                    message="Token revoked", response=mock_response, body=None
-                )
+                raise ProviderAuthError("Token revoked")
 
         mock_provider_cls.return_value.put_phase_rules.side_effect = put_side_effect
         with caplog.at_level(logging.ERROR, logger="octorules"):
@@ -1971,32 +1967,25 @@ class TestAuthErrorPropagation:
 
     @patch("octorules.commands.CloudflareProvider")
     def test_dump_auth_error_propagates(self, mock_provider_cls, sample_config):
-        """AuthenticationError during dump should propagate, not be caught per-zone."""
-        from cloudflare import AuthenticationError
+        """ProviderAuthError during dump should propagate, not be caught per-zone."""
+        from octorules.provider.exceptions import ProviderAuthError
 
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_provider_cls.return_value.get_all_phase_rules.side_effect = AuthenticationError(
-            message="Invalid API token", response=mock_response, body=None
+        mock_provider_cls.return_value.get_all_phase_rules.side_effect = ProviderAuthError(
+            "Invalid API token"
         )
-        with pytest.raises(AuthenticationError):
+        with pytest.raises(ProviderAuthError):
             cmd_dump(sample_config, ["example.com"], None)
 
     def test_main_catches_auth_error(self, tmp_config, caplog):
-        """main() should catch AuthenticationError and exit 1 with clear message."""
-        from cloudflare import AuthenticationError
-
-        mock_response = MagicMock()
-        mock_response.status_code = 401
+        """main() should catch ProviderAuthError and exit 1 with clear message."""
+        from octorules.provider.exceptions import ProviderAuthError
 
         with (
             patch("octorules.cli.Config.from_file") as mock_config,
             patch("octorules.cli.cmd_plan") as mock_cmd,
         ):
             mock_config.return_value = MagicMock()
-            mock_cmd.side_effect = AuthenticationError(
-                message="Invalid API token", response=mock_response, body=None
-            )
+            mock_cmd.side_effect = ProviderAuthError("Invalid API token")
             with caplog.at_level(logging.ERROR, logger="octorules"):
                 with pytest.raises(SystemExit) as exc_info:
                     main(["--config", str(tmp_config), "plan"])
@@ -2004,20 +1993,15 @@ class TestAuthErrorPropagation:
             assert "authentication failed" in caplog.text.lower()
 
     def test_main_catches_permission_error(self, tmp_config, caplog):
-        """main() should catch PermissionDeniedError and exit 1."""
-        from cloudflare import PermissionDeniedError
-
-        mock_response = MagicMock()
-        mock_response.status_code = 403
+        """main() should catch ProviderAuthError (permission denied) and exit 1."""
+        from octorules.provider.exceptions import ProviderAuthError
 
         with (
             patch("octorules.cli.Config.from_file") as mock_config,
             patch("octorules.cli.cmd_plan") as mock_cmd,
         ):
             mock_config.return_value = MagicMock()
-            mock_cmd.side_effect = PermissionDeniedError(
-                message="Missing permission", response=mock_response, body=None
-            )
+            mock_cmd.side_effect = ProviderAuthError("Missing permission")
             with caplog.at_level(logging.ERROR, logger="octorules"):
                 with pytest.raises(SystemExit) as exc_info:
                     main(["--config", str(tmp_config), "plan"])
@@ -2108,13 +2092,15 @@ class TestApiErrorStatusCodes:
     @patch("octorules.commands.CloudflareProvider")
     def test_plan_error_includes_status_code(self, mock_provider_cls, sample_config, caplog):
         """Plan failure should include HTTP status code in error message."""
-        from cloudflare import InternalServerError
+        from octorules.provider.exceptions import ProviderError
 
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_provider_cls.return_value.get_all_phase_rules.side_effect = InternalServerError(
-            message="Internal Server Error", response=mock_response, body=None
-        )
+        class _FakeHTTPError(Exception):
+            status_code = 500
+
+        cause = _FakeHTTPError("Internal Server Error")
+        err = ProviderError("Internal server error")
+        err.__cause__ = cause
+        mock_provider_cls.return_value.get_all_phase_rules.side_effect = err
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_plan(sample_config, ["example.com"])
         assert result == 1
@@ -2123,16 +2109,19 @@ class TestApiErrorStatusCodes:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_error_includes_status_code(self, mock_provider_cls, sample_config, caplog):
         """Sync API error should include HTTP status code."""
-        from cloudflare import RateLimitError
+        from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_provider_cls.return_value.put_phase_rules.side_effect = RateLimitError(
-            message="Rate limited", response=mock_response, body=None
-        )
+
+        class _FakeHTTPError(Exception):
+            status_code = 429
+
+        cause = _FakeHTTPError("Rate limited")
+        err = ProviderError("Rate limited")
+        err.__cause__ = cause
+        mock_provider_cls.return_value.put_phase_rules.side_effect = err
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 1
@@ -2304,7 +2293,7 @@ class TestParallelPhaseApply:
     @patch("octorules.commands.CloudflareProvider")
     def test_parallel_phase_api_error_reported(self, mock_provider_cls, tmp_path, caplog):
         """API error in one phase during parallel apply should be reported."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -2331,7 +2320,7 @@ class TestParallelPhaseApply:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                raise APIError("Server error", request=MagicMock(), body=None)
+                raise ProviderError("Server error")
 
         mock_provider_cls.return_value.put_phase_rules.side_effect = put_side_effect
         with caplog.at_level(logging.ERROR, logger="octorules"):
@@ -2361,12 +2350,11 @@ class TestApplyParallel:
         assert called == ["a"]
 
     def test_single_task_api_error(self):
-        from cloudflare import APIError
-
         from octorules.commands import _apply_parallel
+        from octorules.provider.exceptions import ProviderError
 
         def fail():
-            raise APIError("boom", request=MagicMock(), body=None)
+            raise ProviderError("boom")
 
         tasks = [("task-a", fail)]
         successes, error = _apply_parallel(tasks, max_workers=1)
@@ -2389,9 +2377,8 @@ class TestApplyParallel:
         assert "timed out" in error
 
     def test_sequential_stops_on_first_error(self):
-        from cloudflare import APIError
-
         from octorules.commands import _apply_parallel
+        from octorules.provider.exceptions import ProviderError
 
         called = []
 
@@ -2399,7 +2386,7 @@ class TestApplyParallel:
             called.append("ok")
 
         def fail():
-            raise APIError("fail", request=MagicMock(), body=None)
+            raise ProviderError("fail")
 
         def never():
             called.append("never")
@@ -2412,42 +2399,33 @@ class TestApplyParallel:
         assert "never" not in called
 
     def test_auth_error_propagates_sequential(self):
-        from cloudflare import AuthenticationError
-
         from octorules.commands import _apply_parallel
-
-        mock_response = MagicMock()
-        mock_response.status_code = 401
+        from octorules.provider.exceptions import ProviderAuthError
 
         def fail():
-            raise AuthenticationError(message="bad token", response=mock_response, body=None)
+            raise ProviderAuthError("bad token")
 
         tasks = [("task-a", fail)]
-        with pytest.raises(AuthenticationError):
+        with pytest.raises(ProviderAuthError):
             _apply_parallel(tasks, max_workers=1)
 
     def test_auth_error_propagates_parallel(self):
-        from cloudflare import AuthenticationError
-
         from octorules.commands import _apply_parallel
-
-        mock_response = MagicMock()
-        mock_response.status_code = 401
+        from octorules.provider.exceptions import ProviderAuthError
 
         def fail():
-            raise AuthenticationError(message="bad token", response=mock_response, body=None)
+            raise ProviderAuthError("bad token")
 
         tasks = [("task-a", fail), ("task-b", lambda: None)]
-        with pytest.raises(AuthenticationError):
+        with pytest.raises(ProviderAuthError):
             _apply_parallel(tasks, max_workers=4)
 
     def test_parallel_collects_successes_on_error(self):
         """Parallel path: successful tasks collected even when one fails."""
         import threading
 
-        from cloudflare import APIError
-
         from octorules.commands import _apply_parallel
+        from octorules.provider.exceptions import ProviderError
 
         barrier = threading.Barrier(3, timeout=5)
 
@@ -2459,7 +2437,7 @@ class TestApplyParallel:
 
         def fail():
             barrier.wait()
-            raise APIError("fail", request=MagicMock(), body=None)
+            raise ProviderError("fail")
 
         tasks = [("a", ok1), ("b", fail), ("c", ok2)]
         successes, error = _apply_parallel(tasks, max_workers=4)

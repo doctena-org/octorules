@@ -265,9 +265,8 @@ class TestListsPlanAccount:
     @patch("octorules.commands.CloudflareProvider")
     def test_plan_account_lists_api_error_graceful(self, mock_provider_cls, tmp_path, caplog):
         """API error fetching lists should warn but still plan phases."""
-        from cloudflare import APIError
-
         from octorules.commands import _plan_account
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_config(
             tmp_path,
@@ -277,9 +276,7 @@ class TestListsPlanAccount:
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
-        provider.get_all_lists.side_effect = APIError(
-            "Server error", request=MagicMock(), body=None
-        )
+        provider.get_all_lists.side_effect = ProviderError("Server error")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             zp, desired, current = _plan_account(config, provider, None)
@@ -333,7 +330,7 @@ class TestListsDump:
     @patch("octorules.commands.CloudflareProvider")
     def test_dump_account_lists_api_error(self, mock_provider_cls, tmp_path, caplog):
         """API error fetching lists should warn but still dump phases."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -351,7 +348,7 @@ class TestListsDump:
             ],
         }
         provider.get_all_custom_rulesets.return_value = {}
-        provider.get_all_lists.side_effect = APIError("Timeout", request=MagicMock(), body=None)
+        provider.get_all_lists.side_effect = ProviderError("Timeout")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -568,7 +565,7 @@ class TestListsSync:
     @patch("octorules.commands.CloudflareProvider")
     def test_sync_lists_api_error_returns_1(self, mock_provider_cls, tmp_path, caplog):
         """API error during list create should return 1."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_account_config(
             tmp_path,
@@ -580,7 +577,7 @@ class TestListsSync:
         provider.max_workers = 1
         provider.get_all_phase_rules.return_value = {}
         provider.get_all_lists.return_value = {}
-        provider.create_list.side_effect = APIError("Forbidden", request=MagicMock(), body=None)
+        provider.create_list.side_effect = ProviderError("Forbidden")
 
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
@@ -660,9 +657,8 @@ class TestApplyLists:
         provider.update_list_description.assert_called_once_with(scope, "list-123", "new desc")
 
     def test_apply_create_error_returns_error(self):
-        from cloudflare import APIError
-
         from octorules.commands import _apply_lists
+        from octorules.provider.exceptions import ProviderError
 
         lp = ListPlan(
             list_name="fail_list",
@@ -672,7 +668,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
-        provider.create_list.side_effect = APIError("Forbidden", request=MagicMock(), body=None)
+        provider.create_list.side_effect = ProviderError("Forbidden")
 
         synced, error = _apply_lists(zp, scope, provider)
         assert error is not None

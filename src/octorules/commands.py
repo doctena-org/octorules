@@ -39,11 +39,10 @@ from octorules.planner import (
     warn_unknown_phase_keys,
 )
 from octorules.provider import CloudflareProvider, Scope
+from octorules.provider.base import BaseProvider
 from octorules.provider.exceptions import (
-    APIConnectionError,
-    APIError,
-    AuthenticationError,
-    PermissionDeniedError,
+    ProviderAuthError,
+    ProviderError,
 )
 
 log = logging.getLogger("octorules")
@@ -68,20 +67,26 @@ def _load_provider_class(dotted_path: str) -> type:
         ) from None
 
 
-def _init_provider(config: Config, *, provider_cls: type | None = None) -> CloudflareProvider:
+def _init_provider(config: Config, *, provider_cls: type | None = None) -> BaseProvider:
     """Create a provider from config and resolve missing zone IDs.
 
     Args:
         config: Application config.
         provider_cls: Optional provider class override. If not provided,
             uses ``config.provider_class`` (dynamic import) or falls back
-            to ``CloudflareProvider``.
+            to the module-level ``CloudflareProvider`` (re-exported from
+            octorules-cloudflare when installed).
     """
     if provider_cls is None:
         if config.provider_class:
             provider_cls = _load_provider_class(config.provider_class)
-        else:
+        elif CloudflareProvider is not None:
             provider_cls = CloudflareProvider
+        else:
+            raise ConfigError(
+                "No provider available. Install a provider package, e.g.:\n"
+                "  pip install octorules[cloudflare]"
+            )
     provider = provider_cls(
         config.token,
         max_retries=config.max_retries,
@@ -173,10 +178,11 @@ def _phase_filter_to_cf_phases(phase_filter: list[str] | None) -> list[str] | No
     return [PHASE_BY_NAME[p].cf_phase for p in phase_filter if p in PHASE_BY_NAME]
 
 
-def _format_api_error(e: APIError | APIConnectionError) -> str:
-    """Format an API error, including the HTTP status code when available."""
-    if hasattr(e, "status_code"):
-        return f"[HTTP {e.status_code}] {e}"
+def _format_api_error(e: ProviderError) -> str:
+    """Format a provider error, including the HTTP status code when available."""
+    cause = e.__cause__
+    if cause is not None and hasattr(cause, "status_code"):
+        return f"[HTTP {cause.status_code}] {e}"
     return str(e)
 
 
@@ -216,9 +222,8 @@ def _apply_parallel(
     Each task is ``(label, fn)`` where *fn()* performs the API call and raises
     on failure.  Returns ``(successful_labels, first_error_message)``.
 
-    * ``AuthenticationError`` / ``PermissionDeniedError`` -> cancel remaining,
-      re-raise.
-    * First ``APIError`` / ``APIConnectionError`` / ``TimeoutError`` -> record
+    * ``ProviderAuthError`` -> cancel remaining, re-raise.
+    * First ``ProviderError`` / ``TimeoutError`` -> record
       error; in the parallel path remaining in-flight tasks still finish so we
       collect as many successes as possible.  In the sequential path we stop
       immediately (matching the original serial behaviour).
@@ -229,9 +234,9 @@ def _apply_parallel(
     def _run_one(label: str, fn: Callable[[], None]) -> tuple[str, str | None]:
         try:
             fn()
-        except (AuthenticationError, PermissionDeniedError):
+        except ProviderAuthError:
             raise
-        except (APIError, APIConnectionError) as e:
+        except ProviderError as e:
             return label, _format_api_error(e)
         except TimeoutError as e:
             return label, str(e)
@@ -256,7 +261,7 @@ def _apply_parallel(
         for future in as_completed(futures):
             try:
                 label, error = future.result()
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 for f in futures:
                     f.cancel()
                 raise
@@ -311,9 +316,9 @@ def _plan_single_zone(
         if ps_future is not None:
             try:
                 current_policies = ps_future.result()
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.warning(
                     "Failed to fetch Page Shield policies for %s: %s",
                     zone_name,
@@ -340,14 +345,14 @@ def _plan_single_zone_safe(
 ) -> tuple[str, ZonePlan, dict, dict] | None:
     """Plan a single zone, returning None on transient API errors.
 
-    AuthenticationError and PermissionDeniedError propagate immediately
-    (these are permanent and indicate a bad token or missing permissions).
+    ProviderAuthError propagates immediately
+    (permanent error indicating a bad token or missing permissions).
     """
     try:
         return _plan_single_zone(config, provider, zone_name, phase_filter)
-    except (AuthenticationError, PermissionDeniedError):
+    except ProviderAuthError:
         raise
-    except (APIError, APIConnectionError) as e:
+    except ProviderError as e:
         log.error("Failed to plan %s: %s", zone_name, _format_api_error(e))
         return None
 
@@ -424,9 +429,9 @@ def _plan_account(
     try:
         try:
             current = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
-        except (AuthenticationError, PermissionDeniedError):
+        except ProviderAuthError:
             raise
-        except (APIError, APIConnectionError) as e:
+        except ProviderError as e:
             log.error(
                 "Failed to plan account %s: %s",
                 provider.account_name,
@@ -460,9 +465,9 @@ def _plan_account(
         if cr_future is not None:
             try:
                 custom_rulesets_current = cr_future.result()
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.warning(
                     "Failed to fetch custom rulesets for account %s: %s",
                     provider.account_name,
@@ -485,9 +490,9 @@ def _plan_account(
         if lists_future is not None:
             try:
                 current_lists = lists_future.result()
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.warning(
                     "Failed to fetch lists for account %s: %s",
                     provider.account_name,
@@ -958,7 +963,7 @@ def _apply_single_zone(
     """Apply changes for a single zone. Returns (zone_name, synced_phases, error_msg).
 
     Phases within a zone are applied in parallel when max_workers > 1.
-    AuthenticationError/PermissionDeniedError propagate immediately.
+    ProviderAuthError propagates immediately.
     """
     log.info("Syncing %s", zp.zone_name)
 
@@ -1069,7 +1074,7 @@ def _apply_zone_changes(
 
     try:
         results = _map_ordered(_apply_one, to_apply, config.max_workers, executor=executor)
-    except (AuthenticationError, PermissionDeniedError) as e:
+    except ProviderAuthError as e:
         log.error("Authentication/permission error during sync: %s", _format_api_error(e))
         if all_synced:
             log.error("Successfully synced before failure: %s", ", ".join(all_synced))
@@ -1410,18 +1415,18 @@ def cmd_dump(
 
             try:
                 rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 return zone_name, None, _format_api_error(e)
 
             # Fetch Page Shield policies
             page_shield_policies: list[dict] | None = None
             try:
                 page_shield_policies = ps_future.result() or None
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.warning(
                     "Failed to fetch Page Shield policies for %s: %s",
                     zone_name,
@@ -1448,9 +1453,9 @@ def cmd_dump(
 
             try:
                 rules = provider.get_all_phase_rules(scope, cf_phases=cf_phases)
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.error(
                     "Failed to dump account %s: %s",
                     provider.account_name,
@@ -1462,9 +1467,9 @@ def cmd_dump(
             custom_rulesets: dict[str, dict] | None = None
             try:
                 custom_rulesets = cr_future.result() or None
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.warning(
                     "Failed to fetch custom rulesets for account %s: %s",
                     provider.account_name,
@@ -1475,9 +1480,9 @@ def cmd_dump(
             lists: dict[str, dict] | None = None
             try:
                 lists = lists_future.result() or None
-            except (AuthenticationError, PermissionDeniedError):
+            except ProviderAuthError:
                 raise
-            except (APIError, APIConnectionError) as e:
+            except ProviderError as e:
                 log.warning(
                     "Failed to fetch lists for account %s: %s",
                     provider.account_name,
