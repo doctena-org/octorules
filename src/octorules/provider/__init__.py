@@ -1,4 +1,8 @@
-"""Cloudflare SDK wrapper for phase rulesets."""
+"""Cloudflare SDK wrapper for phase rulesets.
+
+Public API (re-exported for backward compatibility):
+    CloudflareProvider, BaseProvider, Scope, PhaseRulesResult
+"""
 
 from __future__ import annotations
 
@@ -8,19 +12,10 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
 
 import cloudflare
 import httpx
-from cloudflare import (
-    APIConnectionError,
-    APIError,
-    AuthenticationError,
-    BadRequestError,
-    DefaultHttpxClient,
-    NotFoundError,
-    PermissionDeniedError,
-)
+from cloudflare import DefaultHttpxClient
 
 from octorules.config import ConfigError
 from octorules.phases import (
@@ -29,6 +24,15 @@ from octorules.phases import (
     LIST_ITEM_API_FIELDS,
     PAGE_SHIELD_POLICY_API_FIELDS,
     ZONE_CF_PHASES,
+)
+from octorules.provider.base import BaseProvider, PhaseRulesResult, Scope
+from octorules.provider.exceptions import (
+    APIConnectionError,
+    APIError,
+    AuthenticationError,
+    BadRequestError,
+    NotFoundError,
+    PermissionDeniedError,
 )
 
 _ZONE_PHASE_SET: frozenset[str] = frozenset(ZONE_CF_PHASES)
@@ -52,31 +56,6 @@ def _normalize_plan_name(raw: str) -> str:
     return lower
 
 
-@dataclass
-class Scope:
-    zone_id: str | None = None
-    account_id: str | None = None
-    label: str = ""
-    _api_kwargs: dict[str, str] | None = field(default=None, repr=False, compare=False)
-
-    @property
-    def api_kwargs(self) -> dict[str, str]:
-        if self._api_kwargs is not None:
-            return self._api_kwargs
-        if self.account_id:
-            kw = {"account_id": self.account_id}
-        elif self.zone_id:
-            kw = {"zone_id": self.zone_id}
-        else:
-            raise ValueError("Scope must have either zone_id or account_id")
-        self._api_kwargs = kw
-        return kw
-
-    @property
-    def is_account(self) -> bool:
-        return self.account_id is not None
-
-
 def _fmt_scope(scope: Scope) -> str:
     """Format scope for log messages."""
     if scope.label:
@@ -86,20 +65,6 @@ def _fmt_scope(scope: Scope) -> str:
     kw = scope.api_kwargs
     key = next(iter(kw))
     return f"{key}={kw[key]}"
-
-
-class PhaseRulesResult(dict):
-    """Dict mapping cf_phase → rules, with tracking of phases that failed to fetch.
-
-    Behaves as a normal dict everywhere, but carries a ``failed_phases`` list so
-    callers can distinguish "phase has no rules" from "phase fetch failed".
-    """
-
-    failed_phases: list[str]
-
-    def __init__(self, data=None, *, failed_phases: list[str] | None = None):
-        super().__init__(data or {})
-        self.failed_phases = failed_phases or []
 
 
 def _fetch_parallel(
@@ -731,3 +696,11 @@ def _rule_to_dict(rule) -> dict:
         return dict(rule)
     except (TypeError, ValueError) as e:
         raise TypeError(f"Cannot convert rule of type {type(rule).__name__} to dict: {e}") from e
+
+
+__all__ = [
+    "BaseProvider",
+    "CloudflareProvider",
+    "PhaseRulesResult",
+    "Scope",
+]

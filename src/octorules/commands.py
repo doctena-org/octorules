@@ -10,13 +10,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import IO
 
-from cloudflare import (
-    APIConnectionError,
-    APIError,
-    AuthenticationError,
-    PermissionDeniedError,
-)
-
 from octorules import __version__
 from octorules.config import Config, ConfigError, ZoneConfig, resolve_zone_ids, slugify
 from octorules.dumper import dump_zone_rules
@@ -45,6 +38,12 @@ from octorules.planner import (
     warn_unknown_phase_keys,
 )
 from octorules.provider import CloudflareProvider, Scope
+from octorules.provider.exceptions import (
+    APIConnectionError,
+    APIError,
+    AuthenticationError,
+    PermissionDeniedError,
+)
 
 log = logging.getLogger("octorules")
 
