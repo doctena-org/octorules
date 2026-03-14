@@ -366,31 +366,25 @@ class Config:
             plan_outputs=plan_outputs,
         )
 
-    def load_zone_rules(self, zone_name: str) -> dict:
-        """Load the rules YAML file for a given zone.
+    def _load_rules_file(self, cache_key: str, file_stem: str, label: str) -> dict:
+        """Load a rules YAML file, with caching and path-traversal protection.
 
-        Only loads rules if "rules" is in the zone's sources list.
-        Results are cached for the lifetime of this Config instance.
+        Args:
+            cache_key: Key for ``_rules_cache`` (e.g. ``"zone:example.com"``).
+            file_stem: Filename without extension (e.g. ``"example.com"``).
+            label: Human label for error/log messages (e.g. ``"zone 'example.com'"``).
         """
-        cache_key = f"zone:{zone_name}"
         if cache_key in self._rules_cache:
             return self._rules_cache[cache_key]
-        zone_cfg = self.zones.get(zone_name)
-        if zone_cfg and zone_cfg.sources and "rules" not in zone_cfg.sources:
-            log.debug("Zone %s does not include 'rules' in sources, skipping rules file", zone_name)
-            empty: dict = {}
-            self._rules_cache[cache_key] = empty
-            return empty
-        rules_file = (self.rules_dir / f"{zone_name}.yaml").resolve()
+        rules_file = (self.rules_dir / f"{file_stem}.yaml").resolve()
         try:
             rules_file.relative_to(self.rules_dir.resolve())
         except ValueError:
-            raise ConfigError(f"Zone name {zone_name!r} resolves outside rules directory")
+            raise ConfigError(f"{label} resolves outside rules directory")
         if not rules_file.exists():
-            log.debug("No rules file for zone %s (expected %s)", zone_name, rules_file)
-            empty: dict = {}
-            self._rules_cache[cache_key] = empty
-            return empty
+            log.debug("No rules file for %s (expected %s)", label, rules_file)
+            self._rules_cache[cache_key] = {}
+            return self._rules_cache[cache_key]
         data = _yaml_load(rules_file)
         if not isinstance(data, dict):
             raise ConfigError(
@@ -399,30 +393,27 @@ class Config:
         self._rules_cache[cache_key] = data
         return data
 
+    def load_zone_rules(self, zone_name: str) -> dict:
+        """Load the rules YAML file for a given zone.
+
+        Only loads rules if "rules" is in the zone's sources list.
+        Results are cached for the lifetime of this Config instance.
+        """
+        cache_key = f"zone:{zone_name}"
+        zone_cfg = self.zones.get(zone_name)
+        if zone_cfg and zone_cfg.sources and "rules" not in zone_cfg.sources:
+            log.debug("Zone %s does not include 'rules' in sources, skipping rules file", zone_name)
+            self._rules_cache[cache_key] = {}
+            return self._rules_cache[cache_key]
+        return self._load_rules_file(cache_key, zone_name, f"zone {zone_name}")
+
     def load_account_rules(self, account_name: str) -> dict:
         """Load the rules YAML file for an account (by slugified name).
 
         Results are cached for the lifetime of this Config instance.
         """
-        cache_key = f"account:{account_name}"
-        if cache_key in self._rules_cache:
-            return self._rules_cache[cache_key]
         slug = slugify(account_name)
-        rules_file = (self.rules_dir / f"{slug}.yaml").resolve()
-        try:
-            rules_file.relative_to(self.rules_dir.resolve())
-        except ValueError:
-            raise ConfigError(f"Account name {account_name!r} resolves outside rules directory")
-        if not rules_file.exists():
-            log.debug("No rules file for account %s (expected %s)", account_name, rules_file)
-            empty: dict = {}
-            self._rules_cache[cache_key] = empty
-            return empty
-        data = _yaml_load(rules_file)
-        if not isinstance(data, dict):
-            raise ConfigError(f"Account rules file {rules_file} is not a YAML mapping")
-        self._rules_cache[cache_key] = data
-        return data
+        return self._load_rules_file(f"account:{account_name}", slug, f"account {account_name}")
 
 
 def resolve_zone_ids(

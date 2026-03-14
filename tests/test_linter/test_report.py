@@ -140,3 +140,49 @@ class TestSarifFormatter:
         ]
         data = json.loads(format_sarif(ctx))
         assert "fixes" in data["runs"][0]["results"][0]
+
+    def test_sarif_no_location_without_file_path(self):
+        ctx = LintContext()
+        ctx.results = [
+            LintResult(rule_id="M001", severity=Severity.ERROR, message="test"),
+        ]
+        data = json.loads(format_sarif(ctx))
+        result = data["runs"][0]["results"][0]
+        assert "locations" not in result
+
+
+class TestJsonStreamOutput:
+    def test_json_writes_to_stream(self):
+        import io
+
+        ctx = _make_ctx()
+        buf = io.StringIO()
+        result = format_json(ctx, buf)
+        assert result == ""
+        data = json.loads(buf.getvalue())
+        assert data["summary"]["total"] == 3
+
+    def test_json_returns_string_without_stream(self):
+        ctx = _make_ctx()
+        text = format_json(ctx)
+        assert len(text) > 0
+        assert json.loads(text)["summary"]["total"] == 3
+
+
+class TestSarifStreamOutput:
+    def test_sarif_writes_to_stream(self):
+        import io
+
+        ctx = _make_ctx()
+        buf = io.StringIO()
+        result = format_sarif(ctx, buf)
+        assert result == ""
+        data = json.loads(buf.getvalue())
+        assert data["version"] == "2.1.0"
+        assert len(data["runs"][0]["results"]) == 3
+
+    def test_sarif_returns_string_without_stream(self):
+        ctx = _make_ctx()
+        text = format_sarif(ctx)
+        assert len(text) > 0
+        assert json.loads(text)["version"] == "2.1.0"

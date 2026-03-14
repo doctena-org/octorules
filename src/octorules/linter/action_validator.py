@@ -237,6 +237,35 @@ def lint_actions(rule: dict[str, Any], phase: Phase, ctx: LintContext) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _check_enum(
+    value: object,
+    valid: frozenset,
+    *,
+    rule_id: str,
+    label: str,
+    field_path: str,
+    phase_name: str,
+    ref: str,
+    ctx: LintContext,
+) -> bool:
+    """Emit an error if *value* is not in *valid*. Returns True if valid."""
+    if value in valid:
+        return True
+    display = repr(value) if isinstance(value, str) else str(value)
+    valid_str = ", ".join(sorted(str(v) for v in valid))
+    ctx.add(
+        LintResult(
+            rule_id=rule_id,
+            severity=Severity.ERROR,
+            message=f"Invalid {label} {display}. Must be one of: {valid_str}",
+            phase=phase_name,
+            ref=ref,
+            field=field_path,
+        )
+    )
+    return False
+
+
 def _check_value_expression_conflict(
     d: dict,
     context_label: str,
@@ -360,21 +389,17 @@ def _lint_redirect_params(params: dict, phase_name: str, ref: str, ctx: LintCont
             )
         )
     elif isinstance(status_code, int):
-        if status_code not in VALID_REDIRECT_STATUS_CODES:
-            # K001
-            codes = ", ".join(str(c) for c in sorted(VALID_REDIRECT_STATUS_CODES))
-            ctx.add(
-                LintResult(
-                    rule_id="K001",
-                    severity=Severity.ERROR,
-                    message=(
-                        f"Invalid redirect status code {status_code}. Must be one of: {codes}"
-                    ),
-                    phase=phase_name,
-                    ref=ref,
-                    field="action_parameters.from_value.status_code",
-                )
-            )
+        # K001
+        _check_enum(
+            status_code,
+            VALID_REDIRECT_STATUS_CODES,
+            rule_id="K001",
+            label="redirect status code",
+            field_path="action_parameters.from_value.status_code",
+            phase_name=phase_name,
+            ref=ref,
+            ctx=ctx,
+        )
     elif not isinstance(status_code, int):
         # C006: status_code must be an integer
         ctx.add(
@@ -433,21 +458,17 @@ def _lint_config_params(params: dict, phase_name: str, ref: str, ctx: LintContex
     """Validate config action_parameters (J001-J004)."""
     security_level = params.get("security_level")
     if isinstance(security_level, str):
-        if security_level not in VALID_SECURITY_LEVELS:
-            ctx.add(
-                LintResult(
-                    rule_id="J001",
-                    severity=Severity.ERROR,
-                    message=(
-                        f"Invalid security_level {security_level!r}."
-                        f" Must be one of:"
-                        f" {', '.join(sorted(VALID_SECURITY_LEVELS))}"
-                    ),
-                    phase=phase_name,
-                    ref=ref,
-                    field="action_parameters.security_level",
-                )
-            )
+        if not _check_enum(
+            security_level,
+            VALID_SECURITY_LEVELS,
+            rule_id="J001",
+            label="security_level",
+            field_path="action_parameters.security_level",
+            phase_name=phase_name,
+            ref=ref,
+            ctx=ctx,
+        ):
+            pass
         elif security_level == "off":
             ctx.add(
                 LintResult(
@@ -461,20 +482,17 @@ def _lint_config_params(params: dict, phase_name: str, ref: str, ctx: LintContex
             )
 
     ssl = params.get("ssl")
-    if isinstance(ssl, str) and ssl not in VALID_SSL_VALUES:
-        ctx.add(
-            LintResult(
-                rule_id="J002",
-                severity=Severity.ERROR,
-                message=(
-                    f"Invalid ssl value {ssl!r}."
-                    f" Must be one of: {', '.join(sorted(VALID_SSL_VALUES))}"
-                ),
-                phase=phase_name,
-                ref=ref,
-                field="action_parameters.ssl",
-            )
-        )
+    if isinstance(ssl, str) and not _check_enum(
+        ssl,
+        VALID_SSL_VALUES,
+        rule_id="J002",
+        label="ssl value",
+        field_path="action_parameters.ssl",
+        phase_name=phase_name,
+        ref=ref,
+        ctx=ctx,
+    ):
+        pass
     elif ssl == "off":
         # J005: SSL off security warning
         ctx.add(
@@ -491,20 +509,16 @@ def _lint_config_params(params: dict, phase_name: str, ref: str, ctx: LintContex
         )
 
     polish = params.get("polish")
-    if isinstance(polish, str) and polish not in VALID_POLISH_VALUES:
-        ctx.add(
-            LintResult(
-                rule_id="J003",
-                severity=Severity.ERROR,
-                message=(
-                    f"Invalid polish value {polish!r}."
-                    f" Must be one of:"
-                    f" {', '.join(sorted(VALID_POLISH_VALUES))}"
-                ),
-                phase=phase_name,
-                ref=ref,
-                field="action_parameters.polish",
-            )
+    if isinstance(polish, str):
+        _check_enum(
+            polish,
+            VALID_POLISH_VALUES,
+            rule_id="J003",
+            label="polish value",
+            field_path="action_parameters.polish",
+            phase_name=phase_name,
+            ref=ref,
+            ctx=ctx,
         )
 
 
@@ -512,18 +526,16 @@ def _lint_rate_limit_params(params: dict, phase_name: str, ref: str, ctx: LintCo
     """Validate rate limiting action_parameters (D001-D005)."""
     period = params.get("period")
     if isinstance(period, int):
-        if period not in VALID_RATE_LIMIT_PERIODS:
-            periods = ", ".join(str(p) for p in sorted(VALID_RATE_LIMIT_PERIODS))
-            ctx.add(
-                LintResult(
-                    rule_id="D001",
-                    severity=Severity.ERROR,
-                    message=(f"Invalid rate limiting period {period}s. Must be one of: {periods}"),
-                    phase=phase_name,
-                    ref=ref,
-                    field="action_parameters.period",
-                )
-            )
+        _check_enum(
+            period,
+            VALID_RATE_LIMIT_PERIODS,
+            rule_id="D001",
+            label="rate limiting period",
+            field_path="action_parameters.period",
+            phase_name=phase_name,
+            ref=ref,
+            ctx=ctx,
+        )
 
     # D003: missing threshold
     if "requests_per_period" not in params and "score_per_period" not in params:
@@ -945,20 +957,16 @@ def _lint_compress_response_params(
         _TERMINAL_ALGORITHMS = frozenset({"none", "auto"})
         for i, algo in enumerate(algorithms):
             algo_name = algo.get("name") if isinstance(algo, dict) else algo
-            if isinstance(algo_name, str) and algo_name not in VALID_COMPRESSION_ALGORITHMS:
-                ctx.add(
-                    LintResult(
-                        rule_id="C013",
-                        severity=Severity.ERROR,
-                        message=(
-                            f"Invalid compression algorithm {algo_name!r}."
-                            f" Must be one of:"
-                            f" {', '.join(sorted(VALID_COMPRESSION_ALGORITHMS))}"
-                        ),
-                        phase=phase_name,
-                        ref=ref,
-                        field="action_parameters.algorithms",
-                    )
+            if isinstance(algo_name, str):
+                _check_enum(
+                    algo_name,
+                    VALID_COMPRESSION_ALGORITHMS,
+                    rule_id="C013",
+                    label="compression algorithm",
+                    field_path="action_parameters.algorithms",
+                    phase_name=phase_name,
+                    ref=ref,
+                    ctx=ctx,
                 )
             # C018: Terminal algorithm must be last
             if (

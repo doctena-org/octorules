@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.15.1] - 2026-03-14
+
+### Added
+- **Registry error path tests**: 6 tests covering wirefilter-unavailable fallback,
+  empty overlay handling, and fallback-vs-wirefilter field consistency.
+- **Report stream tests**: 5 tests covering `format_json()` and `format_sarif()`
+  stream writing and SARIF output without `file_path`.
+- **Suppression/filter interaction tests**: 3 tests verifying precedence between
+  `--rule` filter, severity filter, and suppression directives.
+- **Concurrency stress test**: 50-zone concurrent `resolve_zone_id` test verifying
+  thread-safe `zone_plans` population.
+
+### Changed
+- **provider.py DRY refactor**: extracted `_fetch_parallel()` helper, replacing
+  3 near-identical `ThreadPoolExecutor` + `as_completed` blocks in
+  `get_all_phase_rules`, `get_all_custom_rulesets`, and `get_all_lists`.
+- **config.py DRY refactor**: extracted `_load_rules_file()` helper, replacing
+  duplicated YAML loading, caching, and path-traversal logic between
+  `load_zone_rules()` and `load_account_rules()`.
+- **`_check_enum()` helper** in `action_validator.py` — consolidates 5 inline
+  enum validation blocks into a single reusable function.
+- **Narrowed exception handling** in `expression_bridge.py`: FFI crash handler
+  now catches `(RuntimeError, TypeError, ValueError, OSError)` instead of
+  bare `Exception`.
+- Upper bound `<1.0` added to `octorules-wirefilter` optional dependency.
+
 ## [0.15.0] - 2026-03-11
 
 ### Added

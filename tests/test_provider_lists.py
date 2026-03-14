@@ -527,4 +527,4 @@ class TestListMethods:
             result = provider.get_all_lists(scope)
         assert "good_list" in result
         assert "bad_list" not in result
-        assert "Failed to fetch items for list bad_list" in caplog.text
+        assert "Failed to fetch list bad_list" in caplog.text

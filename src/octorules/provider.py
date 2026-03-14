@@ -6,6 +6,7 @@ import json as _json
 import logging
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 
@@ -99,6 +100,62 @@ class PhaseRulesResult(dict):
     def __init__(self, data=None, *, failed_phases: list[str] | None = None):
         super().__init__(data or {})
         self.failed_phases = failed_phases or []
+
+
+def _fetch_parallel(
+    items: list,
+    *,
+    submit_fn: Callable,
+    key_fn: Callable,
+    result_fn: Callable,
+    label: str,
+    scope_label: str,
+    max_workers: int,
+) -> tuple[dict, list]:
+    """Run *submit_fn* for each item in parallel, collecting results.
+
+    Args:
+        items: Items to iterate over.
+        submit_fn: ``submit_fn(executor, item)`` → ``Future``.
+        key_fn: ``key_fn(item)`` → hashable key for log messages and
+            the ``failed`` list.
+        result_fn: ``result_fn(item, future_result)`` → ``(key, value)`` pair
+            to insert into the result dict, or *None* to skip.  Receives the
+            original *item*, not the key.
+        label: Human label for log messages (e.g. "phase", "custom ruleset").
+        scope_label: Pre-formatted scope string for log messages.
+        max_workers: Max concurrent workers.
+
+    Returns:
+        ``(results_dict, failed_keys)`` — results for successful fetches and
+        keys of items that failed with transient errors.  Auth/permission
+        errors propagate immediately.
+    """
+    workers = min(max_workers, len(items))
+    results: dict = {}
+    failed: list = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_item: dict = {}
+        for item in items:
+            f = submit_fn(executor, item)
+            future_to_item[f] = item
+        for future in as_completed(future_to_item):
+            item = future_to_item[future]
+            key = key_fn(item)
+            try:
+                value = future.result()
+            except (AuthenticationError, PermissionDeniedError):
+                for f in future_to_item:
+                    f.cancel()
+                raise
+            except (APIError, APIConnectionError) as e:
+                log.warning("Failed to fetch %s %s for %s: %s", label, key, scope_label, e)
+                failed.append(key)
+                continue
+            pair = result_fn(item, value)
+            if pair is not None:
+                results[pair[0]] = pair[1]
+    return results, failed
 
 
 class CloudflareProvider:
@@ -257,30 +314,22 @@ class CloudflareProvider:
             phases_to_fetch = [p for p in phases_to_fetch if p in _ZONE_PHASE_SET]
         sl = _fmt_scope(scope)
         log.debug("Fetching %d phase(s) for %s", len(phases_to_fetch), sl)
-        rules: dict[str, list[dict]] = {}
-        failed: list[str] = []
 
         if not phases_to_fetch:
-            return PhaseRulesResult(rules, failed_phases=failed)
+            return PhaseRulesResult({}, failed_phases=[])
 
-        workers = min(self._max_workers, len(phases_to_fetch))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(self.get_phase_rules, scope, p): p for p in phases_to_fetch}
-            for future in as_completed(futures):
-                cf_phase = futures[future]
-                try:
-                    phase_rules = future.result()
-                except (AuthenticationError, PermissionDeniedError):
-                    # Cancel remaining futures before propagating
-                    for f in futures:
-                        f.cancel()
-                    raise
-                except (APIError, APIConnectionError) as e:
-                    log.warning("Failed to fetch phase %s for %s: %s", cf_phase, sl, e)
-                    failed.append(cf_phase)
-                    continue
-                if phase_rules:
-                    rules[cf_phase] = phase_rules
+        def _result_fn(phase, rules):
+            return (phase, rules) if rules else None
+
+        rules, failed = _fetch_parallel(
+            phases_to_fetch,
+            submit_fn=lambda ex, p: ex.submit(self.get_phase_rules, scope, p),
+            key_fn=lambda p: p,
+            result_fn=_result_fn,
+            label="phase",
+            scope_label=sl,
+            max_workers=self._max_workers,
+        )
         return PhaseRulesResult(rules, failed_phases=failed)
 
     def list_custom_rulesets(self, scope: Scope) -> list[dict]:
@@ -349,33 +398,23 @@ class CloudflareProvider:
 
         sl = _fmt_scope(scope)
         log.debug("Fetching %d custom ruleset(s) for %s", len(rulesets_meta), sl)
-        meta_by_id = {rs["id"]: rs for rs in rulesets_meta}
-        result: dict[str, dict] = {}
 
-        workers = min(self._max_workers, len(rulesets_meta))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(self.get_custom_ruleset, scope, rs["id"]): rs["id"]
-                for rs in rulesets_meta
-            }
-            for future in as_completed(futures):
-                rs_id = futures[future]
-                try:
-                    rules = future.result()
-                except (AuthenticationError, PermissionDeniedError):
-                    for f in futures:
-                        f.cancel()
-                    raise
-                except (APIError, APIConnectionError) as e:
-                    log.warning("Failed to fetch custom ruleset %s for %s: %s", rs_id, sl, e)
-                    continue
-                meta = meta_by_id[rs_id]
-                result[rs_id] = {
-                    "name": meta.get("name", ""),
-                    "phase": meta.get("phase", ""),
-                    "rules": rules,
-                }
-        return result
+        def _result_fn(rs, rules):
+            return (
+                rs["id"],
+                {"name": rs.get("name", ""), "phase": rs.get("phase", ""), "rules": rules},
+            )
+
+        results, _ = _fetch_parallel(
+            rulesets_meta,
+            submit_fn=lambda ex, rs: ex.submit(self.get_custom_ruleset, scope, rs["id"]),
+            key_fn=lambda rs: rs["id"],
+            result_fn=_result_fn,
+            label="custom ruleset",
+            scope_label=sl,
+            max_workers=self._max_workers,
+        )
+        return results
 
     # --- Lists API ---
 
@@ -548,34 +587,28 @@ class CloudflareProvider:
 
         sl = _fmt_scope(scope)
         log.debug("Fetching items for %d list(s) for %s", len(all_meta), sl)
-        result: dict[str, dict] = {}
 
-        workers = min(self._max_workers, len(all_meta))
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {executor.submit(self.get_list_items, scope, m["id"]): m for m in all_meta}
-            for future in as_completed(futures):
-                meta = futures[future]
-                try:
-                    items = future.result()
-                except (AuthenticationError, PermissionDeniedError):
-                    for f in futures:
-                        f.cancel()
-                    raise
-                except (APIError, APIConnectionError) as e:
-                    log.warning(
-                        "Failed to fetch items for list %s for %s: %s",
-                        meta["name"],
-                        sl,
-                        e,
-                    )
-                    continue
-                result[meta["name"]] = {
+        def _result_fn(meta, items):
+            return (
+                meta["name"],
+                {
                     "id": meta["id"],
                     "kind": meta["kind"],
                     "description": meta["description"],
                     "items": items,
-                }
-        return result
+                },
+            )
+
+        results, _ = _fetch_parallel(
+            all_meta,
+            submit_fn=lambda ex, m: ex.submit(self.get_list_items, scope, m["id"]),
+            key_fn=lambda m: m["name"],
+            result_fn=_result_fn,
+            label="list",
+            scope_label=sl,
+            max_workers=self._max_workers,
+        )
+        return results
 
     # --- Page Shield Policies API ---
 

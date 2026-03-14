@@ -117,6 +117,53 @@ class TestParseSuppressions:
         assert result == {}
 
 
+class TestSuppressionFilterInteraction:
+    """Tests for suppression + LintContext filter interaction."""
+
+    def test_rule_filter_takes_precedence_over_suppression(self):
+        """When --rule filters to M013, suppressing M014 is a no-op (M014 already excluded)."""
+        from octorules.linter.engine import LintContext, LintResult, Severity
+
+        ctx = LintContext(
+            rule_filter=["M013"],
+            suppressions={"r1": {"M014"}},
+        )
+        ctx.add(LintResult(rule_id="M013", severity=Severity.WARNING, message="t", ref="r1"))
+        ctx.add(LintResult(rule_id="M014", severity=Severity.WARNING, message="t", ref="r1"))
+        # M013 passes filter, is not suppressed → present
+        assert len(ctx.results) == 1
+        assert ctx.results[0].rule_id == "M013"
+        # M014 rejected by filter before suppression check, so suppressed_count stays 0
+        assert ctx.suppressed_count == 0
+
+    def test_suppression_counted_when_rule_passes_filter(self):
+        """Suppression fires and increments count when the rule passes the filter."""
+        from octorules.linter.engine import LintContext, LintResult, Severity
+
+        ctx = LintContext(
+            rule_filter=["M013", "M014"],
+            suppressions={"r1": {"M014"}},
+        )
+        ctx.add(LintResult(rule_id="M013", severity=Severity.WARNING, message="t", ref="r1"))
+        ctx.add(LintResult(rule_id="M014", severity=Severity.WARNING, message="t", ref="r1"))
+        assert len(ctx.results) == 1
+        assert ctx.results[0].rule_id == "M013"
+        assert ctx.suppressed_count == 1
+
+    def test_severity_filter_excludes_before_suppression(self):
+        """Severity filter drops INFO before suppression check."""
+        from octorules.linter.engine import LintContext, LintResult, Severity
+
+        ctx = LintContext(
+            severity_filter=Severity.WARNING,
+            suppressions={"r1": {"M016"}},
+        )
+        ctx.add(LintResult(rule_id="M016", severity=Severity.INFO, message="t", ref="r1"))
+        assert len(ctx.results) == 0
+        # Filtered by severity before reaching suppression check
+        assert ctx.suppressed_count == 0
+
+
 class TestIsSuppressed:
     """Tests for is_suppressed()."""
 
