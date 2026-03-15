@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.16.0] - 2026-03-15
+
+### Changed
+- **BREAKING: Provider split.** The Cloudflare SDK (`cloudflare~=4.3`) is no
+  longer a direct dependency.  Install `octorules[cloudflare]` (which pulls in
+  [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare))
+  to use Cloudflare. `import octorules` works without any provider installed.
+- **Flat layout.** Package moved from `src/octorules/` to `octorules/` at the
+  repo root, matching the octodns convention.
+- `commands.py` and `cli.py` now catch provider-agnostic `ProviderAuthError`
+  and `ProviderError` instead of Cloudflare SDK exceptions.
+- `_init_provider()` uses the module-level `CloudflareProvider` (re-exported
+  from octorules-cloudflare when installed) or reads `providers.cloudflare.class`
+  from config for dynamic provider loading.
+
+### Added
+- **BaseProvider protocol** (`octorules.provider.base`): `@runtime_checkable`
+  Protocol defining all 22 methods + 4 properties that provider implementations
+  must satisfy.
+- **Provider exception hierarchy** (`octorules.provider.exceptions`):
+  `ProviderError`, `ProviderAuthError`, `ProviderConnectionError` — provider-
+  agnostic base exceptions.
+- **Provider factory** (`_load_provider_class`): dynamic import from dotted
+  path (e.g. `octorules_aws.AwsWafProvider`).
+- **Phase registration API** (`register_phase`, `register_phases`,
+  `unregister_phase`): extensible phase registry so provider packages can
+  register their own phases at import time.  All derived collections
+  (`ALL_CF_PHASES`, `PHASE_BY_NAME`, etc.) are mutated in-place.
+- `Config.provider_class` field — optional `class:` key under
+  `providers.cloudflare` for dynamic provider loading.
+- `[project.optional-dependencies] cloudflare` extra pointing to
+  `octorules-cloudflare>=0.1`.
+
+### Removed
+- `CloudflareProvider` class, all CF SDK helpers, and CF SDK exception
+  re-exports moved to
+  [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare).
+- Provider-specific tests (`test_provider.py`, `test_provider_lists.py`,
+  `test_provider_custom_rulesets.py`, `test_provider_page_shield.py`,
+  `tests/mocks.py`) moved to octorules-cloudflare.
+
 ## [0.15.1] - 2026-03-14
 
 ### Added

@@ -1,30 +1,48 @@
 # octorules
 
-## Cloudflare Rules as code - Manage rules across zones declaratively
+## WAF rules as code — manage rules across providers declaratively
 
-In the vein of [infrastructure as code](https://en.wikipedia.org/wiki/Infrastructure_as_Code), octorules provides tools & patterns to manage Cloudflare Rules (Redirect Rules, Cache Rules, Origin Rules, WAF Custom Rules, WAF Managed Rules, Rate Limiting, Bot Fight Mode, Sensitive Data Detection, Page Shield policies, HTTP DDoS overrides, Bulk Redirects, Logpush Custom Fields, Network DDoS, Magic Firewall, URL Normalization, and more) as YAML files. The resulting config can live in a repository and be deployed just like the rest of your code, maintaining a clear history and using your existing review & workflow.
+In the vein of [infrastructure as code](https://en.wikipedia.org/wiki/Infrastructure_as_Code), octorules provides tools & patterns to manage WAF and security rules as YAML files. The resulting config can live in a repository and be deployed just like the rest of your code, maintaining a clear history and using your existing review & workflow.
 
-[octodns](https://github.com/octodns/octodns) manages DNS records, but can't touch Cloudflare's newer Rules products. **octorules** fills that gap — one YAML file per domain, plan-before-apply, fail-fast on errors.
+[octodns](https://github.com/octodns/octodns) manages DNS records, but can't touch WAF rules. **octorules** fills that gap — one YAML file per domain/policy, plan-before-apply, fail-fast on errors.
+
+### Provider ecosystem
+
+octorules is provider-agnostic. Each provider is a separate package:
+
+| Package | Provider | Status |
+|---|---|---|
+| [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) | Cloudflare Rules (23 phases) | Stable |
+| [octorules-aws](https://github.com/doctena-org/octorules-aws) | AWS WAF v2 (4 phases) | Beta |
+| [octorules-google](https://github.com/doctena-org/octorules-google) | Google Cloud Armor (4 phases) | Beta |
 
 ## Getting started
 
 ### Installation
 
 ```bash
-pip install octorules[wirefilter]    # strongly recommended
+pip install octorules-cloudflare    # Cloudflare provider (includes wirefilter)
 ```
 
-The `wirefilter` extra installs [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter),
-a Rust-based FFI bridge to Cloudflare's actual wirefilter engine. This enables
-authoritative expression parsing and unlocks the full linter rule set. Without
-it, a regex-based fallback parser is used (fewer lint rules, no type checking).
+This installs octorules (core), [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare)
+(the Cloudflare provider), and [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter)
+(Rust FFI bridge to Cloudflare's wirefilter engine for authoritative expression
+parsing and full linter coverage).
 
-Prebuilt wheels are available for Linux (x86_64, aarch64), macOS (x86_64, ARM64),
-and Windows (x86_64). If wheels are not available for your platform, you can
-install without it:
+Prebuilt wirefilter wheels are available for Linux (x86_64, aarch64), macOS
+(x86_64, ARM64), and Windows (x86_64).
+
+For other providers:
 
 ```bash
-pip install octorules    # regex-based expression parser only
+pip install octorules-aws       # AWS WAF v2
+pip install octorules-google    # Google Cloud Armor (includes cel-python)
+```
+
+Core only (offline lint/validate, no provider):
+
+```bash
+pip install octorules
 ```
 
 ### Configuration
@@ -368,7 +386,7 @@ See [docs/lint-rules/README.md](docs/lint-rules/README.md#suppressing-rules) for
 
 ### Expression parsing
 
-When the `wirefilter` extra is installed (see [Installation](#installation)), expressions are parsed by Cloudflare's actual wirefilter engine via [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter), providing authoritative type checking, field validation, and syntax verification. Without it, a regex-based fallback parser extracts fields, functions, operators, and literals but cannot perform type checking.
+When [octorules-wirefilter](https://github.com/doctena-org/octorules-wirefilter) is installed (included automatically with `octorules-cloudflare`), expressions are parsed by Cloudflare's actual wirefilter engine, providing authoritative type checking, field validation, and syntax verification. Without it, a regex-based fallback parser extracts fields, functions, operators, and literals but cannot perform type checking.
 
 The linter logs which parser is active at startup (`Expression parser: wirefilter` or `Expression parser: regex fallback`). If wirefilter rejects a specific expression, it falls back to regex for that expression with a warning. Standalone `true`/`false` expressions and value expressions in `action_parameters` (e.g. `regex_replace(...)`) are handled separately since wirefilter only parses boolean filter expressions.
 
@@ -555,8 +573,8 @@ architecture.
 
 ```bash
 pytest
-ruff check src/ tests/
-ruff format --check src/ tests/
+ruff check octorules/ tests/
+ruff format --check octorules/ tests/
 ```
 
 ### Releasing a new version
