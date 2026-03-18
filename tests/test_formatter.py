@@ -144,7 +144,7 @@ class TestFormatPhasePlan:
         # Header + 2 change lines
         assert len(lines) == 3
 
-    def test_includes_cf_phase_name(self):
+    def test_includes_provider_id(self):
         phase_plan = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
@@ -743,7 +743,7 @@ class TestFormatReportCsv:
                     "phases": [
                         {
                             "phase": "redirect_rules",
-                            "cf_phase": "http_request_dynamic_redirect",
+                            "provider_id": "http_request_dynamic_redirect",
                             "status": "drifted",
                             "yaml_rules": 5,
                             "live_rules": 4,

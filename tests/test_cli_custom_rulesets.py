@@ -6,7 +6,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 from octorules.cli import cmd_dump, cmd_sync, cmd_validate
-from octorules.config import Config, ZoneConfig
+from octorules.config import Config, ProviderConfig, ZoneConfig
 from octorules.planner import ChangeType, RuleChange, ZonePlan
 from octorules.provider import Scope
 
@@ -28,11 +28,16 @@ class TestCustomRulesetsValidate:
             "    action: block\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -55,11 +60,16 @@ class TestCustomRulesetsValidate:
             "    expression: 'true'\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -84,11 +94,16 @@ class TestCustomRulesetsValidate:
             "    action: block\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -106,13 +121,14 @@ class TestCustomRulesetsPlanAccount:
         rules_dir.mkdir()
         (rules_dir / "test-account.yaml").write_text(account_rules_yaml)
         return Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_with_custom_rulesets(self, mock_provider_cls, tmp_path):
+    def test_plan_account_with_custom_rulesets(self, tmp_path):
         """_plan_account should plan custom rulesets when present in YAML."""
         from octorules.commands import _plan_account
 
@@ -127,7 +143,7 @@ class TestCustomRulesetsPlanAccount:
             "    expression: 'true'\n"
             "    action: block\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -141,8 +157,7 @@ class TestCustomRulesetsPlanAccount:
         assert crp.ruleset_name == "Block attackers"
         assert crp.has_changes
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_no_custom_rulesets(self, mock_provider_cls, tmp_path):
+    def test_plan_account_no_custom_rulesets(self, tmp_path):
         """_plan_account without custom_rulesets in YAML should still work."""
         from octorules.commands import _plan_account
 
@@ -156,7 +171,7 @@ class TestCustomRulesetsPlanAccount:
             "  action_parameters:\n"
             "    id: rs1\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -166,8 +181,7 @@ class TestCustomRulesetsPlanAccount:
         assert len(zp.custom_ruleset_plans) == 0
         provider.get_all_custom_rulesets.assert_not_called()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_custom_rulesets_no_changes(self, mock_provider_cls, tmp_path):
+    def test_plan_account_custom_rulesets_no_changes(self, tmp_path):
         """When custom ruleset rules match current state, no changes."""
         from octorules.commands import _plan_account
 
@@ -183,7 +197,7 @@ class TestCustomRulesetsPlanAccount:
             "    action: block\n"
             "    enabled: true\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -199,14 +213,10 @@ class TestCustomRulesetsPlanAccount:
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 0  # no changes = not added
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_custom_rulesets_api_error_graceful(
-        self, mock_provider_cls, tmp_path, caplog
-    ):
+    def test_plan_account_custom_rulesets_api_error_graceful(self, tmp_path, caplog):
         """API error fetching custom rulesets should warn but still plan phases."""
-        from cloudflare import APIError
-
         from octorules.commands import _plan_account
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_config(
             tmp_path,
@@ -219,13 +229,11 @@ class TestCustomRulesetsPlanAccount:
             "    expression: 'true'\n"
             "    action: block\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.side_effect = APIError(
-            "Server error", request=MagicMock(), body=None
-        )
+        provider.get_all_custom_rulesets.side_effect = ProviderError("Server error")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             zp, desired, current = _plan_account(config, provider, None)
@@ -238,29 +246,32 @@ class TestCustomRulesetsPlanAccount:
 class TestCustomRulesetsDump:
     """Tests for custom rulesets in cmd_dump."""
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_account_includes_custom_rulesets(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_dump_account_includes_custom_rulesets(self, mock_init_provs, tmp_path, caplog):
         """Account dump should include custom_rulesets section."""
         import yaml
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
                 "phase": "http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -274,29 +285,30 @@ class TestCustomRulesetsDump:
         assert data["custom_rulesets"][0]["name"] == "Block attackers"
         assert len(data["custom_rulesets"][0]["rules"]) == 1
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_account_custom_rulesets_api_error(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_dump_account_custom_rulesets_api_error(self, mock_init_provs, tmp_path, caplog):
         """API error fetching custom rulesets should warn but still dump phases."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {
             "http_request_firewall_custom": [
                 {"ref": "deploy1", "expression": "true", "action": "execute", "enabled": True}
             ],
         }
-        provider.get_all_custom_rulesets.side_effect = APIError(
-            "Timeout", request=MagicMock(), body=None
-        )
+        mock_prov.get_all_custom_rulesets.side_effect = ProviderError("Timeout")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -315,13 +327,15 @@ class TestCustomRulesetsSync:
         rules_dir.mkdir()
         (rules_dir / "test-account.yaml").write_text(account_rules_yaml)
         return Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_applies_custom_rulesets(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_applies_custom_rulesets(self, mock_init_provs, tmp_path, caplog):
         """Sync should call put_custom_ruleset for custom ruleset changes."""
         config = self._make_account_config(
             tmp_path,
@@ -334,25 +348,26 @@ class TestCustomRulesetsSync:
             "    expression: 'true'\n"
             "    action: block\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
         assert result == 0
-        provider.put_custom_ruleset.assert_called_once()
-        call_args = provider.put_custom_ruleset.call_args
+        mock_prov.put_custom_ruleset.assert_called_once()
+        call_args = mock_prov.put_custom_ruleset.call_args
         assert call_args[0][1] == "rs1"  # ruleset_id
         assert "custom_ruleset:Block attackers" in caplog.text
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_custom_rulesets_api_error(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_custom_rulesets_api_error(self, mock_init_provs, tmp_path, caplog):
         """API error applying custom ruleset should return 1."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_account_config(
             tmp_path,
@@ -365,22 +380,21 @@ class TestCustomRulesetsSync:
             "    expression: 'true'\n"
             "    action: block\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}
-        provider.put_custom_ruleset.side_effect = APIError(
-            "Forbidden", request=MagicMock(), body=None
-        )
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.put_custom_ruleset.side_effect = ProviderError("Forbidden")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
         assert result == 1
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_no_changes_skips_apply(self, mock_provider_cls, tmp_path):
+    @patch("octorules.commands._init_providers")
+    def test_sync_no_changes_skips_apply(self, mock_init_provs, tmp_path):
         """When custom ruleset rules match, no PUT calls should be made."""
         config = self._make_account_config(
             tmp_path,
@@ -394,23 +408,24 @@ class TestCustomRulesetsSync:
             "    action: block\n"
             "    enabled: true\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
                 "phase": "http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         result = cmd_sync(config, None, scope_filter="account")
         assert result == 0
-        provider.put_custom_ruleset.assert_not_called()
-        provider.put_phase_rules.assert_not_called()
+        mock_prov.put_custom_ruleset.assert_not_called()
+        mock_prov.put_phase_rules.assert_not_called()
 
 
 class TestApplyCustomRulesets:
@@ -443,10 +458,9 @@ class TestApplyCustomRulesets:
         provider.put_custom_ruleset.assert_called_once_with(scope, "rs1", crp.prepared_rules)
 
     def test_apply_api_error(self):
-        from cloudflare import APIError
-
         from octorules.commands import _apply_custom_rulesets
         from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.provider.exceptions import ProviderError
 
         phase = _make_synthetic_phase(
             "custom_ruleset",
@@ -463,9 +477,7 @@ class TestApplyCustomRulesets:
         zp = ZonePlan(zone_name="test-account", custom_ruleset_plans=[crp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
-        provider.put_custom_ruleset.side_effect = APIError(
-            "Forbidden", request=MagicMock(), body=None
-        )
+        provider.put_custom_ruleset.side_effect = ProviderError("Forbidden")
 
         synced, error = _apply_custom_rulesets(zp, scope, provider)
         assert error is not None

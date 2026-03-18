@@ -6,7 +6,7 @@ import logging
 from unittest.mock import MagicMock, patch
 
 from octorules.cli import cmd_dump, cmd_sync, cmd_validate
-from octorules.config import Config, ZoneConfig
+from octorules.config import Config, ProviderConfig, ZoneConfig
 from octorules.planner import ChangeType, ListPlan, RuleChange, ZonePlan
 from octorules.provider import Scope
 
@@ -27,11 +27,16 @@ class TestListsValidate:
             "    comment: scanner\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -49,11 +54,16 @@ class TestListsValidate:
             "lists:\n- kind: ip\n  items:\n  - ip: '1.2.3.4'\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -67,11 +77,16 @@ class TestListsValidate:
             "lists:\n- name: my_list\n  kind: invalid_kind\n  items: []\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -93,11 +108,16 @@ class TestListsValidate:
             "  - ip: '1.2.3.4'\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -120,11 +140,16 @@ class TestListsValidate:
             "  - ip: '1.2.3.4'\n"
         )
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={
                 "example.com": ZoneConfig(
-                    name="example.com", zone_id="zone-abc", sources=["rules"]
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
                 ),
             },
         )
@@ -143,13 +168,14 @@ class TestListsPlanAccount:
         rules_dir.mkdir()
         (rules_dir / "test-account.yaml").write_text(account_rules_yaml)
         return Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_with_lists(self, mock_provider_cls, tmp_path):
+    def test_plan_account_with_lists(self, tmp_path):
         """_plan_account should plan lists when present in YAML."""
         from octorules.commands import _plan_account
 
@@ -163,7 +189,7 @@ class TestListsPlanAccount:
             "  - ip: '1.2.3.4'\n"
             "    comment: scanner\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -177,8 +203,7 @@ class TestListsPlanAccount:
         assert lp.create is True
         assert lp.has_changes
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_no_lists(self, mock_provider_cls, tmp_path):
+    def test_plan_account_no_lists(self, tmp_path):
         """_plan_account without lists key should not call get_all_lists."""
         from octorules.commands import _plan_account
 
@@ -191,7 +216,7 @@ class TestListsPlanAccount:
             "  action_parameters:\n"
             "    id: rs1\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -201,8 +226,7 @@ class TestListsPlanAccount:
         assert len(zp.list_plans) == 0
         provider.get_all_lists.assert_not_called()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_lists_no_changes(self, mock_provider_cls, tmp_path):
+    def test_plan_account_lists_no_changes(self, tmp_path):
         """When list items match current state, no changes."""
         from octorules.commands import _plan_account
 
@@ -216,7 +240,7 @@ class TestListsPlanAccount:
             "  - ip: '1.2.3.4'\n"
             "    comment: scanner\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -233,8 +257,7 @@ class TestListsPlanAccount:
         assert zp is not None
         assert len(zp.list_plans) == 0  # no changes = not added
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_lists_deletion(self, mock_provider_cls, tmp_path):
+    def test_plan_account_lists_deletion(self, tmp_path):
         """Lists in CF but not in YAML should be planned for deletion."""
         from octorules.commands import _plan_account
 
@@ -242,7 +265,7 @@ class TestListsPlanAccount:
             tmp_path,
             "lists: []\n",  # empty list means all managed, existing deleted
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -262,24 +285,20 @@ class TestListsPlanAccount:
         assert lp.list_name == "old_list"
         assert lp.delete is True
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_account_lists_api_error_graceful(self, mock_provider_cls, tmp_path, caplog):
+    def test_plan_account_lists_api_error_graceful(self, tmp_path, caplog):
         """API error fetching lists should warn but still plan phases."""
-        from cloudflare import APIError
-
         from octorules.commands import _plan_account
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_config(
             tmp_path,
             "lists:\n- name: blocked_ips\n  kind: ip\n  items:\n  - ip: '1.2.3.4'\n",
         )
-        provider = mock_provider_cls.return_value
+        provider = MagicMock()
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
-        provider.get_all_lists.side_effect = APIError(
-            "Server error", request=MagicMock(), body=None
-        )
+        provider.get_all_lists.side_effect = ProviderError("Server error")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             zp, desired, current = _plan_account(config, provider, None)
@@ -292,24 +311,26 @@ class TestListsPlanAccount:
 class TestListsDump:
     """Tests for lists in cmd_dump."""
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_account_includes_lists(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_dump_account_includes_lists(self, mock_init_provs, tmp_path, caplog):
         """Account dump should include lists section."""
         from octorules.config import _yaml_load
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}
-        provider.get_all_lists.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.get_all_lists.return_value = {
             "blocked_ips": {
                 "id": "list-123",
                 "kind": "ip",
@@ -317,6 +338,7 @@ class TestListsDump:
                 "items": [{"ip": "1.2.3.4", "comment": "scanner"}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -330,28 +352,31 @@ class TestListsDump:
         assert data["lists"][0]["kind"] == "ip"
         assert data["lists"][0]["items"][0]["ip"] == "1.2.3.4"
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_account_lists_api_error(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_dump_account_lists_api_error(self, mock_init_provs, tmp_path, caplog):
         """API error fetching lists should warn but still dump phases."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {
             "http_request_firewall_custom": [
                 {"ref": "deploy1", "expression": "true", "action": "execute", "enabled": True}
             ],
         }
-        provider.get_all_custom_rulesets.return_value = {}
-        provider.get_all_lists.side_effect = APIError("Timeout", request=MagicMock(), body=None)
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.get_all_lists.side_effect = ProviderError("Timeout")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -360,24 +385,27 @@ class TestListsDump:
         dumped = rules_dir / "test-account.yaml"
         assert dumped.exists()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_account_no_lists_returns_none(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_dump_account_no_lists_returns_none(self, mock_init_provs, tmp_path, caplog):
         """When get_all_lists returns empty dict, lists section is omitted."""
         import yaml
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}
-        provider.get_all_lists.return_value = {}
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.get_all_lists.return_value = {}
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -386,24 +414,26 @@ class TestListsDump:
         data = yaml.safe_load(dumped.read_text())
         assert "lists" not in (data or {})
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_account_uses_config_lists_dir(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_dump_account_uses_config_lists_dir(self, mock_init_provs, tmp_path, caplog):
         """Account dump should write list items to config.lists_dir."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         custom_dir = rules_dir / "my_lists"
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             lists_dir=custom_dir,
             zones={},
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}
-        provider.get_all_lists.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.get_all_lists.return_value = {
             "blocked_ips": {
                 "id": "list-123",
                 "kind": "ip",
@@ -411,6 +441,7 @@ class TestListsDump:
                 "items": [{"ip": "1.2.3.4", "comment": "scanner"}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
@@ -419,27 +450,29 @@ class TestListsDump:
         assert (custom_dir / "blocked_ips.yaml").exists()
         assert not (rules_dir / "custom_lists").exists()
 
-    @patch("octorules.commands.CloudflareProvider")
+    @patch("octorules.commands._init_providers")
     def test_dump_output_dir_override_ignores_config_lists_dir(
-        self, mock_provider_cls, tmp_path, caplog
+        self, mock_init_provs, tmp_path, caplog
     ):
         """When --output-dir is specified, lists_dir defaults to output_dir/custom_lists."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         custom_dir = rules_dir / "my_lists"
         config = Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             lists_dir=custom_dir,
             zones={},
         )
         out_dir = tmp_path / "export"
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}
-        provider.get_all_lists.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.get_all_lists.return_value = {
             "blocked_ips": {
                 "id": "list-123",
                 "kind": "ip",
@@ -447,6 +480,7 @@ class TestListsDump:
                 "items": [{"ip": "1.2.3.4", "comment": "scanner"}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_dump(config, None, str(out_dir), scope_filter="account")
@@ -464,13 +498,15 @@ class TestListsSync:
         rules_dir.mkdir()
         (rules_dir / "test-account.yaml").write_text(account_rules_yaml)
         return Config(
-            token="test-token",
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
             rules_dir=rules_dir,
             zones={},
         )
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_creates_new_list(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_creates_new_list(self, mock_init_provs, tmp_path, caplog):
         """Sync should call create_list + put_list_items for new lists."""
         config = self._make_account_config(
             tmp_path,
@@ -482,39 +518,40 @@ class TestListsSync:
             "  - ip: '1.2.3.4'\n"
             "    comment: scanner\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_lists.return_value = {}
-        provider.create_list.return_value = {"id": "new-list-id"}
-        provider.put_list_items.return_value = "op-123"
-        provider.poll_bulk_operation.return_value = "completed"
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_lists.return_value = {}
+        mock_prov.create_list.return_value = {"id": "new-list-id"}
+        mock_prov.put_list_items.return_value = "op-123"
+        mock_prov.poll_bulk_operation.return_value = "completed"
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
         assert result == 0
-        provider.create_list.assert_called_once()
-        call_args = provider.create_list.call_args
+        mock_prov.create_list.assert_called_once()
+        call_args = mock_prov.create_list.call_args
         assert call_args[0][1] == "blocked_ips"
         assert call_args[0][2] == "ip"
-        provider.put_list_items.assert_called_once()
-        provider.poll_bulk_operation.assert_called_once()
+        mock_prov.put_list_items.assert_called_once()
+        mock_prov.poll_bulk_operation.assert_called_once()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_deletes_removed_list(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_deletes_removed_list(self, mock_init_provs, tmp_path, caplog):
         """Sync should call delete_list for lists in CF but not in YAML."""
         config = self._make_account_config(
             tmp_path,
             "lists: []\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_lists.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_lists.return_value = {
             "old_list": {
                 "id": "list-999",
                 "kind": "ip",
@@ -522,17 +559,18 @@ class TestListsSync:
                 "items": [{"ip": "9.9.9.9"}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
         assert result == 0
-        provider.delete_list.assert_called_once_with(
+        mock_prov.delete_list.assert_called_once_with(
             Scope(account_id="acct-123", label="Test Account"),
             "list-999",
         )
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_no_list_changes_skips_apply(self, mock_provider_cls, tmp_path):
+    @patch("octorules.commands._init_providers")
+    def test_sync_no_list_changes_skips_apply(self, mock_init_provs, tmp_path):
         """When list items match, no API calls for lists should be made."""
         config = self._make_account_config(
             tmp_path,
@@ -544,12 +582,12 @@ class TestListsSync:
             "  - ip: '1.2.3.4'\n"
             "    comment: scanner\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_lists.return_value = {
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_lists.return_value = {
             "blocked_ips": {
                 "id": "list-123",
                 "kind": "ip",
@@ -557,30 +595,32 @@ class TestListsSync:
                 "items": [{"ip": "1.2.3.4", "comment": "scanner"}],
             }
         }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         result = cmd_sync(config, None, scope_filter="account")
         assert result == 0
-        provider.create_list.assert_not_called()
-        provider.put_list_items.assert_not_called()
-        provider.delete_list.assert_not_called()
-        provider.update_list_description.assert_not_called()
+        mock_prov.create_list.assert_not_called()
+        mock_prov.put_list_items.assert_not_called()
+        mock_prov.delete_list.assert_not_called()
+        mock_prov.update_list_description.assert_not_called()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_lists_api_error_returns_1(self, mock_provider_cls, tmp_path, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_lists_api_error_returns_1(self, mock_init_provs, tmp_path, caplog):
         """API error during list create should return 1."""
-        from cloudflare import APIError
+        from octorules.provider.exceptions import ProviderError
 
         config = self._make_account_config(
             tmp_path,
             "lists:\n- name: blocked_ips\n  kind: ip\n  items:\n  - ip: '1.2.3.4'\n",
         )
-        provider = mock_provider_cls.return_value
-        provider.account_id = "acct-123"
-        provider.account_name = "Test Account"
-        provider.max_workers = 1
-        provider.get_all_phase_rules.return_value = {}
-        provider.get_all_lists.return_value = {}
-        provider.create_list.side_effect = APIError("Forbidden", request=MagicMock(), body=None)
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_lists.return_value = {}
+        mock_prov.create_list.side_effect = ProviderError("Forbidden")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.ERROR, logger="octorules"):
             result = cmd_sync(config, None, scope_filter="account")
@@ -660,9 +700,8 @@ class TestApplyLists:
         provider.update_list_description.assert_called_once_with(scope, "list-123", "new desc")
 
     def test_apply_create_error_returns_error(self):
-        from cloudflare import APIError
-
         from octorules.commands import _apply_lists
+        from octorules.provider.exceptions import ProviderError
 
         lp = ListPlan(
             list_name="fail_list",
@@ -672,7 +711,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
-        provider.create_list.side_effect = APIError("Forbidden", request=MagicMock(), body=None)
+        provider.create_list.side_effect = ProviderError("Forbidden")
 
         synced, error = _apply_lists(zp, scope, provider)
         assert error is not None
