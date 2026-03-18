@@ -15,11 +15,14 @@ from octorules.planner import (
     RuleValidationError,
     ZonePlan,
     _diff_rules,
+    _is_ignored,
+    _rule_matches_target,
     _rules_by_ref,
     check_safety,
     compute_checksum,
     diff_custom_ruleset,
     diff_phase,
+    filter_by_target,
     normalize_rule,
     plan_zone,
     prepare_desired_rules,
@@ -76,10 +79,10 @@ class TestValidateRules:
         with pytest.raises(RuleValidationError, match="missing required 'ref' field"):
             validate_rules(rules, REDIRECT_PHASE)
 
-    def test_missing_expression(self):
+    def test_missing_expression_passes(self):
+        """Core no longer validates 'expression' — provider-specific check."""
         rules = [{"ref": "r1"}]
-        with pytest.raises(RuleValidationError, match="missing required 'expression' field"):
-            validate_rules(rules, REDIRECT_PHASE)
+        validate_rules(rules, REDIRECT_PHASE)  # Should not raise
 
     def test_duplicate_ref(self):
         rules = [
@@ -115,15 +118,15 @@ class TestValidateRules:
         with pytest.raises(RuleValidationError, match="invalid 'ref'"):
             validate_rules(rules, REDIRECT_PHASE)
 
-    def test_empty_expression_rejected(self):
+    def test_empty_expression_passes(self):
+        """Core no longer validates expression content — provider-specific."""
         rules = [{"ref": "r1", "expression": ""}]
-        with pytest.raises(RuleValidationError, match="invalid 'expression'"):
-            validate_rules(rules, REDIRECT_PHASE)
+        validate_rules(rules, REDIRECT_PHASE)  # Should not raise
 
-    def test_non_string_expression_rejected(self):
+    def test_non_string_expression_passes(self):
+        """Core no longer validates expression type — provider-specific."""
         rules = [{"ref": "r1", "expression": True}]
-        with pytest.raises(RuleValidationError, match="invalid 'expression'"):
-            validate_rules(rules, REDIRECT_PHASE)
+        validate_rules(rules, REDIRECT_PHASE)  # Should not raise
 
 
 class TestWarnUnknownPhaseKeys:
@@ -164,7 +167,7 @@ class TestWarnUnknownPhaseKeys:
             warn_unknown_phase_keys(rules_data, "example.com")
         assert "Valid phases:" in caplog.text
 
-    def test_cf_phase_suggests_friendly_name(self, caplog):
+    def test_provider_id_suggests_friendly_name(self, caplog):
         rules_data = {"http_request_dynamic_redirect": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             warn_unknown_phase_keys(rules_data, "example.com")
@@ -469,7 +472,7 @@ class TestPlanZone:
         assert zone_plan.total_changes == 2
         assert len(zone_plan.phase_plans) == 2
 
-    def test_unknown_cf_phase_in_current_is_skipped(self):
+    def test_unknown_provider_id_in_current_is_skipped(self):
         """Phases in current that aren't in our registry should be ignored."""
         current = {
             "http_some_unknown_phase": [{"ref": "r1", "expression": "true", "action": "whatever"}],
@@ -510,7 +513,7 @@ class TestRenamedPhaseAlias:
         zp = plan_zone("example.com", desired, current)
         assert zp.has_changes
         assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.cf_phase == "http_request_firewall_managed"
+        assert zp.phase_plans[0].phase.provider_id == "http_request_firewall_managed"
 
     def test_canonical_name_works_in_plan_zone(self):
         """Using canonical name waf_managed_rules should work normally."""
@@ -521,7 +524,7 @@ class TestRenamedPhaseAlias:
         zp = plan_zone("example.com", desired, current)
         assert zp.has_changes
         assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.cf_phase == "http_request_firewall_managed"
+        assert zp.phase_plans[0].phase.provider_id == "http_request_firewall_managed"
 
     def test_alias_diff_against_current(self):
         """Alias name should correctly diff against current rules from CF."""
@@ -780,7 +783,7 @@ class TestOriginRule:
         zp = plan_zone("example.com", desired, current)
         assert zp.has_changes
         assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.cf_phase == "http_request_origin"
+        assert zp.phase_plans[0].phase.provider_id == "http_request_origin"
 
     def test_zone_plan_no_changes(self):
         """Full zone plan when CF already has the rule."""
@@ -1197,7 +1200,7 @@ class TestCFApiResilience:
 
     # --- Unknown phases in current ---
 
-    def test_unknown_cf_phase_mixed_with_known(self):
+    def test_unknown_provider_id_mixed_with_known(self):
         """Unknown phases don't interfere with known phase processing."""
         desired = {
             "redirect_rules": [
@@ -1652,3 +1655,278 @@ class TestExpressionNormalizationIntegration:
         )
         modify_changes = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
         assert len(modify_changes) == 0
+
+
+class TestZonePlanTarget:
+    """Tests for ZonePlan.target, display_name, and plan_key (multi-target support)."""
+
+    def test_target_default_none(self):
+        zp = ZonePlan(zone_name="example.com")
+        assert zp.target is None
+
+    def test_display_name_no_target(self):
+        zp = ZonePlan(zone_name="example.com")
+        assert zp.display_name == "example.com"
+
+    def test_display_name_with_target(self):
+        zp = ZonePlan(zone_name="example.com", target="cf-prod")
+        assert zp.display_name == "example.com \u2192 cf-prod"
+
+    def test_plan_key_no_target(self):
+        zp = ZonePlan(zone_name="example.com")
+        assert zp.plan_key == "example.com"
+
+    def test_plan_key_with_target(self):
+        zp = ZonePlan(zone_name="example.com", target="cf-prod")
+        assert zp.plan_key == "example.com\x00cf-prod"
+
+    def test_checksum_includes_target(self):
+        """Checksum differs when target is set."""
+        zp_no_target = ZonePlan(zone_name="example.com")
+        zp_with_target = ZonePlan(zone_name="example.com", target="cf-prod")
+        assert compute_checksum([zp_no_target]) != compute_checksum([zp_with_target])
+
+    def test_checksum_sorted_by_zone_and_target(self):
+        """Checksum is stable regardless of insertion order."""
+        zp1 = ZonePlan(zone_name="a.com", target="prod")
+        zp2 = ZonePlan(zone_name="a.com", target="staging")
+        assert compute_checksum([zp1, zp2]) == compute_checksum([zp2, zp1])
+
+
+# ---------------------------------------------------------------------------
+# octorules: metadata tests
+# ---------------------------------------------------------------------------
+
+
+class TestIsIgnored:
+    def test_true_when_ignored(self):
+        assert _is_ignored({"octorules": {"ignored": True}}) is True
+
+    def test_false_when_not_ignored(self):
+        assert _is_ignored({"octorules": {"ignored": False}}) is False
+
+    def test_false_when_no_metadata(self):
+        assert _is_ignored({"ref": "r1"}) is False
+
+    def test_false_when_metadata_not_dict(self):
+        assert _is_ignored({"octorules": True}) is False
+
+    def test_false_when_truthy_non_bool(self):
+        """Only exact True counts — 'yes', 1, etc. do not."""
+        assert _is_ignored({"octorules": {"ignored": "yes"}}) is False
+        assert _is_ignored({"octorules": {"ignored": 1}}) is False
+
+    def test_false_when_empty_dict(self):
+        assert _is_ignored({"octorules": {}}) is False
+
+
+class TestIgnoredFiltering:
+    """Verify ignored rules are filtered out during prepare/diff."""
+
+    def _rule(self, ref, *, ignored=False):
+        r = {"ref": ref, "expression": "true", "action": "block"}
+        if ignored:
+            r["octorules"] = {"ignored": True}
+        return r
+
+    def test_prepare_desired_rules_filters_ignored(self):
+        rules = [self._rule("keep"), self._rule("skip", ignored=True)]
+        prepared = prepare_desired_rules(rules, WAF_PHASE)
+        refs = [r["ref"] for r in prepared]
+        assert refs == ["keep"]
+
+    def test_prepare_desired_rules_all_ignored(self):
+        rules = [self._rule("a", ignored=True), self._rule("b", ignored=True)]
+        prepared = prepare_desired_rules(rules, WAF_PHASE)
+        assert prepared == []
+
+    def test_ignored_still_validated_ref(self):
+        """Ignored rules still go through ref validation."""
+        rules = [
+            {"octorules": {"ignored": True}},  # missing ref
+        ]
+        with pytest.raises(RuleValidationError, match="missing required 'ref'"):
+            prepare_desired_rules(rules, WAF_PHASE)
+
+    def test_diff_phase_ignores_rule(self):
+        """Ignored rules produce no ADD/MODIFY/REMOVE in the plan."""
+        desired = [self._rule("live"), self._rule("skip", ignored=True)]
+        current = []
+        plan = diff_phase(WAF_PHASE, desired, current)
+        refs = [c.ref for c in plan.changes]
+        assert refs == ["live"]
+
+    def test_diff_custom_ruleset_ignores_rule(self):
+        rules = [self._rule("a"), self._rule("b", ignored=True)]
+        plan = diff_custom_ruleset("rs-1", "test", "http_request_firewall_custom", rules, [])
+        refs = [c.ref for c in plan.changes]
+        assert refs == ["a"]
+        prepared_refs = [r["ref"] for r in plan.prepared_rules]
+        assert prepared_refs == ["a"]
+
+
+class TestOctoruleKeyStripping:
+    """Verify the octorules: key never reaches prepared rules or comparison."""
+
+    def test_prepare_base_strips_key(self):
+        rules = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "block",
+                "octorules": {"ignored": False},
+            }
+        ]
+        prepared = prepare_desired_rules(rules, WAF_PHASE)
+        assert "octorules" not in prepared[0]
+
+    def test_normalize_rule_excludes_key(self):
+        rule = {
+            "ref": "r1",
+            "expression": "true",
+            "action": "block",
+            "octorules": {"included": ["cloudflare"]},
+        }
+        normalized = normalize_rule(rule)
+        assert "octorules" not in normalized
+
+
+class TestRuleMatchesTarget:
+    def test_no_metadata_matches_all(self):
+        assert _rule_matches_target({"ref": "r1"}, "cloudflare") is True
+
+    def test_non_dict_metadata_matches_all(self):
+        assert _rule_matches_target({"ref": "r1", "octorules": True}, "cloudflare") is True
+
+    def test_targets_include(self):
+        rule = {"ref": "r1", "octorules": {"included": ["cloudflare"]}}
+        assert _rule_matches_target(rule, "cloudflare") is True
+        assert _rule_matches_target(rule, "aws") is False
+
+    def test_targets_empty_list(self):
+        """Empty targets list matches nothing."""
+        rule = {"ref": "r1", "octorules": {"included": []}}
+        assert _rule_matches_target(rule, "cloudflare") is False
+
+    def test_excluded_exclude(self):
+        rule = {"ref": "r1", "octorules": {"excluded": ["cf-staging"]}}
+        assert _rule_matches_target(rule, "cf-prod") is True
+        assert _rule_matches_target(rule, "cf-staging") is False
+
+    def test_excluded_empty_list(self):
+        """Empty excluded list excludes nothing."""
+        rule = {"ref": "r1", "octorules": {"excluded": []}}
+        assert _rule_matches_target(rule, "anything") is True
+
+    def test_no_targets_or_excluded(self):
+        rule = {"ref": "r1", "octorules": {"ignored": False}}
+        assert _rule_matches_target(rule, "cloudflare") is True
+
+    def test_targets_not_list_raises(self):
+        rule = {"ref": "r1", "octorules": {"included": "cloudflare"}}
+        with pytest.raises(RuleValidationError, match="must be a list"):
+            _rule_matches_target(rule, "cloudflare")
+
+    def test_excluded_not_list_raises(self):
+        rule = {"ref": "r1", "octorules": {"excluded": "staging"}}
+        with pytest.raises(RuleValidationError, match="must be a list"):
+            _rule_matches_target(rule, "staging")
+
+
+class TestFilterByTarget:
+    def test_filters_rules_by_target(self):
+        desired = {
+            "waf_custom_rules": [
+                {"ref": "both", "expression": "true"},
+                {"ref": "cf-only", "expression": "true", "octorules": {"included": ["cloudflare"]}},
+                {"ref": "aws-only", "expression": "true", "octorules": {"included": ["aws"]}},
+            ],
+        }
+        result = filter_by_target(desired, "cloudflare")
+        refs = [r["ref"] for r in result["waf_custom_rules"]]
+        assert refs == ["both", "cf-only"]
+
+    def test_non_list_values_pass_through(self):
+        desired = {"some_setting": "value", "waf_custom_rules": []}
+        result = filter_by_target(desired, "cloudflare")
+        assert result["some_setting"] == "value"
+
+    def test_excluded_filter(self):
+        desired = {
+            "waf_custom_rules": [
+                {"ref": "r1", "expression": "true", "octorules": {"excluded": ["staging"]}},
+            ],
+        }
+        assert len(filter_by_target(desired, "prod")["waf_custom_rules"]) == 1
+        assert len(filter_by_target(desired, "staging")["waf_custom_rules"]) == 0
+
+    def test_empty_phase_after_filtering(self):
+        desired = {
+            "waf_custom_rules": [
+                {"ref": "r1", "expression": "true", "octorules": {"included": ["aws"]}},
+            ],
+        }
+        result = filter_by_target(desired, "cloudflare")
+        assert result["waf_custom_rules"] == []
+
+
+class TestTargetsExcludedMutualExclusion:
+    def test_both_targets_and_excluded_raises(self):
+        rules = [
+            {
+                "ref": "bad",
+                "expression": "true",
+                "octorules": {"included": ["a"], "excluded": ["b"]},
+            }
+        ]
+        with pytest.raises(RuleValidationError, match="mutually exclusive"):
+            validate_rules(rules, WAF_PHASE)
+
+    def test_targets_only_ok(self):
+        rules = [{"ref": "ok", "expression": "true", "octorules": {"included": ["cloudflare"]}}]
+        validate_rules(rules, WAF_PHASE)  # should not raise
+
+    def test_excluded_only_ok(self):
+        rules = [{"ref": "ok", "expression": "true", "octorules": {"excluded": ["staging"]}}]
+        validate_rules(rules, WAF_PHASE)  # should not raise
+
+    def test_empty_targets_plus_excluded_raises(self):
+        """Even targets: [] + excluded: [...] is mutually exclusive (presence, not truthiness)."""
+        rules = [
+            {
+                "ref": "bad",
+                "expression": "true",
+                "octorules": {"included": [], "excluded": ["b"]},
+            }
+        ]
+        with pytest.raises(RuleValidationError, match="mutually exclusive"):
+            validate_rules(rules, WAF_PHASE)
+
+    def test_targets_plus_empty_excluded_raises(self):
+        rules = [
+            {
+                "ref": "bad",
+                "expression": "true",
+                "octorules": {"included": ["a"], "excluded": []},
+            }
+        ]
+        with pytest.raises(RuleValidationError, match="mutually exclusive"):
+            validate_rules(rules, WAF_PHASE)
+
+    def test_custom_ruleset_mutual_exclusion(self):
+        """validate_custom_ruleset also catches targets+excluded."""
+        entry = {
+            "id": "rs-1",
+            "name": "test",
+            "phase": "http_request_firewall_custom",
+            "rules": [
+                {
+                    "ref": "bad",
+                    "expression": "true",
+                    "action": "block",
+                    "octorules": {"included": ["a"], "excluded": ["b"]},
+                }
+            ],
+        }
+        with pytest.raises(RuleValidationError, match="mutually exclusive"):
+            validate_custom_ruleset(entry, 0)

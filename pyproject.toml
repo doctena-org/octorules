@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.15.1"
-description = "Manage Cloudflare Rules as IaC"
+version = "0.16.0"
+description = "WAF rules as code — manage rules across providers declaratively"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 readme = "README.md"
@@ -13,7 +13,7 @@ authors = [
     { name = "Martin Simon" },
     { name = "Doctena S.A." },
 ]
-keywords = ["cloudflare", "rules", "iac", "infrastructure-as-code", "octodns"]
+keywords = ["waf", "rules", "iac", "infrastructure-as-code", "octodns"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -24,11 +24,10 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
-    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: System :: Networking :: Firewalls",
     "Topic :: System :: Systems Administration",
 ]
 dependencies = [
-    "cloudflare~=4.3",
     "pyyaml~=6.0",
 ]
 
@@ -37,12 +36,16 @@ dependencies = [
 # Without it, expression validation uses a regex fallback that can only
 # extract field/function names, missing syntax errors, type mismatches,
 # and invalid operators that wirefilter catches.
+cloudflare = [
+    "octorules-cloudflare>=0.1",
+]
 wirefilter = [
     "octorules-wirefilter>=0.3.2,<1.0",
 ]
 dev = [
     "pytest>=7.0",
     "ruff>=0.4.0",
+    "yamllint>=1.35.0",
     "build",
 ]
 
@@ -54,11 +57,7 @@ Issues = "https://github.com/doctena-org/octorules/issues"
 [project.scripts]
 octorules = "octorules.cli:main"
 
-[tool.setuptools.package-data]
-"octorules.linter.schemas" = ["overlay.toml", "schemas.json"]
-
 [tool.setuptools.packages.find]
-where = ["src"]
 
 [tool.ruff]
 target-version = "py310"
