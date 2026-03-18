@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from octorules.cli import cmd_dump, cmd_plan, cmd_sync, cmd_validate
-from octorules.config import Config, ZoneConfig
+from octorules.config import Config, ProviderConfig, ZoneConfig
 from octorules.phases import get_phase
 from octorules.planner import ChangeType, RuleChange, ZonePlan
 from octorules.provider import Scope
@@ -22,11 +22,15 @@ def sample_config(tmp_path):
     rules_dir = tmp_path / "rules"
     rules_dir.mkdir()
     return Config(
-        token="test-token",
+        providers={"cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})},
         rules_dir=rules_dir,
         zones={
-            "example.com": ZoneConfig(name="example.com", zone_id="zone-abc", sources=["rules"]),
-            "other.com": ZoneConfig(name="other.com", zone_id="zone-def", sources=["rules"]),
+            "example.com": ZoneConfig(
+                name="example.com", zone_id="zone-abc", sources=["rules"], targets=["cloudflare"]
+            ),
+            "other.com": ZoneConfig(
+                name="other.com", zone_id="zone-def", sources=["rules"], targets=["cloudflare"]
+            ),
         },
     )
 
@@ -34,8 +38,8 @@ def sample_config(tmp_path):
 class TestPageShieldPoliciesCLI:
     """Tests for Page Shield policy integration in CLI."""
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_with_page_shield_policies(self, mock_provider_cls, sample_config, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_plan_with_page_shield_policies(self, mock_init_provs, sample_config, caplog):
         """Plan should detect Page Shield policy additions."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -46,33 +50,38 @@ class TestPageShieldPoliciesCLI:
             "    enabled: true\n"
             "    value: \"script-src 'self'\"\n"
         )
-        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value.get_all_page_shield_policies.return_value = []
+        mock_prov = MagicMock()
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_page_shield_policies.return_value = []
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
         assert "CSP on all" in caplog.text or True  # plan output goes to stdout
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_plan_no_page_shield_key_skips(self, mock_provider_cls, sample_config):
+    @patch("octorules.commands._init_providers")
+    def test_plan_no_page_shield_key_skips(self, mock_init_provs, sample_config):
         """When page_shield_policies key is absent, skip policy planning."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
+        mock_prov = MagicMock()
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
         # get_all_page_shield_policies should NOT be called
-        mock_provider_cls.return_value.get_all_page_shield_policies.assert_not_called()
+        mock_prov.get_all_page_shield_policies.assert_not_called()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_includes_page_shield_policies(self, mock_provider_cls, sample_config):
+    @patch("octorules.commands._init_providers")
+    def test_dump_includes_page_shield_policies(self, mock_init_provs, sample_config):
         """Dump should fetch and include Page Shield policies."""
         import yaml
 
-        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value.get_all_page_shield_policies.return_value = [
+        mock_prov = MagicMock()
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_page_shield_policies.return_value = [
             {
                 "description": "CSP on all",
                 "action": "allow",
@@ -81,6 +90,7 @@ class TestPageShieldPoliciesCLI:
                 "value": "script-src 'self'",
             }
         ]
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         result = cmd_dump(sample_config, ["example.com"], None)
         assert result == 0
@@ -89,13 +99,15 @@ class TestPageShieldPoliciesCLI:
         assert "page_shield_policies" in data
         assert data["page_shield_policies"][0]["description"] == "CSP on all"
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_dump_no_policies_no_section(self, mock_provider_cls, sample_config):
+    @patch("octorules.commands._init_providers")
+    def test_dump_no_policies_no_section(self, mock_init_provs, sample_config):
         """Dump with no policies should not include page_shield_policies key."""
         import yaml
 
-        mock_provider_cls.return_value.get_all_phase_rules.return_value = {}
-        mock_provider_cls.return_value.get_all_page_shield_policies.return_value = []
+        mock_prov = MagicMock()
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_page_shield_policies.return_value = []
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         result = cmd_dump(sample_config, ["example.com"], None)
         assert result == 0
@@ -147,8 +159,8 @@ class TestPageShieldPoliciesCLI:
             result = cmd_validate(sample_config, ["example.com"])
         assert result == 1
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_creates_page_shield_policy(self, mock_provider_cls, sample_config, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_creates_page_shield_policy(self, mock_init_provs, sample_config, caplog):
         """Sync should create new Page Shield policies."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -159,23 +171,24 @@ class TestPageShieldPoliciesCLI:
             "    enabled: true\n"
             "    value: \"script-src 'self'\"\n"
         )
-        mock_prov = mock_provider_cls.return_value
+        mock_prov = MagicMock()
         mock_prov.get_all_phase_rules.return_value = {}
         mock_prov.get_all_page_shield_policies.return_value = []
         mock_prov.create_page_shield_policy.return_value = {"id": "new-policy-id"}
         mock_prov.max_workers = 1
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
         mock_prov.create_page_shield_policy.assert_called_once()
 
-    @patch("octorules.commands.CloudflareProvider")
-    def test_sync_deletes_page_shield_policy(self, mock_provider_cls, sample_config, caplog):
+    @patch("octorules.commands._init_providers")
+    def test_sync_deletes_page_shield_policy(self, mock_init_provs, sample_config, caplog):
         """Sync should delete policies in CF but not in YAML."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("page_shield_policies: []\n")
-        mock_prov = mock_provider_cls.return_value
+        mock_prov = MagicMock()
         mock_prov.get_all_phase_rules.return_value = {}
         mock_prov.get_all_page_shield_policies.return_value = [
             {
@@ -188,6 +201,7 @@ class TestPageShieldPoliciesCLI:
             }
         ]
         mock_prov.max_workers = 1
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])

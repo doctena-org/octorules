@@ -7,12 +7,18 @@ import pytest
 from octorules.config import (
     Config,
     ConfigError,
+    ContextDict,
+    ProviderConfig,
     ZoneConfig,
+    _ctx,
+    _resolve_deep,
+    _resolve_secret,
     resolve_value,
     resolve_zone_ids,
     slugify,
 )
 from octorules.plan_output import PlanHtml, PlanJson, PlanText
+from octorules.secret import BaseSecrets
 
 
 def _cfg(extra_cf="", extra_zone="", zone_name="example.com"):
@@ -50,7 +56,7 @@ class TestResolveValue:
 class TestConfig:
     def test_load_minimal(self, tmp_config):
         config = Config.from_file(tmp_config)
-        assert config.token == "test-token-123"
+        assert config.providers["cloudflare"].kwargs["token"] == "test-token-123"
         assert config.rules_dir == (tmp_config.parent / "rules").resolve()
         assert "example.com" in config.zones
         assert config.zones["example.com"].zone_id is None
@@ -64,17 +70,18 @@ class TestConfig:
             "zones:\n  example.com:\n    sources:\n      - rules\n"
         )
         config = Config.from_file(config_file)
-        assert config.token == "env-token-value"
+        assert config.providers["cloudflare"].kwargs["token"] == "env-token-value"
 
     def test_missing_file(self, tmp_path):
         with pytest.raises(ConfigError, match="not found"):
             Config.from_file(tmp_path / "nope.yaml")
 
-    def test_missing_token(self, tmp_path):
+    def test_omitted_token_not_in_kwargs(self, tmp_path):
+        """Token is optional — providers that don't need it can omit it."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text("providers:\n  cloudflare:\n    other: value\n")
-        with pytest.raises(ConfigError, match="token"):
-            Config.from_file(config_file)
+        config = Config.from_file(config_file)
+        assert "token" not in config.providers["cloudflare"].kwargs
 
     def test_zone_id_always_none_from_config(self, tmp_path):
         """Zone from config always has zone_id=None (resolved at runtime)."""
@@ -147,7 +154,7 @@ class TestConfig:
         with pytest.raises(ConfigError, match="'providers' must be a mapping"):
             Config.from_file(config_file)
 
-    def test_cloudflare_not_a_mapping(self, tmp_path):
+    def test_provider_not_a_mapping(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text("providers:\n  cloudflare: just-a-string\n")
         with pytest.raises(ConfigError, match="'providers.cloudflare' must be a mapping"):
@@ -394,7 +401,7 @@ class TestIncludeDirective:
     def test_backward_compatible_no_includes(self, tmp_config):
         """Config without any includes still works."""
         config = Config.from_file(tmp_config)
-        assert config.token == "test-token-123"
+        assert config.providers["cloudflare"].kwargs["token"] == "test-token-123"
         assert "example.com" in config.zones
 
     def test_rules_file_with_include(self, tmp_path):
@@ -456,7 +463,7 @@ class TestPathTraversal:
         """Zone name with ../ should raise ConfigError."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         with pytest.raises(ConfigError, match="resolves outside rules directory"):
             config.load_zone_rules("../../etc/passwd")
 
@@ -464,7 +471,7 @@ class TestPathTraversal:
         """Zone name with a single ../ escape should raise ConfigError."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         with pytest.raises(ConfigError, match="resolves outside rules directory"):
             config.load_zone_rules("../secret")
 
@@ -472,7 +479,7 @@ class TestPathTraversal:
         """Zone name that is an absolute path should raise ConfigError."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         with pytest.raises(ConfigError, match="resolves outside rules directory"):
             config.load_zone_rules("/etc/passwd")
 
@@ -480,7 +487,7 @@ class TestPathTraversal:
         """Zone name with embedded ../ segments should raise ConfigError."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         with pytest.raises(ConfigError, match="resolves outside rules directory"):
             config.load_zone_rules("subdir/../../etc/passwd")
 
@@ -488,7 +495,7 @@ class TestPathTraversal:
         """Zone name that stays within rules_dir should not raise."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         # Normal zone name — no file exists, so returns empty dict (no error)
         result = config.load_zone_rules("example.com")
         assert result == {}
@@ -499,7 +506,7 @@ class TestPathTraversal:
         """Account name with traversal chars is sanitized by slugify."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         # slugify("../../etc/passwd") → "etc-passwd", which is safe
         # Should not raise — just returns empty (no file found)
         result = config.load_account_rules("../../etc/passwd")
@@ -509,7 +516,7 @@ class TestPathTraversal:
         """Account name with ../ is sanitized to a safe slug by slugify."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         # slugify("../secret") → "secret", which is safe within rules_dir
         result = config.load_account_rules("../secret")
         assert result == {}
@@ -518,7 +525,7 @@ class TestPathTraversal:
         """Account name that looks like an absolute path is sanitized by slugify."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         # slugify("/etc/passwd") → "etc-passwd", which is safe
         result = config.load_account_rules("/etc/passwd")
         assert result == {}
@@ -534,7 +541,7 @@ class TestPathTraversal:
         ]
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        config = Config(token="tok", rules_dir=rules_dir, zones={})
+        config = Config(rules_dir=rules_dir, zones={})
         for name in dangerous_names:
             slug = slugify(name)
             # Slug must not contain path separators or dot-dot sequences
@@ -662,89 +669,35 @@ class TestMaxWorkers:
 
 
 class TestMaxRetries:
-    """Tests for providers.cloudflare.max_retries config parsing."""
+    """Tests for provider max_retries config parsing."""
 
-    def test_default_max_retries_is_2(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg())
-        config = Config.from_file(config_file)
-        assert config.max_retries == 2
-
-    def test_parse_max_retries(self, tmp_path):
+    def test_max_retries_forwarded_to_kwargs(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg(extra_cf="    max_retries: 5\n"))
         config = Config.from_file(config_file)
-        assert config.max_retries == 5
+        assert config.providers["cloudflare"].kwargs["max_retries"] == 5
 
-    def test_max_retries_zero_allowed(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    max_retries: 0\n"))
-        config = Config.from_file(config_file)
-        assert config.max_retries == 0
-
-    def test_negative_max_retries_raises(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    max_retries: -1\n"))
-        with pytest.raises(ConfigError, match="max_retries"):
-            Config.from_file(config_file)
-
-    def test_max_retries_upper_bound(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    max_retries: 10\n"))
-        config = Config.from_file(config_file)
-        assert config.max_retries == 10
-
-    def test_max_retries_above_upper_bound_raises(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    max_retries: 11\n"))
-        with pytest.raises(ConfigError, match="max_retries"):
-            Config.from_file(config_file)
-
-
-class TestTimeout:
-    """Tests for providers.cloudflare.timeout config parsing."""
-
-    def test_default_timeout_is_none(self, tmp_path):
+    def test_max_retries_omitted_not_in_kwargs(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
         config = Config.from_file(config_file)
-        assert config.timeout is None
+        assert "max_retries" not in config.providers["cloudflare"].kwargs
 
-    def test_parse_timeout(self, tmp_path):
+
+class TestTimeout:
+    """Tests for provider timeout config parsing."""
+
+    def test_timeout_forwarded_to_kwargs(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg(extra_cf="    timeout: 30\n"))
         config = Config.from_file(config_file)
-        assert config.timeout == 30.0
+        assert config.providers["cloudflare"].kwargs["timeout"] == 30
 
-    def test_parse_timeout_float(self, tmp_path):
+    def test_timeout_omitted_not_in_kwargs(self, tmp_path):
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    timeout: 10.5\n"))
+        config_file.write_text(_cfg())
         config = Config.from_file(config_file)
-        assert config.timeout == 10.5
-
-    def test_zero_timeout_raises(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    timeout: 0\n"))
-        with pytest.raises(ConfigError, match="timeout"):
-            Config.from_file(config_file)
-
-    def test_negative_timeout_raises(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    timeout: -5\n"))
-        with pytest.raises(ConfigError, match="timeout"):
-            Config.from_file(config_file)
-
-    def test_timeout_upper_bound(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    timeout: 300\n"))
-        config = Config.from_file(config_file)
-        assert config.timeout == 300.0
-
-    def test_timeout_above_upper_bound_raises(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_cf="    timeout: 301\n"))
-        with pytest.raises(ConfigError, match="timeout"):
-            Config.from_file(config_file)
+        assert "timeout" not in config.providers["cloudflare"].kwargs
 
 
 class TestAllowUnmanaged:
@@ -890,7 +843,9 @@ class TestSafetyThresholds:
         """Non-mapping safety value should raise ConfigError."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg(extra_cf="    safety: true\n"))
-        with pytest.raises(ConfigError, match="'providers.cloudflare.safety' must be a mapping"):
+        with pytest.raises(
+            ConfigError, match="'providers\\.cloudflare\\.safety' must be a mapping"
+        ):
             Config.from_file(config_file)
 
     def test_per_zone_safety_non_dict_raises(self, tmp_path):
@@ -906,6 +861,48 @@ class TestSafetyThresholds:
         config_file.write_text(_cfg(extra_cf="    safety:\n"))
         config = Config.from_file(config_file)
         assert config.zones["example.com"].delete_threshold == 30.0
+
+    def test_provider_non_numeric_delete_threshold_raises(self, tmp_path):
+        """Non-numeric delete_threshold at provider level should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    safety:\n      delete_threshold: oops\n"))
+        with pytest.raises(ConfigError, match="delete_threshold.*must be numeric.*oops"):
+            Config.from_file(config_file)
+
+    def test_provider_non_numeric_update_threshold_raises(self, tmp_path):
+        """Non-numeric update_threshold at provider level should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    safety:\n      update_threshold: bad\n"))
+        with pytest.raises(ConfigError, match="update_threshold.*must be numeric.*bad"):
+            Config.from_file(config_file)
+
+    def test_provider_non_integer_min_existing_raises(self, tmp_path):
+        """Non-integer min_existing at provider level should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    safety:\n      min_existing: nope\n"))
+        with pytest.raises(ConfigError, match="min_existing.*must be an integer.*nope"):
+            Config.from_file(config_file)
+
+    def test_zone_non_numeric_delete_threshold_raises(self, tmp_path):
+        """Non-numeric delete_threshold at zone level should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    safety:\n      delete_threshold: oops\n"))
+        with pytest.raises(ConfigError, match="delete_threshold.*must be numeric.*oops"):
+            Config.from_file(config_file)
+
+    def test_zone_non_numeric_update_threshold_raises(self, tmp_path):
+        """Non-numeric update_threshold at zone level should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    safety:\n      update_threshold: bad\n"))
+        with pytest.raises(ConfigError, match="update_threshold.*must be numeric.*bad"):
+            Config.from_file(config_file)
+
+    def test_zone_non_integer_min_existing_raises(self, tmp_path):
+        """Non-integer min_existing at zone level should raise ConfigError."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    safety:\n      min_existing: nope\n"))
+        with pytest.raises(ConfigError, match="min_existing.*must be an integer.*nope"):
+            Config.from_file(config_file)
 
 
 class TestManagerSection:
@@ -929,7 +926,6 @@ class TestResolveZoneIds:
 
     def test_resolves_all_zones(self):
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             zones={
                 "a.com": ZoneConfig(name="a.com"),
@@ -942,7 +938,6 @@ class TestResolveZoneIds:
 
     def test_propagates_errors(self):
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             zones={"bad.com": ZoneConfig(name="bad.com")},
         )
@@ -956,7 +951,6 @@ class TestResolveZoneIds:
     def test_skips_already_resolved(self):
         """resolve_zone_ids skips zones that already have a zone_id."""
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             zones={"x.com": ZoneConfig(name="x.com", zone_id="existing")},
         )
@@ -968,7 +962,6 @@ class TestResolveZoneIds:
     def test_parallel_resolves_all_zones(self):
         """With max_workers > 1, all zones should still be resolved correctly."""
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             zones={
                 "a.com": ZoneConfig(name="a.com"),
@@ -984,7 +977,6 @@ class TestResolveZoneIds:
     def test_parallel_propagates_errors(self):
         """Parallel resolution should propagate errors from resolve_fn."""
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             zones={
                 "a.com": ZoneConfig(name="a.com"),
@@ -1011,7 +1003,6 @@ class TestResolveZoneIds:
             return f"id-for-{name}"
 
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             zones={
                 "a.com": ZoneConfig(name="a.com"),
@@ -1026,7 +1017,6 @@ class TestResolveZoneIds:
     def test_uses_config_max_workers_by_default(self):
         """When max_workers is not passed, should use config.max_workers."""
         config = Config(
-            token="tok",
             rules_dir="/tmp/rules",
             max_workers=4,
             zones={
@@ -1329,5 +1319,844 @@ class TestListsDir:
     def test_lists_dir_post_init_default(self, tmp_path):
         """Config created directly (not via from_file) defaults lists_dir."""
         rules_dir = tmp_path / "rules"
-        config = Config(token="tok", rules_dir=rules_dir)
+        config = Config(rules_dir=rules_dir)
         assert config.lists_dir == rules_dir / "custom_lists"
+
+
+class TestMultiProvider:
+    """Tests for multi-provider configuration."""
+
+    def test_two_providers_parsed(self, tmp_path):
+        """Config with two providers should parse both into config.providers."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  aws:\n"
+            "    region: us-west-2\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - cloudflare\n"
+            "  my-web-acl:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - aws\n"
+        )
+        config = Config.from_file(config_file)
+        assert "cloudflare" in config.providers
+        assert "aws" in config.providers
+        assert config.providers["cloudflare"].kwargs["token"] == "tok"
+        assert config.providers["aws"].kwargs["region"] == "us-west-2"
+        assert config.providers["cloudflare"].name == "cloudflare"
+        assert config.providers["aws"].name == "aws"
+
+    def test_multi_provider_requires_targets(self, tmp_path):
+        """With multiple providers, zone without targets raises ConfigError."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  aws:\n"
+            "    region: us-west-2\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        with pytest.raises(ConfigError, match="must specify 'targets'"):
+            Config.from_file(config_file)
+
+    def test_multi_provider_targets_auto_assign(self, tmp_path):
+        """With one provider, zone without targets auto-assigns it."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.zones["example.com"].targets == ["cloudflare"]
+
+    def test_multi_provider_targets_explicit(self, tmp_path):
+        """With two providers, zone with explicit targets: [cloudflare] is parsed."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  aws:\n"
+            "    region: us-west-2\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - cloudflare\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.zones["example.com"].targets == ["cloudflare"]
+
+    def test_multi_target_accepted(self, tmp_path):
+        """Zone with multiple targets is accepted (same provider class check is at init time)."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  aws:\n"
+            "    region: us-west-2\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - cloudflare\n"
+            "      - aws\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.zones["example.com"].targets == ["cloudflare", "aws"]
+
+    def test_multi_target_safety_from_first_target(self, tmp_path):
+        """Safety defaults come from the first target provider."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cf-prod:\n"
+            "    class: octorules_cloudflare.CloudflareProvider\n"
+            "    token: tok\n"
+            "    safety:\n"
+            "      delete_threshold: 10\n"
+            "  cf-staging:\n"
+            "    class: octorules_cloudflare.CloudflareProvider\n"
+            "    token: tok2\n"
+            "    safety:\n"
+            "      delete_threshold: 50\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - cf-prod\n"
+            "      - cf-staging\n"
+        )
+        config = Config.from_file(config_file)
+        # Safety defaults come from first target (cf-prod)
+        assert config.zones["example.com"].delete_threshold == 10.0
+
+    def test_unknown_target_rejected(self, tmp_path):
+        """Zone targeting an unknown provider raises ConfigError."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - unknown\n"
+        )
+        with pytest.raises(ConfigError, match="unknown provider 'unknown'"):
+            Config.from_file(config_file)
+
+    def test_targets_non_list_rejected(self, tmp_path):
+        """Zone with targets as a string (not list) raises ConfigError."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets: cloudflare\n"
+        )
+        with pytest.raises(ConfigError, match="targets.*must be a list"):
+            Config.from_file(config_file)
+
+    def test_safety_from_target_provider(self, tmp_path):
+        """Zone inherits safety defaults from its target provider."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "    safety:\n"
+            "      delete_threshold: 50\n"
+            "      update_threshold: 40\n"
+            "      min_existing: 5\n"
+            "  aws:\n"
+            "    region: us-west-2\n"
+            "    safety:\n"
+            "      delete_threshold: 20\n"
+            "      update_threshold: 10\n"
+            "      min_existing: 1\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - cloudflare\n"
+            "  my-web-acl:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - aws\n"
+        )
+        config = Config.from_file(config_file)
+        cf_zone = config.zones["example.com"]
+        assert cf_zone.delete_threshold == 50.0
+        assert cf_zone.update_threshold == 40.0
+        assert cf_zone.min_existing == 5
+
+        aws_zone = config.zones["my-web-acl"]
+        assert aws_zone.delete_threshold == 20.0
+        assert aws_zone.update_threshold == 10.0
+        assert aws_zone.min_existing == 1
+
+
+class TestResolveDeep:
+    """Tests for recursive env/ resolution in nested structures."""
+
+    def test_recursive_env_resolution(self, tmp_path, monkeypatch):
+        """Nested dict values with env/ prefixes are resolved recursively."""
+        monkeypatch.setenv("NESTED_SECRET", "resolved-secret")
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "    nested:\n"
+            "      inner: env/NESTED_SECRET\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["nested"]["inner"] == "resolved-secret"
+
+
+class TestProcessorConfig:
+    def test_processors_section_parsed(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "processors:\n"
+            "  my_proc:\n"
+            "    class: some.module.MyProcessor\n"
+            "    setting: value\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    processors:\n"
+            "      - my_proc\n"
+        )
+        config = Config.from_file(config_file)
+        assert "my_proc" in config.processors
+        assert config.processors["my_proc"].class_path == "some.module.MyProcessor"
+        assert config.processors["my_proc"].kwargs == {"setting": "value"}
+        assert config.zones["example.com"].processors == ["my_proc"]
+
+    def test_zone_processors_validated(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    processors:\n"
+            "      - nonexistent\n"
+        )
+        with pytest.raises(ConfigError, match="unknown processor"):
+            Config.from_file(config_file)
+
+    def test_zone_without_processors_ok(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.zones["example.com"].processors == []
+
+    def test_processor_env_resolution(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PROC_KEY", "secret")
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "processors:\n"
+            "  my_proc:\n"
+            "    class: some.module.MyProcessor\n"
+            "    api_key: env/PROC_KEY\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.processors["my_proc"].kwargs["api_key"] == "secret"
+
+    def test_processors_section_optional(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.processors == {}
+
+    def test_processor_requires_class(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "processors:\n"
+            "  my_proc:\n"
+            "    setting: value\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        with pytest.raises(ConfigError, match="missing required 'class'"):
+            Config.from_file(config_file)
+
+
+class TestZoneTemplates:
+    def test_wildcard_parsed_as_template(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  '*':\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - cloudflare\n"
+        )
+        config = Config.from_file(config_file)
+        assert "*" in config.zone_templates
+        assert "*" not in config.zones
+
+    def test_expand_templates_adds_matching_zones(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "discovered.com.yaml").write_text("redirect_rules: []\n")
+
+        config = Config(
+            rules_dir=rules_dir,
+            providers={"cloudflare": ProviderConfig(name="cloudflare")},
+            zone_templates={
+                "*": ZoneConfig(
+                    name="*",
+                    sources=["rules"],
+                    targets=["cloudflare"],
+                    delete_threshold=15.0,
+                ),
+            },
+        )
+        config.expand_templates({"cloudflare": ["discovered.com"]})
+        assert "discovered.com" in config.zones
+        assert config.zones["discovered.com"].targets == ["cloudflare"]
+        assert config.zones["discovered.com"].delete_threshold == 15.0
+
+    def test_expand_templates_skips_existing(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "explicit.com.yaml").write_text("redirect_rules: []\n")
+
+        config = Config(
+            rules_dir=rules_dir,
+            providers={"cloudflare": ProviderConfig(name="cloudflare")},
+            zones={
+                "explicit.com": ZoneConfig(name="explicit.com", targets=["cloudflare"]),
+            },
+            zone_templates={
+                "*": ZoneConfig(name="*", targets=["cloudflare"]),
+            },
+        )
+        config.expand_templates({"cloudflare": ["explicit.com"]})
+        # explicit wins, no duplicate
+        assert len([k for k in config.zones if k == "explicit.com"]) == 1
+
+    def test_expand_templates_skips_no_yaml(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        # No YAML file for this zone
+
+        config = Config(
+            rules_dir=rules_dir,
+            providers={"cloudflare": ProviderConfig(name="cloudflare")},
+            zone_templates={
+                "*": ZoneConfig(name="*", targets=["cloudflare"]),
+            },
+        )
+        config.expand_templates({"cloudflare": ["no-yaml.com"]})
+        assert "no-yaml.com" not in config.zones
+
+
+class TestSecretHandlers:
+    """Tests for pluggable secret handler resolution."""
+
+    def test_no_section_env_works(self, tmp_path, monkeypatch):
+        """Backward compat: env/ works without a secret_handlers section."""
+        monkeypatch.setenv("CF_TOKEN", "my-tok")
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: env/CF_TOKEN\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["token"] == "my-tok"
+
+    def test_custom_handler_from_config(self, tmp_path, monkeypatch):
+        """A handler declared in config resolves its prefix."""
+        monkeypatch.setenv("CF_TOKEN", "my-tok")
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers:\n"
+            "  custom:\n"
+            "    class: tests.test_config._StubSecrets\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: custom/ref123\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["token"] == "stub:ref123"
+
+    def test_handler_kwargs_resolved_via_env(self, tmp_path, monkeypatch):
+        """Handler kwargs bootstrap through the env handler."""
+        monkeypatch.setenv("HANDLER_URL", "https://vault.internal")
+        monkeypatch.setenv("CF_TOKEN", "my-tok")
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers:\n"
+            "  custom:\n"
+            "    class: tests.test_config._StubSecretsWithKwargs\n"
+            "    url: env/HANDLER_URL\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: custom/ref\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["token"] == "stub:ref:https://vault.internal"
+
+    def test_unknown_handler_passthrough(self, tmp_path):
+        """Unknown prefix returns the string unchanged."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "    path: ./rules/sub\n"
+            "    url: https://example.com/api\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["path"] == "./rules/sub"
+        assert config.providers["cloudflare"].kwargs["url"] == "https://example.com/api"
+
+    def test_missing_class_raises(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers:\n"
+            "  bad:\n"
+            "    url: https://vault\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        with pytest.raises(ConfigError, match="missing required 'class'"):
+            Config.from_file(config_file)
+
+    def test_not_a_mapping_raises(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers:\n"
+            "  bad: not-a-mapping\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        with pytest.raises(ConfigError, match="must be a mapping"):
+            Config.from_file(config_file)
+
+    def test_section_null_ok(self, tmp_path):
+        """secret_handlers: null is equivalent to absent."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers:\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["token"] == "tok"
+
+    def test_class_not_string_raises(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers:\n"
+            "  bad:\n"
+            "    class: 123\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        with pytest.raises(ConfigError, match="must be a string"):
+            Config.from_file(config_file)
+
+    def test_section_not_mapping_raises(self, tmp_path):
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "secret_handlers: [a, b]\n"
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        with pytest.raises(ConfigError, match="'secret_handlers' must be a mapping"):
+            Config.from_file(config_file)
+
+    def test_entry_point_discovery(self, tmp_path, monkeypatch):
+        """Entry-point secret handlers are discovered automatically."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: ep/ref42\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+
+        # Mock entry_points to return our stub
+        class FakeEP:
+            name = "ep"
+
+            def load(self):
+                return _StubSecrets
+
+        monkeypatch.setattr(
+            "importlib.metadata.entry_points",
+            lambda group: [FakeEP()] if group == "octorules.secret_handlers" else [],
+        )
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["token"] == "stub:ref42"
+
+    def test_resolve_secret_no_slash(self):
+        """Strings without / are returned unchanged."""
+        assert _resolve_secret("plain", {"env": None}, "") == "plain"
+
+    def test_resolve_deep_with_custom_handler(self):
+        """_resolve_deep resolves nested values via handlers."""
+        handler = _StubSecrets("custom")
+        handlers = {"custom": handler}
+        result = _resolve_deep(
+            {"a": "custom/x", "b": [1, "custom/y"], "c": "plain"},
+            handlers,
+            "root",
+        )
+        assert result == {"a": "stub:x", "b": [1, "stub:y"], "c": "plain"}
+
+
+# --- Stub handler classes for tests ---
+
+
+class _StubSecrets(BaseSecrets):
+    """Minimal stub that returns ``stub:{ref}``."""
+
+    def fetch(self, ref: str, source: str) -> str:
+        return f"stub:{ref}"
+
+
+class _StubSecretsWithKwargs(BaseSecrets):
+    """Stub that captures kwargs and includes them in the resolved value."""
+
+    def __init__(self, name: str, **kwargs: str):
+        super().__init__(name)
+        self.url = kwargs.get("url", "")
+
+    def fetch(self, ref: str, source: str) -> str:
+        return f"stub:{ref}:{self.url}"
+
+
+# --- ContextDict / YAML context tracking ---
+
+
+class TestContextDict:
+    def test_context_dict_preserves_data(self):
+        cd = ContextDict({"a": 1, "b": 2}, context="config.yaml:5")
+        assert cd["a"] == 1
+        assert cd["b"] == 2
+        assert cd.context == "config.yaml:5"
+
+    def test_context_dict_default_empty_context(self):
+        cd = ContextDict({"a": 1})
+        assert cd.context == ""
+
+    def test_ctx_with_context(self):
+        cd = ContextDict({"a": 1}, context="config.yaml:5")
+        assert _ctx(cd) == " (at config.yaml:5)"
+
+    def test_ctx_without_context(self):
+        assert _ctx({"a": 1}) == ""
+
+    def test_ctx_empty_context(self):
+        cd = ContextDict({"a": 1}, context="")
+        assert _ctx(cd) == ""
+
+
+class TestContextTracking:
+    """Verify file:line context appears in ConfigError messages from YAML parsing."""
+
+    def test_zone_error_has_line_number(self, tmp_path):
+        """Zone-level error includes file:line context."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources: not-a-list\n"
+        )
+        with pytest.raises(ConfigError, match=r"must be a list.*\(at config\.yaml:\d+\)"):
+            Config.from_file(config_file)
+
+    def test_provider_error_has_line_number(self, tmp_path):
+        """Provider section error includes file:line context."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare: not-a-mapping\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        with pytest.raises(ConfigError, match=r"must be a mapping"):
+            Config.from_file(config_file)
+
+    def test_processor_error_has_line_number(self, tmp_path):
+        """Processor section error includes file:line context."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "processors:\n"
+            "  my_proc:\n"
+            "    no_class_key: value\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        with pytest.raises(ConfigError, match=r"missing required 'class' key.*\(at config\.yaml"):
+            Config.from_file(config_file)
+
+    def test_include_file_context(self, tmp_path):
+        """Errors in !include'd files show the included filename."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        zone_file = tmp_path / "zone_cfg.yaml"
+        zone_file.write_text("sources: not-a-list\n")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com: !include zone_cfg.yaml\n"
+        )
+        with pytest.raises(ConfigError, match=r"must be a list.*\(at zone_cfg\.yaml:\d+\)"):
+            Config.from_file(config_file)
+
+    def test_nested_mapping_context(self, tmp_path):
+        """Nested mapping errors include context from the parent mapping."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    always_dry_run: yes_please\n"
+        )
+        with pytest.raises(
+            ConfigError, match=r"always_dry_run.*must be a boolean.*\(at config\.yaml:\d+\)"
+        ):
+            Config.from_file(config_file)
+
+    def test_zone_not_mapping_has_context(self, tmp_path):
+        """Zone that is a scalar (not mapping) still reports context."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com: just-a-string\n"
+        )
+        with pytest.raises(ConfigError, match=r"must be a mapping"):
+            Config.from_file(config_file)
+
+    def test_no_context_on_plain_dict(self):
+        """_ctx on a plain dict returns empty string — no crash."""
+        assert _ctx({"foo": 1}) == ""
+
+    def test_yaml_loader_produces_context_dicts(self, tmp_path):
+        """YAML loader wraps mappings in ContextDict with file:line."""
+        from octorules.config import _yaml_load
+
+        yaml_file = tmp_path / "test.yaml"
+        yaml_file.write_text("top:\n  nested:\n    key: value\n")
+        result = _yaml_load(yaml_file)
+        assert isinstance(result, ContextDict)
+        assert "test.yaml:1" in result.context
+        nested = result["top"]
+        assert isinstance(nested, ContextDict)
+        assert "test.yaml:2" in nested.context

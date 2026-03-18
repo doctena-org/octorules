@@ -309,8 +309,8 @@ class TestCFApiResilience:
         assert "logging" not in rule
         assert rule["ref"] == "my-rule"
 
-    def test_unknown_cf_phase_skipped_in_dump(self, tmp_path):
-        """New CF phases not in PHASE_BY_CF are silently skipped during dump."""
+    def test_unknown_provider_id_skipped_in_dump(self, tmp_path):
+        """New provider phases not in PHASE_BY_PROVIDER_ID are silently skipped during dump."""
         rules = {
             "http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
@@ -322,7 +322,7 @@ class TestCFApiResilience:
         result = dump_zone_rules("example.com", rules, tmp_path)
         data = yaml.safe_load(result.read_text())
         assert "redirect_rules" in data
-        assert "new_future_phase" not in data  # Not in PHASE_BY_CF, so skipped
+        assert "new_future_phase" not in data  # Not in PHASE_BY_PROVIDER_ID, so skipped
         assert len(data) == 1
 
     def test_all_unknown_phases_results_in_empty_dump(self, tmp_path):

@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: Release
 
 on:
   push:
@@ -18,12 +18,14 @@ jobs:
   publish:
     needs: [lint, test]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: pypi
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          cache: pip
       - run: pip install build
       - run: python -m build
       - name: Publish to PyPI

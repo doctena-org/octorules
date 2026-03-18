@@ -1,24 +1,21 @@
-"""Export existing Cloudflare rules to YAML files."""
+"""Export existing provider rules to YAML files."""
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 import yaml
 
 from octorules.phases import (
-    CF_API_FIELDS,
-    LIST_ITEM_API_FIELDS,
-    PAGE_SHIELD_POLICY_API_FIELDS,
-    PHASE_BY_CF,
+    PHASE_BY_PROVIDER_ID,
+    get_api_fields,
 )
 
 # Maximum YAML width — effectively disables line wrapping for expressions.
 _YAML_NO_WRAP_WIDTH = 2147483647
 
-log = logging.getLogger("octorules")
+log = logging.getLogger(__name__)
 
 
 class _LiteralStr(str):
@@ -86,12 +83,12 @@ def _write_list_file(output_dir: Path, lists_dir: Path, list_name: str, entry: d
     except OSError as e:
         log.error("Failed to write list file %s: %s", file_path, e)
         return None
-    return os.path.relpath(file_path, output_dir)
+    return str(Path(file_path).relative_to(output_dir))
 
 
 def dump_zone_rules(
     zone_name: str,
-    rules_by_cf_phase: dict[str, list[dict]],
+    rules_by_provider_id: dict[str, list[dict]],
     output_dir: Path,
     custom_rulesets: dict[str, dict] | None = None,
     lists: dict[str, dict] | None = None,
@@ -107,10 +104,10 @@ def dump_zone_rules(
         lists_dir = output_dir / "custom_lists"
     output: dict[str, list[dict]] = {}
 
-    for cf_phase, rules in rules_by_cf_phase.items():
-        if cf_phase not in PHASE_BY_CF:
+    for provider_id, rules in rules_by_provider_id.items():
+        if provider_id not in PHASE_BY_PROVIDER_ID:
             continue
-        phase = PHASE_BY_CF[cf_phase]
+        phase = PHASE_BY_PROVIDER_ID[provider_id]
         cleaned_rules = [_clean_rule(rule, phase.default_action) for rule in rules]
         if cleaned_rules:
             output[phase.friendly_name] = cleaned_rules
@@ -157,10 +154,11 @@ def dump_zone_rules(
         from octorules.expression import format_csp_value
 
         policies_list = []
+        psp_api_fields = get_api_fields("page_shield_policy")
         for policy in sorted(page_shield_policies, key=lambda p: p.get("description", "")):
             cleaned = {}
             for k, v in policy.items():
-                if k in PAGE_SHIELD_POLICY_API_FIELDS:
+                if k in psp_api_fields:
                     continue
                 if k == "value" and isinstance(v, str) and len(v) > 80:
                     cleaned[k] = _LiteralStr(_strip_trailing_whitespace(format_csp_value(v)))
@@ -251,9 +249,10 @@ def _ensure_ref(rule: dict) -> dict:
 
 def _clean_rule(rule: dict, default_action: str | None) -> dict:
     """Remove API-only fields and optionally the action if it matches the default."""
+    rule_api_fields = get_api_fields("rule")
     cleaned = {}
     for k, v in rule.items():
-        if k in CF_API_FIELDS:
+        if k in rule_api_fields:
             continue
         # Skip action if it matches the phase default
         if k == "action" and default_action and v == default_action:
@@ -271,4 +270,5 @@ def _clean_list_item(item: dict) -> dict:
     """Remove API-only fields from a list item and apply _literalize."""
     if not isinstance(item, dict):
         return {}
-    return {k: _literalize(v) for k, v in item.items() if k not in LIST_ITEM_API_FIELDS}
+    list_item_api_fields = get_api_fields("list_item")
+    return {k: _literalize(v) for k, v in item.items() if k not in list_item_api_fields}
