@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-import functools
 import logging
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
 
 from octorules.linter.suppressions import is_suppressed
-from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME
 
-log = logging.getLogger("octorules.linter")
+log = logging.getLogger(__name__)
 
 # Expressions that are always true or always false (shared by yaml_validator and page_shield_linter)
 ALWAYS_TRUE_EXPRESSIONS = frozenset({"true", "(true)", "((true))"})
@@ -61,7 +59,7 @@ class Severity(IntEnum):
 class LintResult:
     """A single lint finding."""
 
-    rule_id: str  # e.g. "M001", "C003"
+    rule_id: str  # e.g. "CF003", "CF203"
     severity: Severity
     message: str
     phase: str = ""  # friendly phase name, empty for file-level
@@ -129,8 +127,10 @@ def check_catch_all(
     ctx: LintContext,
     *,
     entity: str = "rule",
+    always_true_id: str = "M013",
+    always_false_id: str = "M014",
 ) -> None:
-    """M013/M014: detect always-true / always-false expressions.
+    """Detect always-true / always-false expressions.
 
     Args:
         expr: Raw expression string (must be a non-empty str).
@@ -138,6 +138,8 @@ def check_catch_all(
         ref: Rule ref or policy description label.
         ctx: Lint context to add results to.
         entity: "rule" or "policy" — used in the message text.
+        always_true_id: Rule ID for the always-true diagnostic.
+        always_false_id: Rule ID for the always-false diagnostic.
     """
     from octorules.expression import normalize_expression
 
@@ -145,7 +147,7 @@ def check_catch_all(
     if is_always_true(normalized):
         ctx.add(
             LintResult(
-                rule_id="M013",
+                rule_id=always_true_id,
                 severity=Severity.WARNING,
                 message=f"Expression is always true — this is a catch-all {entity}",
                 phase=phase_name,
@@ -157,7 +159,7 @@ def check_catch_all(
     elif is_always_false(normalized):
         ctx.add(
             LintResult(
-                rule_id="M014",
+                rule_id=always_false_id,
                 severity=Severity.WARNING,
                 message=f"Expression is always false — this {entity} will never match",
                 phase=phase_name,
@@ -168,20 +170,14 @@ def check_catch_all(
         )
 
 
-@functools.lru_cache(maxsize=1)
 def get_known_rule_ids() -> frozenset[str]:
-    """Return the set of all known lint rule IDs (cached)."""
-    from octorules.linter.action_validator import RULE_IDS as _av
-    from octorules.linter.ast_linter import RULE_IDS as _al
-    from octorules.linter.cross_rule_linter import RULE_IDS as _cr
-    from octorules.linter.custom_ruleset_linter import RULE_IDS as _crl
-    from octorules.linter.list_linter import RULE_IDS as _ll
-    from octorules.linter.page_shield_linter import RULE_IDS as _psl
-    from octorules.linter.phase_linter import RULE_IDS as _pl
-    from octorules.linter.plan_linter import RULE_IDS as _pll
-    from octorules.linter.yaml_validator import RULE_IDS as _yv
+    """Return the union of all rule IDs from registered lint plugins."""
+    from octorules.linter.plugin import get_registered_plugins
 
-    return _av | _al | _cr | _crl | _ll | _psl | _pl | _pll | _yv
+    ids: set[str] = set()
+    for plugin in get_registered_plugins():
+        ids |= plugin.rule_ids
+    return frozenset(ids)
 
 
 def lint_zone_file(
@@ -197,22 +193,18 @@ def lint_zone_file(
 ) -> LintContext:
     """Run all lint checks on a zone rules file.
 
-    Runs four stages: YAML structure → per-rule checks (actions, expressions,
-    phase restrictions) → plan-tier limits → cross-rule analysis.  When the
-    optional ``octorules-wirefilter`` package is installed, expression checks
-    use Cloudflare's actual wirefilter parser; otherwise a regex fallback
-    provides best-effort field/operator extraction (fewer lint rules fire).
+    Creates a ``LintContext`` and dispatches to all registered lint plugins.
+    Each plugin's ``lint_fn(rules_data, ctx)`` mutates the context directly.
 
-    Top-level keys ``custom_rulesets`` and ``page_shield_policies`` in
-    *rules_data* are linted alongside phase sections.
+    When no plugins are registered (i.e. no provider packages installed),
+    returns an empty context.
 
     Args:
         rules_data: Parsed YAML data — phase friendly names as keys mapping
-            to rule lists, plus optional ``custom_rulesets`` and
-            ``page_shield_policies`` keys.
+            to rule lists, plus optional provider-specific keys.
         file_path: Path to the source file (for reporting).
         zone_name: Zone name (for reporting).
-        plan_tier: Cloudflare plan tier for entitlement checks.
+        plan_tier: Plan tier for entitlement checks.
         severity_filter: Minimum severity to report.
         phase_filter: Only lint these phases (friendly names).
         rule_filter: Only check these rule IDs.
@@ -222,12 +214,7 @@ def lint_zone_file(
     Returns:
         LintContext with accumulated ``results`` (list of ``LintResult``).
     """
-    from octorules.linter.action_validator import lint_actions
-    from octorules.linter.ast_linter import lint_expressions
-    from octorules.linter.cross_rule_linter import lint_cross_rules
-    from octorules.linter.phase_linter import lint_phase_restrictions
-    from octorules.linter.plan_linter import lint_plan_tier
-    from octorules.linter.yaml_validator import lint_yaml_structure
+    from octorules.linter.plugin import get_registered_plugins
 
     ctx = LintContext(
         file_path=file_path,
@@ -239,66 +226,7 @@ def lint_zone_file(
         suppressions=suppressions or {},
     )
 
-    # Stage 1: YAML structure validation
-    lint_yaml_structure(rules_data, ctx)
-
-    # Stage 2: Per-phase, per-rule checks
-    for phase_name, rules in rules_data.items():
-        if phase_name in KNOWN_NON_PHASE_KEYS:
-            continue
-        if phase_name not in PHASE_BY_NAME:
-            continue  # already flagged by yaml_validator
-        if phase_filter and phase_name not in phase_filter:
-            continue
-        if not isinstance(rules, list):
-            continue
-
-        phase = PHASE_BY_NAME[phase_name]
-        for rule in rules:
-            if not isinstance(rule, dict):
-                continue
-
-            # Action validation
-            lint_actions(rule, phase, ctx)
-
-            # Expression-level analysis
-            lint_expressions(rule, phase, ctx)
-
-            # Phase restriction checks
-            lint_phase_restrictions(rule, phase, ctx)
-
-    # Stage 2b: Custom ruleset rules (use waf_custom_rules phase for validation)
-    from octorules.linter.custom_ruleset_linter import lint_custom_rulesets
-
-    lint_custom_rulesets(rules_data, ctx)
-    custom_rulesets = rules_data.get("custom_rulesets")
-    if isinstance(custom_rulesets, list):
-        waf_phase = PHASE_BY_NAME.get("waf_custom_rules")
-        if waf_phase and (not phase_filter or "custom_rulesets" in phase_filter):
-            for entry in custom_rulesets:
-                if not isinstance(entry, dict):
-                    continue
-                for rule in entry.get("rules", []):
-                    if not isinstance(rule, dict):
-                        continue
-                    lint_actions(rule, waf_phase, ctx)
-                    lint_expressions(rule, waf_phase, ctx)
-                    lint_phase_restrictions(rule, waf_phase, ctx)
-
-    # Stage 2c: Page Shield policy checks
-    from octorules.linter.page_shield_linter import lint_page_shield_policies
-
-    lint_page_shield_policies(rules_data, ctx)
-
-    # Stage 2d: List validation
-    from octorules.linter.list_linter import lint_lists
-
-    lint_lists(rules_data, ctx)
-
-    # Stage 3: Plan-tier checks
-    lint_plan_tier(rules_data, ctx)
-
-    # Stage 4: Cross-rule analysis
-    lint_cross_rules(rules_data, ctx)
+    for plugin in get_registered_plugins():
+        plugin.lint_fn(rules_data, ctx)
 
     return ctx

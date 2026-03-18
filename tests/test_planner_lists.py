@@ -431,7 +431,7 @@ class TestDiffList:
         desired = [{"ip": "10.0.0.1"}]
         lp = diff_list("blocklist", None, "ip", desired, [])
         assert lp.changes[0].phase.friendly_name == "list:blocklist"
-        assert lp.changes[0].phase.cf_phase == "account_lists"
+        assert lp.changes[0].phase.provider_id == "account_lists"
 
     def test_modify_has_cached_normalized(self):
         """MODIFY changes on list items should have pre-populated normalized values."""

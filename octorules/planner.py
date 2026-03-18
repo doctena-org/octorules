@@ -13,14 +13,12 @@ from typing import TYPE_CHECKING
 
 from octorules.expression import normalize_expression
 from octorules.phases import (
-    CF_API_FIELDS,
     KNOWN_NON_PHASE_KEYS,
-    LIST_ITEM_API_FIELDS,
-    PAGE_SHIELD_POLICY_API_FIELDS,
-    PHASE_BY_CF,
     PHASE_BY_NAME,
+    PHASE_BY_PROVIDER_ID,
     RENAMED_PHASES,
     Phase,
+    get_api_fields,
     get_phase,
     unknown_phase_message,
 )
@@ -28,7 +26,9 @@ from octorules.phases import (
 if TYPE_CHECKING:
     from octorules.config import ZoneConfig
 
-log = logging.getLogger("octorules")
+log = logging.getLogger(__name__)
+
+_OCTORULES_KEY = "octorules"
 
 
 class ChangeType(Enum):
@@ -38,8 +38,9 @@ class ChangeType(Enum):
     REORDER = "reorder"
 
 
-# Fields stripped for comparison: CF_API_FIELDS plus 'ref' (used for matching, not comparison)
-API_ONLY_FIELDS = CF_API_FIELDS | {"ref"}
+# Fields stripped for comparison: rule API fields plus 'ref' (used for matching, not comparison)
+def _api_only_fields() -> frozenset[str]:
+    return get_api_fields("rule") | {"ref"}
 
 
 @dataclass
@@ -92,7 +93,7 @@ class CustomRulesetPlan:
 @dataclass
 class ListPlan:
     list_name: str
-    list_id: str | None = None  # None for CREATE (not yet in CF)
+    list_id: str | None = None  # None for CREATE (not yet in provider)
     list_kind: str = ""  # ip, asn, hostname, redirect
     create: bool = False  # list needs to be created
     delete: bool = False  # list will be deleted
@@ -146,10 +147,25 @@ class PageShieldPolicyPlan:
 @dataclass
 class ZonePlan:
     zone_name: str
+    target: str | None = None
     phase_plans: list[PhasePlan] = field(default_factory=list)
     custom_ruleset_plans: list[CustomRulesetPlan] = field(default_factory=list)
     list_plans: list[ListPlan] = field(default_factory=list)
     page_shield_policy_plans: list[PageShieldPolicyPlan] = field(default_factory=list)
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name including target for multi-target zones."""
+        if self.target is not None:
+            return f"{self.zone_name} \u2192 {self.target}"
+        return self.zone_name
+
+    @property
+    def plan_key(self) -> str:
+        """Unique key for plan result dicts. Includes target for multi-target zones."""
+        if self.target is not None:
+            return f"{self.zone_name}\x00{self.target}"
+        return self.zone_name
 
     @property
     def has_changes(self) -> bool:
@@ -191,8 +207,57 @@ def _normalize_value(v: object, *, key: str = "") -> object:
 
 
 def normalize_rule(rule: dict) -> dict:
-    """Strip API-only fields and normalize expression values for comparison."""
-    return {k: _normalize_value(v, key=k) for k, v in rule.items() if k not in API_ONLY_FIELDS}
+    """Strip API-only fields, the ``octorules:`` metadata key, and normalize expression values."""
+    excluded = _api_only_fields() | {_OCTORULES_KEY}
+    return {k: _normalize_value(v, key=k) for k, v in rule.items() if k not in excluded}
+
+
+def _is_ignored(rule: dict) -> bool:
+    """Return True if a rule carries ``octorules: {ignored: true}``."""
+    meta = rule.get(_OCTORULES_KEY)
+    if not isinstance(meta, dict):
+        return False
+    return meta.get("ignored") is True  # require exact True, not truthy
+
+
+def _rule_matches_target(rule: dict, target_name: str) -> bool:
+    """Return True if *rule* should be included for *target_name*.
+
+    Rules without ``octorules:`` metadata match all targets.
+    ``included`` and ``excluded`` are mutually exclusive (validated elsewhere).
+    """
+    meta = rule.get(_OCTORULES_KEY)
+    if not isinstance(meta, dict):
+        return True
+    included = meta.get("included")
+    excluded = meta.get("excluded")
+    if included is not None:
+        if not isinstance(included, list):
+            raise RuleValidationError(
+                f"Rule {rule.get('ref', '?')!r}: 'octorules.included' must be a list"
+            )
+        return target_name in included
+    if excluded is not None:
+        if not isinstance(excluded, list):
+            raise RuleValidationError(
+                f"Rule {rule.get('ref', '?')!r}: 'octorules.excluded' must be a list"
+            )
+        return target_name not in excluded
+    return True
+
+
+def filter_by_target(desired: dict, target_name: str) -> dict:
+    """Filter rules in *desired* to only those matching *target_name*.
+
+    Non-list values (e.g. non-phase keys) pass through unchanged.
+    """
+    result = {}
+    for phase, rules in desired.items():
+        if not isinstance(rules, list):
+            result[phase] = rules
+            continue
+        result[phase] = [r for r in rules if _rule_matches_target(r, target_name)]
+    return result
 
 
 def _require_field(entry: dict, field_name: str, context: str, expected_type: type) -> object:
@@ -223,22 +288,41 @@ def _require_string_field(entry: dict, field_name: str, context: str) -> str:
     return value
 
 
+def _validate_octorules_meta(rule: dict, ref: str) -> None:
+    """Validate the ``octorules:`` metadata key on a single rule.
+
+    Checks that ``included`` and ``excluded`` are not both present.
+    """
+    meta = rule.get(_OCTORULES_KEY)
+    if not isinstance(meta, dict):
+        return
+    if meta.get("included") is not None and meta.get("excluded") is not None:
+        raise RuleValidationError(
+            f"Rule {ref!r}: 'octorules.included' and 'octorules.excluded' are mutually exclusive"
+        )
+
+
 def validate_rules(rules: list[dict], phase: Phase) -> None:
     """Validate a list of desired rules for a phase.
 
     Checks:
     - Every rule has a 'ref' field
-    - Every rule has an 'expression' field
     - No duplicate refs within the phase
+    - ``octorules.included`` and ``octorules.excluded`` are not both present
+
+    Provider-specific field validation (e.g. 'expression' for Cloudflare,
+    'Statement' for AWS, 'match' for Google) is handled by each provider's
+    own linter, not here.
     """
     seen_refs: set[str] = set()
     for i, rule in enumerate(rules):
         ctx = f"Rule at index {i} in {phase.friendly_name!r}"
         ref = _require_string_field(rule, "ref", ctx)
-        _require_string_field(rule, "expression", f"Rule {ref!r} in {phase.friendly_name!r}")
         if ref in seen_refs:
             raise RuleValidationError(f"Duplicate ref {ref!r} in {phase.friendly_name!r}")
         seen_refs.add(ref)
+        # Validate octorules metadata
+        _validate_octorules_meta(rule, ref)
 
 
 def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
@@ -280,18 +364,25 @@ def _ref_order(rules: list[dict]) -> list[str]:
 
 
 def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
-    """Prepare desired rules: validate, normalize, default enabled, inject action."""
+    """Prepare desired rules: validate, filter ignored, strip metadata, prepare.
+
+    Universal steps (always applied):
+    1. Validate refs and ``octorules:`` metadata.
+    2. Filter out ignored rules.
+    3. Strip the ``octorules:`` key from each rule.
+
+    Provider-specific steps (via ``phase.prepare_rule`` hook):
+    4. Expression normalization, default fields, action injection, etc.
+    """
     validate_rules(rules, phase)
-    prepared = _prepare_base_rules(rules)
-    # Inject default action for rules that don't specify one
-    for rule in prepared:
-        if "action" not in rule:
-            if phase.default_action is None:
-                raise ValueError(
-                    f"Rule {rule.get('ref', '?')!r} in phase {phase.friendly_name!r} "
-                    f"must specify an 'action' (no default for this phase)"
-                )
-            rule["action"] = phase.default_action
+    rules = [r for r in rules if not _is_ignored(r)]
+    prepared = []
+    for rule in rules:
+        rule = rule.copy()
+        rule.pop(_OCTORULES_KEY, None)
+        if phase.prepare_rule is not None:
+            rule = phase.prepare_rule(rule, phase)
+        prepared.append(rule)
     return prepared
 
 
@@ -391,7 +482,7 @@ def diff_phase(
 def plan_zone(
     zone_name: str,
     desired_rules_by_phase: dict[str, list[dict]],
-    current_rules_by_cf_phase: dict[str, list[dict]],
+    current_rules_by_provider_id: dict[str, list[dict]],
     *,
     allow_unmanaged: bool = False,
 ) -> ZonePlan:
@@ -401,13 +492,13 @@ def plan_zone(
     warn_unknown_phase_keys(desired_rules_by_phase, zone_name)
 
     # Process phases that appear in desired config
-    processed_cf_phases: set[str] = set()
+    processed_provider_ids: set[str] = set()
     for friendly_name, desired_rules in desired_rules_by_phase.items():
         if friendly_name not in PHASE_BY_NAME:
             continue
         phase = get_phase(friendly_name)
-        processed_cf_phases.add(phase.cf_phase)
-        current_rules = current_rules_by_cf_phase.get(phase.cf_phase, [])
+        processed_provider_ids.add(phase.provider_id)
+        current_rules = current_rules_by_provider_id.get(phase.provider_id, [])
         phase_plan = diff_phase(
             phase, desired_rules, current_rules, allow_unmanaged=allow_unmanaged
         )
@@ -417,12 +508,12 @@ def plan_zone(
     # Check for phases that exist in current but not in desired (full removal)
     # Skip when allow_unmanaged is True (unmanaged phases are left alone)
     if not allow_unmanaged:
-        for cf_phase, current_rules in current_rules_by_cf_phase.items():
-            if cf_phase not in PHASE_BY_CF:
+        for provider_id, current_rules in current_rules_by_provider_id.items():
+            if provider_id not in PHASE_BY_PROVIDER_ID:
                 continue
-            if cf_phase in processed_cf_phases:
+            if provider_id in processed_provider_ids:
                 continue
-            phase = PHASE_BY_CF[cf_phase]
+            phase = PHASE_BY_PROVIDER_ID[provider_id]
             if current_rules:
                 phase_plan = diff_phase(phase, [], current_rules)
                 if phase_plan.has_changes:
@@ -441,10 +532,10 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
     _require_string_field(entry, "name", ctx)
     _require_string_field(entry, "phase", ctx)
     phase = entry["phase"]
-    if phase not in PHASE_BY_CF:
+    if phase not in PHASE_BY_PROVIDER_ID:
         raise RuleValidationError(
             f"{ctx} has invalid 'phase' {phase!r}."
-            f" Use a valid CF phase ID (e.g. 'http_request_firewall_custom')"
+            f" Use a valid provider phase ID (e.g. 'http_request_firewall_custom')"
         )
     rules = entry.get("rules", [])
     if not isinstance(rules, list):
@@ -463,41 +554,27 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
         if ref in seen_refs:
             raise RuleValidationError(f"Duplicate ref {ref!r} in custom ruleset {label!r}")
         seen_refs.add(ref)
+        _validate_octorules_meta(rule, ref)
 
 
 def _make_synthetic_phase(
-    prefix: str, name: str, cf_phase: str, *, zone_level: bool = False, account_level: bool = True
+    prefix: str,
+    name: str,
+    provider_id: str,
+    *,
+    zone_level: bool = False,
+    account_level: bool = True,
 ) -> Phase:
     """Create a synthetic Phase for non-standard rulesets (custom, lists, page shield)."""
     return Phase(
         friendly_name=f"{prefix}:{name}",
-        cf_phase=cf_phase,
+        provider_id=provider_id,
         default_action=None,
         zone_level=zone_level,
         account_level=account_level,
     )
 
 
-def _prepare_base_rules(rules: list[dict]) -> list[dict]:
-    """Normalize expressions and default ``enabled`` to True for a list of rules.
-
-    This is the shared preparation logic used by both phase rules and custom
-    ruleset rules.  Phase rules add action injection on top of this.
-    """
-    prepared = []
-    for rule in rules:
-        rule = rule.copy()
-        rule["expression"] = normalize_expression(rule["expression"])
-        # Normalize counting_expression if present
-        ap = rule.get("action_parameters")
-        if isinstance(ap, dict) and isinstance(ap.get("counting_expression"), str):
-            ap = ap.copy()
-            ap["counting_expression"] = normalize_expression(ap["counting_expression"])
-            rule["action_parameters"] = ap
-        if "enabled" not in rule:
-            rule["enabled"] = True
-        prepared.append(rule)
-    return prepared
 
 
 def diff_custom_ruleset(
@@ -514,7 +591,22 @@ def diff_custom_ruleset(
         phase=phase,
     )
 
-    plan.prepared_rules = _prepare_base_rules(desired_rules)
+    desired_rules = [r for r in desired_rules if not _is_ignored(r)]
+    # Resolve the Phase object for the prepare_rule hook.
+    # Custom rulesets pass the provider_id string (e.g. "http_request_firewall_custom").
+    phase_obj = (
+        PHASE_BY_NAME.get(phase) or PHASE_BY_PROVIDER_ID.get(phase)
+        if isinstance(phase, str)
+        else phase
+    )
+    prepared = []
+    for rule in desired_rules:
+        rule = rule.copy()
+        rule.pop(_OCTORULES_KEY, None)
+        if phase_obj is not None and phase_obj.prepare_rule is not None:
+            rule = phase_obj.prepare_rule(rule, phase_obj)
+        prepared.append(rule)
+    plan.prepared_rules = prepared
 
     synthetic_phase = _make_synthetic_phase("custom_ruleset", ruleset_name, phase)
     plan.changes = _diff_rules(synthetic_phase, plan.prepared_rules, current_rules)
@@ -538,11 +630,13 @@ def _serialize_change(change: RuleChange) -> dict:
 def compute_checksum(zone_plans: list[ZonePlan]) -> str:
     """Compute a SHA-256 checksum of the plan for plan/apply verification."""
     data = []
-    for zp in sorted(zone_plans, key=lambda z: z.zone_name):
+    for zp in sorted(zone_plans, key=lambda z: (z.zone_name, z.target or "")):
         zone_data: dict = {
             "zone_name": zp.zone_name,
             "phase_plans": [],
         }
+        if zp.target is not None:
+            zone_data["target"] = zp.target
         for pp in sorted(zp.phase_plans, key=lambda p: p.phase.friendly_name):
             phase_data = {
                 "phase": pp.phase.friendly_name,
@@ -614,7 +708,7 @@ class SafetyViolation:
 
 def check_safety(
     zone_plan: ZonePlan,
-    current_rules_by_cf_phase: dict[str, list[dict]],
+    current_rules_by_provider_id: dict[str, list[dict]],
     zone_config: ZoneConfig,
 ) -> list[SafetyViolation]:
     """Check if the plan exceeds safety thresholds for a zone.
@@ -622,7 +716,7 @@ def check_safety(
     Returns a list of SafetyViolation objects (empty if safe).
     """
     # Sum existing rules across all phases
-    existing_count = sum(len(rules) for rules in current_rules_by_cf_phase.values())
+    existing_count = sum(len(rules) for rules in current_rules_by_provider_id.values())
     if existing_count < zone_config.min_existing:
         return []
 
@@ -740,8 +834,9 @@ def _items_by_identity(items: list[dict], kind: str) -> dict[str, dict]:
 
 
 def normalize_list_item(item: dict) -> dict:
-    """Strip LIST_ITEM_API_FIELDS for comparison. No expression normalization needed."""
-    return {k: v for k, v in item.items() if k not in LIST_ITEM_API_FIELDS}
+    """Strip list_item API fields for comparison. No expression normalization needed."""
+    excluded = get_api_fields("list_item")
+    return {k: v for k, v in item.items() if k not in excluded}
 
 
 def _make_list_phase(list_name: str) -> Phase:
@@ -879,7 +974,7 @@ def diff_lists_full(
 
     Args:
         desired_lists: List of desired list entries from YAML.
-        current_lists: Dict of {name: {id, kind, description, items}} from CF.
+        current_lists: Dict of {name: {id, kind, description, items}} from provider.
 
     Returns list of ListPlan objects.
     """
@@ -952,12 +1047,9 @@ def _make_page_shield_phase(description: str) -> Phase:
 
 
 def normalize_page_shield_policy(policy: dict) -> dict:
-    """Strip PAGE_SHIELD_POLICY_API_FIELDS and normalize expression for comparison."""
-    return {
-        k: _normalize_value(v, key=k)
-        for k, v in policy.items()
-        if k not in PAGE_SHIELD_POLICY_API_FIELDS
-    }
+    """Strip page_shield_policy API fields and normalize expression for comparison."""
+    excluded = get_api_fields("page_shield_policy")
+    return {k: _normalize_value(v, key=k) for k, v in policy.items() if k not in excluded}
 
 
 def validate_page_shield_policy(entry: dict, index: int) -> None:
@@ -1013,7 +1105,7 @@ def diff_page_shield_policies(
 
     Args:
         desired_policies: List of desired policy entries from YAML.
-        current_policies: List of current policy dicts from CF (with id stripped).
+        current_policies: List of current policy dicts from provider (with id stripped).
 
     Returns list of PageShieldPolicyPlan objects, sorted by description.
     """

@@ -10,7 +10,7 @@ from html import escape as html_escape
 from typing import IO
 
 from octorules.expression import format_expression_display
-from octorules.phases import PHASE_BY_CF, PHASE_BY_NAME
+from octorules.phases import PHASE_BY_NAME, PHASE_BY_PROVIDER_ID
 from octorules.planner import (
     ChangeType,
     CustomRulesetPlan,
@@ -176,7 +176,7 @@ def format_change(change: RuleChange, use_color: bool = True) -> list[str]:
 def format_phase_plan(phase_plan: PhasePlan, use_color: bool = True) -> list[str]:
     """Format a phase plan as lines of output."""
     lines = []
-    header = f"  {phase_plan.phase.friendly_name} ({phase_plan.phase.cf_phase})"
+    header = f"  {phase_plan.phase.friendly_name} ({phase_plan.phase.provider_id})"
     lines.append(_color(header, BOLD, use_color))
     for change in phase_plan.changes:
         lines.extend(format_change(change, use_color))
@@ -233,13 +233,13 @@ def format_zone_plan(zone_plan: ZonePlan, use_color: bool = True) -> str:
 
     if not zone_plan.has_changes:
         lines.append(
-            _color(f"Zone {zone_plan.zone_name}: ", BOLD, use_color)
+            _color(f"Zone {zone_plan.display_name}: ", BOLD, use_color)
             + _color("no changes", DIM, use_color)
         )
         return "\n".join(lines)
 
     lines.append(
-        _color(f"Zone {zone_plan.zone_name}: ", BOLD, use_color)
+        _color(f"Zone {zone_plan.display_name}: ", BOLD, use_color)
         + f"{zone_plan.total_changes} change(s)"
     )
 
@@ -288,7 +288,7 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             phase_plans.append(
                 {
                     "phase": pp.phase.friendly_name,
-                    "cf_phase": pp.phase.cf_phase,
+                    "provider_id": pp.phase.provider_id,
                     "changes": [_change_to_dict(c) for c in pp.changes],
                 }
             )
@@ -334,6 +334,8 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             "phase_plans": phase_plans,
             "total_changes": zp.total_changes,
         }
+        if zp.target is not None:
+            zone_entry["target"] = zp.target
         if cr_plans:
             zone_entry["custom_ruleset_plans"] = cr_plans
         if lp_plans:
@@ -414,7 +416,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
     for zp in zone_plans:
         if not zp.has_changes:
             continue
-        lines.append(f"### Zone: `{zp.zone_name}`")
+        lines.append(f"### Zone: `{zp.display_name}`")
         lines.append("")
         lines.append("| Op | Phase | Ref | Details |")
         lines.append("|---|---|---|---|")
@@ -597,7 +599,7 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
         if not zp.has_changes:
             continue
 
-        lines.append(f"<h2>{e(zp.zone_name)}</h2>")
+        lines.append(f"<h2>{e(zp.display_name)}</h2>")
 
         for pp in zp.phase_plans:
             lines.append(f"<h3>{e(pp.phase.friendly_name)}</h3>")
@@ -733,12 +735,12 @@ def build_report_data(
     Enumerates all phases present in either desired or current (not just changed
     phases from ZonePlan), so in_sync phases are included in the report.
     """
-    # Index phase plans by (zone, cf_phase) for quick lookup
+    # Index phase plans by (zone, provider_id) for quick lookup
     changes_index: dict[tuple[str, str], PhasePlan] = {}
     cr_index: dict[tuple[str, str], CustomRulesetPlan] = {}
     for zp in zone_plans:
         for pp in zp.phase_plans:
-            changes_index[(zp.zone_name, pp.phase.cf_phase)] = pp
+            changes_index[(zp.zone_name, pp.phase.provider_id)] = pp
         for crp in zp.custom_ruleset_plans:
             cr_index[(zp.zone_name, crp.ruleset_id)] = crp
 
@@ -748,32 +750,32 @@ def build_report_data(
 
     for zp in zone_plans:
         zone_name = zp.zone_name
-        desired = desired_by_zone.get(zone_name, {})
-        current = current_by_zone.get(zone_name, {})
+        desired = desired_by_zone.get(zp.plan_key, {})
+        current = current_by_zone.get(zp.plan_key, {})
 
         # Build the union of all phases present in either desired or current
-        all_cf_phases: set[str] = set()
+        all_provider_ids: set[str] = set()
         for friendly_name in desired:
             if friendly_name in PHASE_BY_NAME:
-                all_cf_phases.add(PHASE_BY_NAME[friendly_name].cf_phase)
-        for cf_phase in current:
-            if cf_phase in PHASE_BY_CF:
-                all_cf_phases.add(cf_phase)
+                all_provider_ids.add(PHASE_BY_NAME[friendly_name].provider_id)
+        for provider_id in current:
+            if provider_id in PHASE_BY_PROVIDER_ID:
+                all_provider_ids.add(provider_id)
 
         phases_data = []
         zone_has_drift = False
 
-        for cf_phase in sorted(all_cf_phases):
-            if cf_phase not in PHASE_BY_CF:
+        for provider_id in sorted(all_provider_ids):
+            if provider_id not in PHASE_BY_PROVIDER_ID:
                 continue
-            phase = PHASE_BY_CF[cf_phase]
+            phase = PHASE_BY_PROVIDER_ID[provider_id]
             friendly_name = phase.friendly_name
 
             yaml_rules = len(desired.get(friendly_name, []))
-            live_rules = len(current.get(cf_phase, []))
+            live_rules = len(current.get(provider_id, []))
 
             # Count changes from the phase plan if one exists
-            pp = changes_index.get((zone_name, cf_phase))
+            pp = changes_index.get((zone_name, provider_id))
             adds = removes = modifies = 0
             if pp:
                 for c in pp.changes:
@@ -786,7 +788,7 @@ def build_report_data(
 
             # Determine status
             has_yaml = friendly_name in desired
-            has_live = cf_phase in current and len(current[cf_phase]) > 0
+            has_live = provider_id in current and len(current[provider_id]) > 0
 
             if has_yaml and not has_live and yaml_rules > 0:
                 status = "yaml_only"
@@ -803,7 +805,7 @@ def build_report_data(
             phases_data.append(
                 {
                     "phase": friendly_name,
-                    "cf_phase": cf_phase,
+                    "provider_id": provider_id,
                     "status": status,
                     "yaml_rules": yaml_rules,
                     "live_rules": live_rules,
@@ -829,7 +831,7 @@ def build_report_data(
             phases_data.append(
                 {
                     "phase": f"custom_ruleset:{crp.ruleset_name}",
-                    "cf_phase": crp.phase,
+                    "provider_id": crp.phase,
                     "status": cr_status,
                     "yaml_rules": len(crp.prepared_rules) if crp.prepared_rules else 0,
                     "live_rules": 0,
@@ -861,7 +863,7 @@ def build_report_data(
             phases_data.append(
                 {
                     "phase": f"list:{lp.list_name}",
-                    "cf_phase": "account_lists",
+                    "provider_id": "account_lists",
                     "status": lp_status,
                     "yaml_rules": len(lp.prepared_items) if lp.prepared_items else 0,
                     "live_rules": 0,
@@ -891,7 +893,7 @@ def build_report_data(
             phases_data.append(
                 {
                     "phase": f"page_shield:{psp.description}",
-                    "cf_phase": "page_shield_policies",
+                    "provider_id": "page_shield_policies",
                     "status": psp_status,
                     "yaml_rules": 0,
                     "live_rules": 0,
@@ -932,7 +934,7 @@ def format_report_csv(report_data: dict) -> str:
     header = [
         "Zone",
         "Phase",
-        "CF Phase",
+        "Provider ID",
         "Status",
         "YAML Rules",
         "Live Rules",
@@ -947,7 +949,7 @@ def format_report_csv(report_data: dict) -> str:
                 [
                     zone["zone"],
                     phase["phase"],
-                    phase["cf_phase"],
+                    phase["provider_id"],
                     phase["status"],
                     phase["yaml_rules"],
                     phase["live_rules"],

@@ -2,22 +2,88 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.16.0] - 2026-03-15
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/).
 
-### Changed
-- **BREAKING: Provider split.** The Cloudflare SDK (`cloudflare~=4.3`) is no
-  longer a direct dependency.  Install `octorules[cloudflare]` (which pulls in
-  [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare))
-  to use Cloudflare. `import octorules` works without any provider installed.
-- **Flat layout.** Package moved from `src/octorules/` to `octorules/` at the
-  repo root, matching the octodns convention.
-- `commands.py` and `cli.py` now catch provider-agnostic `ProviderAuthError`
-  and `ProviderError` instead of Cloudflare SDK exceptions.
-- `_init_provider()` uses the module-level `CloudflareProvider` (re-exported
-  from octorules-cloudflare when installed) or reads `providers.cloudflare.class`
-  from config for dynamic provider loading.
+## [Unreleased]
+
+## [0.16.0] - 2026-03-17
 
 ### Added
+- **Rule-level metadata** (`octorules:` key). Per-rule metadata that controls
+  octorules behavior without affecting the provider API:
+  - `octorules: {ignored: true}` — keep a rule in YAML for documentation while
+    skipping it during plan/sync. Ignored rules are still validated and linted.
+  - `octorules: {included: [...]}` / `octorules: {excluded: [...]}` — restrict a
+    rule to specific providers or targets in multi-provider/multi-target setups.
+    `included` and `excluded` are mutually exclusive (matching octodns convention).
+  The `octorules:` key is stripped before sending rules to the provider API and
+  excluded from diff comparison.
+- **`Manager` class** (`octorules.manager`): high-level orchestrator for
+  programmatic use. Wraps config loading and all commands (`plan`, `sync`,
+  `compare`, `dump`, `validate`, `report`, `lint`) behind a single entry
+  point with context manager support. Each command initialises providers
+  internally (matching CLI behaviour). Exported from `octorules` top-level
+  package.
+- **YAML context tracking.** `ConfigError` messages from `Config.from_file()`
+  and `_parse_zone()` now include `filename:line` context (e.g.
+  `(at config.yaml:12)`), making it easy to locate the offending YAML line
+  in large configs with `!include` directives. Powered by `ContextDict`, a
+  dict subclass that carries PyYAML `Mark` source locations through the
+  parsing pipeline.
+- **Built-in processor filters.** Three ready-to-use processors in
+  `octorules.processor.filters`: `PhaseFilter` (include/exclude phases by
+  name), `RefFilter` (include/exclude rules by ref regex), and
+  `ChangeTypeFilter` (block specific change types like REMOVE as a safety
+  guard). All filters validate their config at init time and raise
+  `ConfigError` on invalid arguments.
+- **Pluggable secret handlers.** Config values can now reference secrets from
+  any backend — Vault, AWS Secrets Manager, GCP Secret Manager, etc. — via the
+  `handler/reference` syntax (e.g. `vault/secret/data/cf#token`). The built-in
+  `env/` handler remains the default. Custom handlers are declared in a new
+  `secret_handlers:` config section or auto-discovered via the
+  `octorules.secret_handlers` entry-point group. Handler kwargs are
+  bootstrapped through already-registered handlers (e.g. `env/VAULT_TOKEN`).
+- `BaseSecrets` base class and `EnvironSecrets` built-in handler
+  (`octorules.secret`).
+- `SecretsException(ConfigError)` for secret resolution failures.
+- `_load_class()` moved from `commands.py` to `config.py` (shared by provider,
+  processor, and secret handler loading).
+- **Multi-target zones.** A zone can now target multiple providers of the same
+  class (e.g. `cf-prod` + `cf-staging`). Each target produces an independent
+  plan and is applied separately. `ZonePlan.target` tracks which target a plan
+  belongs to; `display_name` renders as `zone -> target` in output.
+- **Processor pipeline.** New `processors` config section for hooking into the
+  plan/sync pipeline. Processors transform desired rules before planning
+  (`process_desired`) and filter changes after planning (`process_changes`).
+  Configured per-zone via `processors:` list.
+- **Zone discovery.** Zones can be discovered automatically from providers that
+  support `SUPPORTS_ZONE_DISCOVERY`. Use `'*'` as a zone template in config;
+  discovered zones that have a matching YAML rules file are added at init time.
+  Explicit zone configs always take precedence.
+- `SUPPORTS_ZONE_DISCOVERY` feature constant and `list_zones()` method on
+  `BaseProvider` protocol.
+- `ProcessorConfig` dataclass and `BaseProcessor` base class
+  (`octorules.processor`).
+- `Config.zone_templates` field and `Config.expand_templates()` method for
+  zone discovery.
+- `ZonePlan.target`, `ZonePlan.display_name`, `ZonePlan.plan_key` properties.
+- `_validate_multi_target()`, `_get_zone_providers()`, `_init_processors()`,
+  `_discover_zones()`, `_load_class()` helpers in `commands.py`.
+- **`ProviderConfig` dataclass** (`octorules.config`): holds per-provider
+  `class_path`, `kwargs`, and safety thresholds.
+- **`ZoneConfig.targets`**: list of provider names a zone deploys to.
+- **Entry-point auto-discovery.** Providers register via
+  `octorules.providers` entry-point group; `_resolve_provider_class()` discovers
+  them automatically when `class:` is omitted.
+- **Recursive `env/` resolution.** `_resolve_deep()` resolves `env/VARNAME`
+  prefixes in nested dicts and lists (previously only top-level string values).
+- **Per-provider zone ID resolution.** `resolve_zone_ids()` accepts a
+  `dict[str, Callable]` mapping provider names to resolve functions.
+- **Multi-account planning.** `_plan_all_scopes()` runs `_plan_account()` for
+  every provider that has an `account_id`, concurrently with zone planning.
+- **`_PlanAllResult.provider_map`**: tracks which provider handles each
+  zone/account.
 - **BaseProvider protocol** (`octorules.provider.base`): `@runtime_checkable`
   Protocol defining all 22 methods + 4 properties that provider implementations
   must satisfy.
@@ -29,11 +95,100 @@ All notable changes to this project will be documented in this file.
 - **Phase registration API** (`register_phase`, `register_phases`,
   `unregister_phase`): extensible phase registry so provider packages can
   register their own phases at import time.  All derived collections
-  (`ALL_CF_PHASES`, `PHASE_BY_NAME`, etc.) are mutated in-place.
+  (`ALL_PROVIDER_IDS`, `PHASE_BY_NAME`, etc.) are mutated in-place.
+- **API field registry** (`register_api_fields`, `unregister_api_fields`,
+  `get_api_fields`): providers register API fields to strip per category
+  (`"rule"`, `"list_item"`, `"page_shield_policy"`).
+- **Phase alias registry** (`register_phase_alias`, `unregister_phase_alias`):
+  providers register backward-compat phase name aliases.
 - `Config.provider_class` field — optional `class:` key under
-  `providers.cloudflare` for dynamic provider loading.
+  `providers.<name>` for dynamic provider loading.
 - `[project.optional-dependencies] cloudflare` extra pointing to
   `octorules-cloudflare>=0.1`.
+- **`Phase.prepare_rule` hook.** Optional callable on `Phase` for provider-
+  specific rule preparation (expression normalization, default fields, action
+  injection). Called by the planner after stripping `octorules:` metadata.
+  Providers register this when registering phases; the core planner contains
+  zero provider-specific logic.
+- `_discover_provider_modules()`: imports installed provider packages via
+  entry-points without constructing instances, used by `cmd_lint` to register
+  lint plugins offline.
+
+### Fixed
+- Zone discovery now catches only `ProviderError` instead of bare `Exception`,
+  preventing programming errors from being silently swallowed.
+- `cmd_versions()` now catches only `PackageNotFoundError` instead of bare
+  `Exception`.
+- `cmd_lint` no longer initializes provider API clients. Lint is fully
+  offline — no credentials needed, even in multi-provider configs.
+- `--plan` auto-detection removed from lint command. Use `--plan free` (etc.)
+  explicitly for Cloudflare plan-tier checks; defaults to `enterprise`.
+
+### Changed
+- **BREAKING: Multi-provider support.** `Config.providers` is now a
+  `dict[str, ProviderConfig]` supporting multiple named providers (replaces
+  single-provider `provider_class`/`provider_kwargs` fields). Zones route to
+  providers via `targets:` list; auto-assigned when a single provider is
+  configured.
+- `_init_providers()` replaces `_init_provider()` as the primary provider
+  factory (the latter is kept as a deprecated backward-compat wrapper).
+- `_plan_zones()`, `_plan_all_scopes()`, `_apply_zone_changes()`,
+  `_cmd_sync_inner()`, `cmd_dump()`, `cmd_report()` now accept/use a providers
+  dict instead of a single provider instance.
+- `_check_safety_violations()` accepts `account_labels: list[str]` (was singular
+  `account_label`). `_PlanAllResult.account_label` is now a backward-compat
+  property over `account_labels`.
+- **BREAKING: Provider split.** The Cloudflare SDK (`cloudflare~=4.3`) is no
+  longer a direct dependency.  Install `octorules[cloudflare]` (which pulls in
+  [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare))
+  to use Cloudflare. `import octorules` works without any provider installed.
+- **BREAKING: Provider-agnostic data model.** `Phase.cf_phase` renamed to
+  `Phase.provider_id`. Derived collections renamed: `PHASE_BY_CF` →
+  `PHASE_BY_PROVIDER_ID`, `ALL_CF_PHASES` → `ALL_PROVIDER_IDS`,
+  `ZONE_CF_PHASES` → `ZONE_PROVIDER_IDS`, `ACCOUNT_CF_PHASES` →
+  `ACCOUNT_PROVIDER_IDS`. `get_phase_by_cf()` → `get_phase_by_provider_id()`.
+- **BREAKING: JSON/CSV output keys.** `"cf_phase"` → `"provider_id"` in JSON
+  plan output and report data. CSV header `"CF Phase"` → `"Provider ID"`.
+- **BREAKING: API field constants removed.** `CF_API_FIELDS`,
+  `LIST_ITEM_API_FIELDS`, `PAGE_SHIELD_POLICY_API_FIELDS` replaced by a
+  provider-registered field registry (`register_api_fields()` /
+  `get_api_fields()`). Providers register their fields at import time.
+- **BREAKING: `RENAMED_PHASES` starts empty.** Phase aliases are now
+  provider-registered via `register_phase_alias()` / `unregister_phase_alias()`.
+  The Cloudflare provider registers `waf_managed_exceptions` →
+  `waf_managed_rules` at plugin init.
+- **Flat layout.** Package moved from `src/octorules/` to `octorules/` at the
+  repo root, matching the octodns convention.
+- `commands.py` and `cli.py` now catch provider-agnostic `ProviderAuthError`
+  and `ProviderError` instead of Cloudflare SDK exceptions.
+- **BREAKING: octodns-style kwargs passthrough.** All keys in the provider
+  config section (except `class` and `safety`) are forwarded as keyword
+  arguments to the provider constructor. `Config.token`, `Config.max_retries`,
+  `Config.timeout` fields removed; replaced by `Config.provider_kwargs` dict.
+  `env/` prefix resolution applies to all string values, not just `token`.
+- `_init_provider()` calls `provider_cls(**config.provider_kwargs)` instead
+  of hardcoded positional args. Falls back to `CloudflareProvider` (re-exported
+  from octorules-cloudflare) when no `class` is configured.
+- All `provider: CloudflareProvider` type hints in `commands.py` changed to
+  `provider: BaseProvider`.
+- `cmd_versions` now auto-discovers installed `octorules-*` packages via
+  `importlib.metadata` instead of hardcoding `import cloudflare`.
+- `BaseProvider` protocol methods use `provider_id` / `provider_ids` instead
+  of `cf_phase` / `cf_phases`.
+- `_plan_zones()` builds work items per-target for multi-target zones.
+- `compute_checksum()` sorts by `(zone_name, target)` and includes `target` in
+  serialized zone data.
+- Formatter renderers use `zp.display_name` instead of `zp.zone_name`. JSON
+  renderer includes `target` field when set.
+- `_load_provider_class()` now delegates to generic `_load_class()` helper
+  (shared with processor loading).
+- `_PlanAllResult.provider_map` type changed from `dict[str, BaseProvider]` to
+  `dict[tuple[str, str | None], BaseProvider]` (keyed by `(zone_name, target)`).
+- **BREAKING: Provider-agnostic planner.** The core planner no longer validates
+  `expression` fields, normalizes expressions, defaults `enabled`, or injects
+  `phase.default_action`. All provider-specific rule preparation is delegated
+  to the `Phase.prepare_rule` hook. Providers that relied on core expression
+  normalization must register their own `prepare_rule` callable.
 
 ### Removed
 - `CloudflareProvider` class, all CF SDK helpers, and CF SDK exception
@@ -42,6 +197,12 @@ All notable changes to this project will be documented in this file.
 - Provider-specific tests (`test_provider.py`, `test_provider_lists.py`,
   `test_provider_custom_rulesets.py`, `test_provider_page_shield.py`,
   `tests/mocks.py`) moved to octorules-cloudflare.
+- `CF_API_FIELDS`, `LIST_ITEM_API_FIELDS`, `PAGE_SHIELD_POLICY_API_FIELDS`
+  constants (replaced by `get_api_fields()` registry).
+- Hardcoded `RENAMED_PHASES` dict (replaced by `register_phase_alias()`).
+- `scripts/sync_schemas.py`, `scripts/generate_fields.py`,
+  `scripts/hooks/pre-commit`, `docs/schemas.md` moved to octorules-cloudflare
+  (they reference CF-specific linter schemas).
 
 ## [0.15.1] - 2026-03-14
 

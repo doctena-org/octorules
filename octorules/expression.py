@@ -2,7 +2,7 @@
 
 Collapses whitespace outside double-quoted strings to single spaces,
 allowing users to write readable multi-line YAML block scalars that
-get normalized before sending to Cloudflare and before linting.
+get normalized before sending to the provider and before linting.
 
 Also provides a display formatter that reverses the collapse for
 human-readable plan output.
@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 
-log = logging.getLogger("octorules")
+log = logging.getLogger(__name__)
 
 
 class QuoteAwareScanner:
@@ -65,7 +65,7 @@ def normalize_expression(expr: str) -> str:
     preserved verbatim.  Escaped quotes (``\\"``) do not close the string.
 
     Whitespace immediately after ``{`` and before ``}`` is stripped to match
-    Cloudflare's canonical form (e.g. ``{"a" "b"}`` not ``{ "a" "b" }``).
+    the provider's canonical form (e.g. ``{"a" "b"}`` not ``{ "a" "b" }``).
     """
     result: list[str] = []
     ws_run = False

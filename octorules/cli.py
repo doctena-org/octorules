@@ -13,12 +13,14 @@ from octorules.commands import (
     _apply_lists,
     _apply_page_shield_policies,
     _apply_parallel,
+    _discover_provider_modules,
     _emit_plan_outputs,
     _filter_current_by_phase,
     _filter_desired_by_phase,
     _format_api_error,
     _get_zones,
     _init_provider,
+    _init_providers,
     _map_ordered,
     _plan_account,
     _plan_single_zone,
@@ -38,16 +40,16 @@ from octorules.commands import (
 from octorules.config import Config, ConfigError
 from octorules.provider.exceptions import (
     ProviderAuthError,
-    ProviderError,
 )
 
-log = logging.getLogger("octorules")
+log = logging.getLogger(__name__)
 
 # Re-export everything from commands so that existing imports from octorules.cli
 # continue to work (e.g. ``from octorules.cli import cmd_plan``).
 __all__ = [
     "_CHECKSUM_RE",
     "_apply_custom_rulesets",
+    "_discover_provider_modules",
     "_apply_lists",
     "_apply_page_shield_policies",
     "_apply_parallel",
@@ -57,6 +59,7 @@ __all__ = [
     "_format_api_error",
     "_get_zones",
     "_init_provider",
+    "_init_providers",
     "_map_ordered",
     "_plan_account",
     "_plan_single_zone",
@@ -90,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog="octorules",
-        description="Manage Cloudflare Rules as IaC",
+        description="WAF rules as code — manage rules across providers declaratively",
     )
     parser.add_argument("--version", action="version", version=f"octorules {__version__}")
     parser.add_argument(
@@ -148,7 +151,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit with 2 when changes are detected (useful for CI)",
     )
 
-    sync_parser = sub.add_parser("sync", parents=[shared], help="Apply changes to Cloudflare")
+    sync_parser = sub.add_parser("sync", parents=[shared], help="Apply changes to provider")
     sync_parser.add_argument(
         "--doit",
         action="store_true",
@@ -175,16 +178,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Write validation results to a file",
     )
 
-    dump_parser = sub.add_parser(
-        "dump", parents=[shared], help="Export existing Cloudflare rules to YAML"
-    )
+    dump_parser = sub.add_parser("dump", parents=[shared], help="Export existing rules to YAML")
     dump_parser.add_argument(
         "--output-dir",
         help="Output directory for dumped rules (default: rules_dir from config)",
     )
 
     compare_parser = sub.add_parser(
-        "compare", parents=[shared], help="Compare local rules against live Cloudflare state"
+        "compare", parents=[shared], help="Compare local rules against live provider state"
     )
     compare_parser.add_argument(
         "--checksum",
@@ -229,10 +230,10 @@ def build_parser() -> argparse.ArgumentParser:
     lint_parser.add_argument(
         "--plan",
         dest="lint_plan",
-        choices=["free", "pro", "business", "enterprise"],
         default=None,
-        help="Cloudflare plan tier override for entitlement checks. "
-        "When omitted, auto-detected from the Cloudflare API per zone.",
+        help="Plan tier override for entitlement checks "
+        "(e.g. free/pro/business/enterprise). "
+        "When omitted, auto-detected from the provider API per zone.",
     )
     lint_parser.add_argument(
         "--output",
@@ -275,15 +276,27 @@ def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
         level = logging.WARNING
     else:
         level = logging.INFO
-    logger = logging.getLogger("octorules")
-    logger.setLevel(level)
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        logger.addHandler(handler)
-    else:
-        for handler in logger.handlers:
-            handler.setLevel(level)
+    # Configure the core logger with a handler, then set the level on all
+    # octorules_* provider loggers so __name__-based loggers propagate output.
+    # Uses importlib.metadata to discover installed provider packages dynamically.
+    from importlib.metadata import packages_distributions
+
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    names = {"octorules"}
+    for pkg_name in packages_distributions():
+        if pkg_name.startswith("octorules_"):
+            names.add(pkg_name)
+
+    for name in sorted(names):
+        logger = logging.getLogger(name)
+        logger.setLevel(level)
+        if not logger.handlers:
+            logger.addHandler(handler)
+        else:
+            for h in logger.handlers:
+                h.setLevel(level)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -352,17 +365,10 @@ def main(argv: list[str] | None = None) -> None:
                 )
             )
         elif args.command == "lint":
+            # Import provider modules to trigger lint plugin registration,
+            # without constructing provider instances (no API credentials needed).
+            _discover_provider_modules()
             zone_plans: dict[str, str] = {}
-            if args.lint_plan is None:
-                try:
-                    provider = _init_provider(config)
-                    zone_plans = provider.zone_plans
-                except ProviderError as e:
-                    log.warning(
-                        "Could not resolve zone plans from Cloudflare API (%s); "
-                        "using 'enterprise' as default. Pass --plan to set explicitly.",
-                        _format_api_error(e),
-                    )
             sys.exit(
                 cmd_lint(
                     config,

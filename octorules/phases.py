@@ -1,121 +1,37 @@
-"""Phase registry — maps friendly YAML names to Cloudflare phase identifiers.
+"""Phase registry — maps friendly YAML names to provider phase identifiers.
 
 The registry is extensible via ``register_phase()`` / ``register_phases()``.
 Registration must happen early (before consumers cache derived data).
-All derived collections (``ALL_CF_PHASES``, ``PHASE_BY_NAME``, etc.) are
+All derived collections (``ALL_PROVIDER_IDS``, ``PHASE_BY_NAME``, etc.) are
 mutated **in-place** so existing imports see updates.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from difflib import get_close_matches
 
 
 @dataclass(frozen=True)
 class Phase:
     friendly_name: str
-    cf_phase: str
+    provider_id: str
     default_action: str | None  # None means user must specify in YAML
     zone_level: bool = True  # True for phases that work at zone level
     account_level: bool = False  # True for phases that work at account level
+    # Optional per-rule preparation hook, called by ``prepare_desired_rules()``
+    # after stripping ``octorules:`` metadata.  Receives ``(rule_dict, phase)``
+    # and must return the prepared dict.  Providers register this to handle
+    # expression normalization, default fields, action injection, etc.
+    prepare_rule: Callable[[dict, Phase], dict] | None = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
-# Core phase definitions
+# Core phase definitions — empty by default; providers register their phases.
 # ---------------------------------------------------------------------------
 
-_BUILTIN_PHASES: list[Phase] = [
-    Phase("redirect_rules", "http_request_dynamic_redirect", "redirect"),
-    Phase("url_rewrite_rules", "http_request_transform", "rewrite"),
-    Phase("request_header_rules", "http_request_late_transform", "rewrite"),
-    Phase("response_header_rules", "http_response_headers_transform", "rewrite"),
-    Phase("config_rules", "http_config_settings", "set_config"),
-    Phase("origin_rules", "http_request_origin", "route"),
-    Phase("cache_rules", "http_request_cache_settings", "set_cache_settings"),
-    Phase("compression_rules", "http_response_compression", "compress_response"),
-    Phase(
-        "custom_error_rules",
-        "http_custom_errors",
-        "serve_error",
-        zone_level=True,
-        account_level=True,
-    ),
-    Phase(
-        "waf_custom_rules",
-        "http_request_firewall_custom",
-        None,
-        zone_level=True,
-        account_level=True,
-    ),
-    Phase(
-        "waf_managed_rules",
-        "http_request_firewall_managed",
-        None,
-        zone_level=True,
-        account_level=True,
-    ),
-    Phase(
-        "rate_limiting_rules",
-        "http_ratelimit",
-        None,
-        zone_level=True,
-        account_level=True,
-    ),
-    Phase("bot_fight_rules", "http_request_sbfm", None),
-    Phase("sensitive_data_detection", "http_response_firewall_managed", None),
-    Phase(
-        "http_ddos_rules",
-        "ddos_l7",
-        None,
-        zone_level=True,
-        account_level=True,
-    ),
-    Phase(
-        "bulk_redirect_rules",
-        "http_request_redirect",
-        "redirect",
-        zone_level=False,
-        account_level=True,
-    ),
-    Phase("log_custom_fields", "http_log_custom_fields", "log_custom_field"),
-    Phase(
-        "network_ddos_rules",
-        "ddos_l4",
-        None,
-        zone_level=False,
-        account_level=True,
-    ),
-    Phase(
-        "network_firewall_rules",
-        "magic_transit",
-        None,
-        zone_level=False,
-        account_level=True,
-    ),
-    Phase(
-        "network_firewall_managed",
-        "magic_transit_managed",
-        None,
-        zone_level=False,
-        account_level=True,
-    ),
-    Phase(
-        "network_firewall_ratelimit",
-        "magic_transit_ratelimit",
-        None,
-        zone_level=False,
-        account_level=True,
-    ),
-    Phase(
-        "network_firewall_ids",
-        "magic_transit_ids_managed",
-        None,
-        zone_level=False,
-        account_level=True,
-    ),
-    Phase("url_normalization", "http_request_sanitize", None),
-]
+_BUILTIN_PHASES: list[Phase] = []
 
 # ---------------------------------------------------------------------------
 # Mutable registry and derived collections
@@ -125,16 +41,30 @@ _BUILTIN_PHASES: list[Phase] = [
 PHASES: list[Phase] = list(_BUILTIN_PHASES)
 
 PHASE_BY_NAME: dict[str, Phase] = {}
-PHASE_BY_CF: dict[str, Phase] = {}
+PHASE_BY_PROVIDER_ID: dict[str, Phase] = {}
 ALL_FRIENDLY_NAMES: list[str] = []
-ALL_CF_PHASES: list[str] = []
-ZONE_CF_PHASES: list[str] = []
-ACCOUNT_CF_PHASES: list[str] = []
+ALL_PROVIDER_IDS: list[str] = []
+ZONE_PROVIDER_IDS: list[str] = []
+ACCOUNT_PROVIDER_IDS: list[str] = []
 
 # Phase names that were renamed — old name → current friendly name.
-RENAMED_PHASES: dict[str, str] = {
-    "waf_managed_exceptions": "waf_managed_rules",
-}
+# Providers register aliases via ``register_phase_alias()``.
+RENAMED_PHASES: dict[str, str] = {}
+
+
+def register_phase_alias(old: str, new: str) -> None:
+    """Register a backward-compat alias: *old* → *new*.
+
+    After registration, ``PHASE_BY_NAME[old]`` resolves to the same Phase as *new*.
+    """
+    RENAMED_PHASES[old] = new
+    _rebuild_derived()
+
+
+def unregister_phase_alias(old: str) -> None:
+    """Remove a phase alias (for test teardown)."""
+    RENAMED_PHASES.pop(old, None)
+    _rebuild_derived()
 
 
 def _rebuild_derived() -> None:
@@ -150,20 +80,20 @@ def _rebuild_derived() -> None:
         if canonical in PHASE_BY_NAME:
             PHASE_BY_NAME[alias] = PHASE_BY_NAME[canonical]
 
-    PHASE_BY_CF.clear()
-    PHASE_BY_CF.update({p.cf_phase: p for p in PHASES})
+    PHASE_BY_PROVIDER_ID.clear()
+    PHASE_BY_PROVIDER_ID.update({p.provider_id: p for p in PHASES})
 
     ALL_FRIENDLY_NAMES.clear()
     ALL_FRIENDLY_NAMES.extend(p.friendly_name for p in PHASES)
 
-    ALL_CF_PHASES.clear()
-    ALL_CF_PHASES.extend(p.cf_phase for p in PHASES)
+    ALL_PROVIDER_IDS.clear()
+    ALL_PROVIDER_IDS.extend(p.provider_id for p in PHASES)
 
-    ZONE_CF_PHASES.clear()
-    ZONE_CF_PHASES.extend(p.cf_phase for p in PHASES if p.zone_level)
+    ZONE_PROVIDER_IDS.clear()
+    ZONE_PROVIDER_IDS.extend(p.provider_id for p in PHASES if p.zone_level)
 
-    ACCOUNT_CF_PHASES.clear()
-    ACCOUNT_CF_PHASES.extend(p.cf_phase for p in PHASES if p.account_level)
+    ACCOUNT_PROVIDER_IDS.clear()
+    ACCOUNT_PROVIDER_IDS.extend(p.provider_id for p in PHASES if p.account_level)
 
 
 # Initial build
@@ -175,11 +105,11 @@ _rebuild_derived()
 
 
 def register_phase(phase: Phase) -> None:
-    """Register a new phase. Raises ValueError if the name or cf_phase already exists."""
+    """Register a new phase. Raises ValueError if the name or provider_id already exists."""
     if phase.friendly_name in PHASE_BY_NAME:
         raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
-    if phase.cf_phase in PHASE_BY_CF:
-        raise ValueError(f"CF phase {phase.cf_phase!r} is already registered")
+    if phase.provider_id in PHASE_BY_PROVIDER_ID:
+        raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
     PHASES.append(phase)
     _rebuild_derived()
 
@@ -190,15 +120,15 @@ def register_phases(phases: list[Phase]) -> None:
     for phase in phases:
         if phase.friendly_name in PHASE_BY_NAME:
             raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
-        if phase.cf_phase in PHASE_BY_CF:
-            raise ValueError(f"CF phase {phase.cf_phase!r} is already registered")
+        if phase.provider_id in PHASE_BY_PROVIDER_ID:
+            raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
     # Check for duplicates within the batch
     names = [p.friendly_name for p in phases]
-    cf_phases = [p.cf_phase for p in phases]
+    provider_ids = [p.provider_id for p in phases]
     if len(set(names)) != len(names):
         raise ValueError("Duplicate friendly_name in batch")
-    if len(set(cf_phases)) != len(cf_phases):
-        raise ValueError("Duplicate cf_phase in batch")
+    if len(set(provider_ids)) != len(provider_ids):
+        raise ValueError("Duplicate provider_id in batch")
     PHASES.extend(phases)
     _rebuild_derived()
 
@@ -215,23 +145,60 @@ def unregister_phase(friendly_name: str) -> None:
 
 # ---------------------------------------------------------------------------
 # Top-level YAML keys that are valid but are not phase names.
+# Providers register their keys via ``register_non_phase_key()``.
 # ---------------------------------------------------------------------------
 
-KNOWN_NON_PHASE_KEYS: frozenset[str] = frozenset(
-    {"custom_rulesets", "lists", "page_shield_policies"}
-)
+# Mutable set — mutated **in-place** so that code which did
+# ``from octorules.phases import KNOWN_NON_PHASE_KEYS`` sees updates.
+KNOWN_NON_PHASE_KEYS: set[str] = set()
 
-# Fields injected by the CF API that should be stripped when processing rules.
-# Note: 'ref' is NOT included — it's user-defined and needed for identification.
-CF_API_FIELDS: frozenset[str] = frozenset(
-    {"id", "version", "last_updated", "categories", "logging"}
-)
 
-# Fields injected by the CF API on list items that should be stripped.
-LIST_ITEM_API_FIELDS: frozenset[str] = frozenset({"id", "created_on", "modified_on"})
+def register_non_phase_key(key: str) -> None:
+    """Register a top-level YAML key that is not a phase name."""
+    KNOWN_NON_PHASE_KEYS.add(key)
 
-# Fields injected by the CF API on page shield policies that should be stripped.
-PAGE_SHIELD_POLICY_API_FIELDS: frozenset[str] = frozenset({"id", "last_updated"})
+
+def unregister_non_phase_key(key: str) -> None:
+    """Remove a non-phase key (for test teardown)."""
+    KNOWN_NON_PHASE_KEYS.discard(key)
+
+
+# ---------------------------------------------------------------------------
+# Provider-registered API field sets
+# ---------------------------------------------------------------------------
+
+# Fields injected by the provider API that should be stripped when processing.
+# Providers register their fields via ``register_api_fields()``.
+# Empty defaults in core; providers register their fields at import.
+
+_api_fields: dict[str, set[str]] = {
+    "rule": set(),
+    "list_item": set(),
+    "page_shield_policy": set(),
+}
+
+
+def register_api_fields(category: str, fields: set[str]) -> None:
+    """Register provider API fields to strip for *category*.
+
+    Categories: ``"rule"``, ``"list_item"``, ``"page_shield_policy"``.
+    """
+    if category not in _api_fields:
+        raise ValueError(f"Unknown API field category {category!r}")
+    _api_fields[category].update(fields)
+
+
+def unregister_api_fields(category: str) -> None:
+    """Clear API fields for *category* (for test teardown)."""
+    if category in _api_fields:
+        _api_fields[category].clear()
+
+
+def get_api_fields(category: str) -> frozenset[str]:
+    """Return the registered API fields for *category* as a frozenset."""
+    if category not in _api_fields:
+        raise ValueError(f"Unknown API field category {category!r}")
+    return frozenset(_api_fields[category])
 
 
 # ---------------------------------------------------------------------------
@@ -242,10 +209,10 @@ PAGE_SHIELD_POLICY_API_FIELDS: frozenset[str] = frozenset({"id", "last_updated"}
 def suggest_phase(name: str) -> str | None:
     """Return the closest matching phase name, or None if nothing is close.
 
-    Also detects when a CF API phase identifier is used and returns the friendly name.
+    Also detects when a provider phase identifier is used and returns the friendly name.
     """
-    if name in PHASE_BY_CF:
-        return PHASE_BY_CF[name].friendly_name
+    if name in PHASE_BY_PROVIDER_ID:
+        return PHASE_BY_PROVIDER_ID[name].friendly_name
     matches = get_close_matches(name, ALL_FRIENDLY_NAMES, n=1, cutoff=0.6)
     return matches[0] if matches else None
 
@@ -265,8 +232,8 @@ def get_phase(friendly_name: str) -> Phase:
     return PHASE_BY_NAME[friendly_name]
 
 
-def get_phase_by_cf(cf_phase: str) -> Phase:
-    """Look up a phase by Cloudflare phase identifier. Raises KeyError if not found."""
-    if cf_phase not in PHASE_BY_CF:
-        raise KeyError(f"Unknown CF phase {cf_phase!r}")
-    return PHASE_BY_CF[cf_phase]
+def get_phase_by_provider_id(provider_id: str) -> Phase:
+    """Look up a phase by provider identifier. Raises KeyError if not found."""
+    if provider_id not in PHASE_BY_PROVIDER_ID:
+        raise KeyError(f"Unknown provider phase {provider_id!r}")
+    return PHASE_BY_PROVIDER_ID[provider_id]

@@ -10,8 +10,8 @@ Supports two scopes:
 
 Syntax::
 
-    # octorules:disable=M013
-    # octorules:disable=M013,O001
+    # octorules:disable=CF015
+    # octorules:disable=CF015,CF510
 
 Multiple rule IDs can be comma-separated.  Whitespace around ``=`` and IDs is
 tolerated.
@@ -23,10 +23,13 @@ import logging
 import re
 from pathlib import Path
 
-log = logging.getLogger("octorules.linter")
+log = logging.getLogger(__name__)
 
-# Matches: # octorules:disable=M013  or  # octorules:disable=M013,O001
-_DIRECTIVE_RE = re.compile(r"#\s*octorules:disable\s*=\s*([A-Z]\d{3}(?:\s*,\s*[A-Z]\d{3})*)")
+# Matches: # octorules:disable=CF015  or  # octorules:disable=CF015,CF510
+# Supports both single-letter (M013) and multi-letter (CF015) prefixes.
+_DIRECTIVE_RE = re.compile(
+    r"#\s*octorules:disable\s*=\s*([A-Z]{1,3}\d{3}(?:\s*,\s*[A-Z]{1,3}\d{3})*)"
+)
 
 # Matches a YAML list item with a ref key
 _REF_RE = re.compile(r"^\s*-\s*ref:\s*(\S+)")
