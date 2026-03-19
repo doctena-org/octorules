@@ -66,6 +66,7 @@ class LintResult:
     ref: str = ""  # rule ref, empty for phase-level
     field: str = ""  # specific field path, e.g. "action_parameters.edge_ttl.default"
     suggestion: str = ""  # optional fix suggestion
+    location: str = ""  # YAML source location, e.g. "doctena.com.yaml:106"
 
     def __str__(self) -> str:
         parts = [f"[{self.severity.name}]", self.rule_id]
@@ -73,6 +74,8 @@ class LintResult:
             parts.append(f"({self.phase}")
             if self.ref:
                 parts.append(f"/ {self.ref}")
+            if self.location:
+                parts.append(f"/ {self.location}")
             parts[-1] += ")"
         parts.append(self.message)
         if self.suggestion:
@@ -93,9 +96,25 @@ class LintContext:
     suppressions: dict[str, set[str]] = field(default_factory=dict)
     results: list[LintResult] = field(default_factory=list)
     suppressed_count: int = 0
+    _current_location: str = ""  # set by linter before processing each rule
+
+    def set_location(self, rule_or_dict: object) -> None:
+        """Set current YAML source location from a ContextDict rule.
+
+        Call this before emitting results for a rule so ``add()`` auto-populates
+        the ``location`` field.
+        """
+        self._current_location = getattr(rule_or_dict, "context", "")
+
+    def clear_location(self) -> None:
+        """Clear the current location (e.g. after processing a rule)."""
+        self._current_location = ""
 
     def add(self, result: LintResult) -> None:
-        """Add a result if it passes filters and is not suppressed."""
+        """Add a result if it passes filters and is not suppressed.
+
+        Auto-populates ``location`` from the current context if not already set.
+        """
         if result.severity > self.severity_filter:
             return
         if self.rule_filter and result.rule_id not in self.rule_filter:
@@ -105,6 +124,18 @@ class LintContext:
         if self.suppressions and is_suppressed(self.suppressions, result.ref, result.rule_id):
             self.suppressed_count += 1
             return
+        # Auto-populate location if the result doesn't have one
+        if not result.location and self._current_location:
+            result = LintResult(
+                rule_id=result.rule_id,
+                severity=result.severity,
+                message=result.message,
+                phase=result.phase,
+                ref=result.ref,
+                field=result.field,
+                suggestion=result.suggestion,
+                location=self._current_location,
+            )
         self.results.append(result)
 
     @property

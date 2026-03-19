@@ -644,49 +644,6 @@ class TestSupportsGuards:
         prov.get_all_custom_rulesets.assert_called_once()
         prov.get_all_lists.assert_called_once()
 
-    def test_plan_single_zone_skips_page_shield_when_unsupported(self, tmp_path):
-        """When provider doesn't support page_shield, fetch is skipped."""
-        from octorules.commands import _plan_single_zone
-
-        prov = self._make_limited_provider(frozenset())
-        cfg = MagicMock()
-        cfg.zones = {
-            "example.com": MagicMock(zone_id="z-1", allow_unmanaged=False),
-        }
-        cfg.load_zone_rules.return_value = {
-            "page_shield_policies": [{"description": "test"}],
-        }
-
-        _plan_single_zone(cfg, prov, "example.com", None)
-
-        prov.get_all_page_shield_policies.assert_not_called()
-
-    def test_plan_single_zone_fetches_page_shield_when_supported(self, tmp_path):
-        """When provider supports page_shield, fetch proceeds."""
-        from octorules.commands import _plan_single_zone
-
-        prov = self._make_limited_provider(frozenset({"page_shield"}))
-        prov.get_all_page_shield_policies.return_value = []
-        cfg = MagicMock()
-        cfg.zones = {
-            "example.com": MagicMock(zone_id="z-1", allow_unmanaged=False),
-        }
-        cfg.load_zone_rules.return_value = {
-            "page_shield_policies": [
-                {
-                    "description": "test",
-                    "action": "allow",
-                    "expression": "true",
-                    "enabled": True,
-                    "value": "script.js",
-                }
-            ],
-        }
-
-        _plan_single_zone(cfg, prov, "example.com", None)
-
-        prov.get_all_page_shield_policies.assert_called_once()
-
     def test_backward_compat_no_supports_fetches_everything(self, tmp_path):
         """Provider without SUPPORTS gets all features fetched."""
         from octorules.commands import _plan_account

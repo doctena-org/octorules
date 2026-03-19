@@ -185,7 +185,7 @@ waf_custom_rules:
       ignored: true
 ```
 
-Ignored rules are still validated and linted (catch errors before un-ignoring), but produce no ADD/MODIFY/REMOVE changes.
+Ignored rules are still validated and linted (catch errors before un-ignoring), but are invisible to the planner on both sides — they produce no ADD/MODIFY/REMOVE changes, and if the rule exists upstream it will not be deleted or overwritten. This matches the octodns convention: the rule can be edited manually on the provider without octorules interfering.
 
 **Targeting providers** — in multi-provider or multi-target setups, restrict a rule to specific targets:
 

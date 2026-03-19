@@ -622,7 +622,8 @@ class TestDumpBlankLineFormatting:
         data = yaml.safe_load(text)
         assert len(data["custom_rulesets"]) == 2
 
-    def test_blank_line_between_page_shield_policies(self, tmp_path):
+    def test_blank_line_between_extra_sections(self, tmp_path):
+        """Extra sections passed via extra_sections dict are included and separated."""
         policies = [
             {
                 "description": "Alpha",
@@ -639,7 +640,9 @@ class TestDumpBlankLineFormatting:
                 "value": "y",
             },
         ]
-        result = dump_zone_rules("example.com", {}, tmp_path, page_shield_policies=policies)
+        result = dump_zone_rules(
+            "example.com", {}, tmp_path, extra_sections={"page_shield_policies": policies}
+        )
         text = result.read_text()
         assert "\n\n- description: Beta" in text
         data = yaml.safe_load(text)
