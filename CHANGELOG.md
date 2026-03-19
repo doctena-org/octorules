@@ -650,7 +650,7 @@ Total lint rules: **127** (was 109).
 - **Linter** (`octorules lint`): offline static analysis with 105 rules across
   17 categories (A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, S). 4-stage
   pipeline, text/JSON/SARIF output, `--plan` tier awareness, `--exit-code` for
-  CI. See [docs/lint-rules/](docs/lint-rules/README.md) for full rule reference.
+  CI. See the [octorules-cloudflare lint rule reference](https://github.com/doctena-org/octorules-cloudflare/blob/main/docs/lint-rules/README.md) for Cloudflare-specific rules.
 - **Inline suppression** (`# octorules:disable=RULE`): shellcheck-style
   comments to suppress specific lint rules per-rule or per-file.
 - **Page Shield policy linting** (Category S): S001–S004 for structure,
