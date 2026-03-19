@@ -124,11 +124,13 @@ class ListPlan:
 
 @dataclass
 class PageShieldPolicyPlan:
+    """Backward-compat stub — the canonical version lives in octorules_cloudflare.page_shield."""
+
     description: str
-    policy_id: str | None = None  # None for CREATE
+    policy_id: str | None = None
     create: bool = False
     delete: bool = False
-    changes: list[RuleChange] = field(default_factory=list)  # field-level changes
+    changes: list[RuleChange] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
@@ -151,7 +153,25 @@ class ZonePlan:
     phase_plans: list[PhasePlan] = field(default_factory=list)
     custom_ruleset_plans: list[CustomRulesetPlan] = field(default_factory=list)
     list_plans: list[ListPlan] = field(default_factory=list)
-    page_shield_policy_plans: list[PageShieldPolicyPlan] = field(default_factory=list)
+    extension_plans: dict[str, list] = field(default_factory=dict)
+
+    @property
+    def page_shield_policy_plans(self) -> list[PageShieldPolicyPlan]:
+        """Backward-compat property -- reads from extension_plans["page_shield"].
+
+        Returns the live list from extension_plans when present, so ``.append()``
+        works.  Returns a detached empty list otherwise (read-only; use the
+        setter or manipulate ``extension_plans`` directly to add plans).
+        """
+        return self.extension_plans.get("page_shield", [])
+
+    @page_shield_policy_plans.setter
+    def page_shield_policy_plans(self, value: list[PageShieldPolicyPlan]) -> None:
+        """Backward-compat setter -- writes to extension_plans["page_shield"]."""
+        if value:
+            self.extension_plans["page_shield"] = value
+        else:
+            self.extension_plans.pop("page_shield", None)
 
     @property
     def display_name(self) -> str:
@@ -173,17 +193,34 @@ class ZonePlan:
             any(pp.has_changes for pp in self.phase_plans)
             or any(crp.has_changes for crp in self.custom_ruleset_plans)
             or any(lp.has_changes for lp in self.list_plans)
-            or any(psp.has_changes for psp in self.page_shield_policy_plans)
+            or any(any(p.has_changes for p in plans) for plans in self.extension_plans.values())
         )
 
     @property
     def total_changes(self) -> int:
+        ext_total = sum(
+            sum(p.total_changes for p in plans) for plans in self.extension_plans.values()
+        )
         return (
             sum(len(pp.changes) for pp in self.phase_plans)
             + sum(len(crp.changes) for crp in self.custom_ruleset_plans)
             + sum(lp.total_changes for lp in self.list_plans)
-            + sum(psp.total_changes for psp in self.page_shield_policy_plans)
+            + ext_total
         )
+
+
+# Wrap ZonePlan.__init__ to accept deprecated ``page_shield_policy_plans`` kwarg
+# and migrate it to ``extension_plans["page_shield"]``.
+_ZonePlan_orig_init = ZonePlan.__init__
+
+
+def _zone_plan_init(self, *args, page_shield_policy_plans=None, **kwargs):
+    _ZonePlan_orig_init(self, *args, **kwargs)
+    if page_shield_policy_plans:
+        self.extension_plans["page_shield"] = list(page_shield_policy_plans)
+
+
+ZonePlan.__init__ = _zone_plan_init
 
 
 class RuleValidationError(Exception):
@@ -473,8 +510,13 @@ def diff_phase(
 ) -> PhasePlan:
     """Compute the diff for a single phase."""
     plan = PhasePlan(phase=phase)
+    # Collect refs of ignored rules BEFORE filtering, so we can exclude them
+    # from current too.  octodns convention: ignored means invisible on both sides.
+    ignored_refs = {r.get("ref") for r in desired_rules if _is_ignored(r)} - {None}
     desired = prepare_desired_rules(desired_rules, phase)
     plan.prepared_rules = desired
+    if ignored_refs:
+        current_rules = [r for r in current_rules if r.get("ref") not in ignored_refs]
     plan.changes = _diff_rules(phase, desired, current_rules, allow_unmanaged=allow_unmanaged)
     return plan
 
@@ -589,7 +631,10 @@ def diff_custom_ruleset(
         phase=phase,
     )
 
+    ignored_refs = {r.get("ref") for r in desired_rules if _is_ignored(r)} - {None}
     desired_rules = [r for r in desired_rules if not _is_ignored(r)]
+    if ignored_refs:
+        current_rules = [r for r in current_rules if r.get("ref") not in ignored_refs]
     # Resolve the Phase object for the prepare_rule hook.
     # Custom rulesets pass the provider_id string (e.g. "http_request_firewall_custom").
     phase_obj = (
@@ -673,21 +718,26 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
                     )
                 lp_data.append(entry)
             zone_data["list_plans"] = lp_data
-        if zp.page_shield_policy_plans:
-            psp_data = []
-            for psp in sorted(zp.page_shield_policy_plans, key=lambda p: p.description):
-                entry: dict = {
-                    "description": psp.description,
-                    "create": psp.create,
-                    "delete": psp.delete,
-                }
-                if psp.changes:
+        for ext_name, ext_plans in sorted(zp.extension_plans.items()):
+            if not ext_plans:
+                continue
+            ext_data = []
+            for ep in ext_plans:
+                entry: dict = {}
+                # Serialize known identity fields
+                if hasattr(ep, "description"):
+                    entry["description"] = ep.description
+                if hasattr(ep, "create"):
+                    entry["create"] = ep.create
+                if hasattr(ep, "delete"):
+                    entry["delete"] = ep.delete
+                if hasattr(ep, "changes") and ep.changes:
                     entry["changes"] = sorted(
-                        [_serialize_change(c) for c in psp.changes],
+                        [_serialize_change(c) for c in ep.changes],
                         key=itemgetter("change_type", "ref"),
                     )
-                psp_data.append(entry)
-            zone_data["page_shield_policy_plans"] = psp_data
+                ext_data.append(entry)
+            zone_data[f"{ext_name}_policy_plans"] = ext_data
         data.append(zone_data)
     serialized = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode()).hexdigest()
@@ -750,8 +800,14 @@ def check_safety(
         _tally(crp.changes, f"custom_ruleset:{crp.ruleset_name}")
     for lp in zone_plan.list_plans:
         _tally(lp.changes, f"list:{lp.list_name}", extra_deletes=int(lp.delete))
-    for psp in zone_plan.page_shield_policy_plans:
-        _tally(psp.changes, f"page_shield:{psp.description}", extra_deletes=int(psp.delete))
+    for ext_name, ext_plans in zone_plan.extension_plans.items():
+        for ep in ext_plans:
+            label = f"{ext_name}:{getattr(ep, 'description', '?')}"
+            _tally(
+                getattr(ep, "changes", []),
+                label,
+                extra_deletes=int(getattr(ep, "delete", False)),
+            )
 
     violations: list[SafetyViolation] = []
     if existing_count > 0:
@@ -1024,150 +1080,3 @@ def diff_lists_full(
             plans.append(lp)
 
     return plans
-
-
-# --- Page Shield Policy helpers ---
-
-_VALID_PAGE_SHIELD_ACTIONS = frozenset({"allow", "log"})
-
-_PAGE_SHIELD_DIFF_FIELDS = ("action", "expression", "enabled", "value")
-
-
-def _make_page_shield_phase(description: str) -> Phase:
-    """Create a synthetic Phase for a page shield policy."""
-    return _make_synthetic_phase(
-        "page_shield",
-        description,
-        "page_shield_policies",
-        zone_level=True,
-        account_level=False,
-    )
-
-
-def normalize_page_shield_policy(policy: dict) -> dict:
-    """Strip page_shield_policy API fields and normalize expression for comparison."""
-    excluded = get_api_fields("page_shield_policy")
-    return {k: _normalize_value(v, key=k) for k, v in policy.items() if k not in excluded}
-
-
-def validate_page_shield_policy(entry: dict, index: int) -> None:
-    """Validate a page_shield_policies entry from YAML.
-
-    Checks: description required (non-empty string), action required (allow/log),
-    expression required (string), enabled required (bool), value required (string).
-    """
-    ctx = f"page_shield_policies[{index}]"
-    desc = _require_string_field(entry, "description", ctx)
-    ctx_desc = f"{ctx} ({desc!r})"
-    _require_string_field(entry, "action", ctx_desc)
-    action = entry["action"]
-    if action not in _VALID_PAGE_SHIELD_ACTIONS:
-        raise RuleValidationError(
-            f"{ctx_desc} has invalid 'action' {action!r}."
-            f" Must be one of: {', '.join(sorted(_VALID_PAGE_SHIELD_ACTIONS))}"
-        )
-    _require_string_field(entry, "expression", ctx_desc)
-    _require_field(entry, "enabled", ctx_desc, bool)
-    _require_string_field(entry, "value", ctx_desc)
-
-
-def _diff_fields(desired: dict, current: dict, fields: tuple[str, ...]) -> list[RuleChange]:
-    """Compute field-level diffs between desired and current dicts.
-
-    Returns a list of MODIFY RuleChanges for fields that differ.
-    """
-    changes: list[RuleChange] = []
-    synthetic = _make_page_shield_phase(desired.get("description", ""))
-    for fname in fields:
-        d_val = _normalize_value(desired.get(fname), key=fname)
-        c_val = _normalize_value(current.get(fname), key=fname)
-        if d_val != c_val:
-            change = RuleChange(
-                change_type=ChangeType.MODIFY,
-                ref=fname,
-                phase=synthetic,
-                current={fname: c_val},
-                desired={fname: d_val},
-            )
-            change.__dict__["normalized_current"] = {fname: c_val}
-            change.__dict__["normalized_desired"] = {fname: d_val}
-            changes.append(change)
-    return changes
-
-
-def diff_page_shield_policies(
-    desired_policies: list[dict],
-    current_policies: list[dict],
-) -> list[PageShieldPolicyPlan]:
-    """Compute the full diff for page shield policies using description as identity key.
-
-    Args:
-        desired_policies: List of desired policy entries from YAML.
-        current_policies: List of current policy dicts from provider (with id stripped).
-
-    Returns list of PageShieldPolicyPlan objects, sorted by description.
-    """
-    plans: list[PageShieldPolicyPlan] = []
-
-    # Index current by description
-    current_by_desc: dict[str, dict] = {}
-    for p in current_policies:
-        desc = p.get("description", "")
-        if desc:
-            current_by_desc[desc] = p
-
-    desired_descs: set[str] = set()
-
-    # Desired policies
-    for entry in desired_policies:
-        entry = entry.copy()
-        if isinstance(entry.get("expression"), str):
-            entry["expression"] = normalize_expression(entry["expression"])
-        desc = entry["description"]
-        desired_descs.add(desc)
-        current = current_by_desc.get(desc)
-
-        if current is None:
-            # CREATE
-            synthetic = _make_page_shield_phase(desc)
-            field_changes = []
-            for field in _PAGE_SHIELD_DIFF_FIELDS:
-                val = entry.get(field)
-                if val is not None:
-                    field_changes.append(
-                        RuleChange(
-                            change_type=ChangeType.ADD,
-                            ref=field,
-                            phase=synthetic,
-                            desired={field: val},
-                        )
-                    )
-            pp = PageShieldPolicyPlan(
-                description=desc,
-                create=True,
-                changes=field_changes,
-            )
-            plans.append(pp)
-        else:
-            # EXISTING — field-level diff
-            policy_id = current.get("id")
-            field_changes = _diff_fields(entry, current, _PAGE_SHIELD_DIFF_FIELDS)
-            if field_changes:
-                pp = PageShieldPolicyPlan(
-                    description=desc,
-                    policy_id=policy_id,
-                    changes=field_changes,
-                )
-                plans.append(pp)
-
-    # Current not in desired → DELETE
-    for desc, current in current_by_desc.items():
-        if desc not in desired_descs:
-            pp = PageShieldPolicyPlan(
-                description=desc,
-                policy_id=current.get("id"),
-                delete=True,
-            )
-            plans.append(pp)
-
-    return sorted(plans, key=lambda p: p.description)

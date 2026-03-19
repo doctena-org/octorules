@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **`octorules.provider.utils`** — shared provider helpers:
+  - `make_error_wrapper` factory for mapping SDK exceptions to provider-agnostic
+    exception types. Eliminates boilerplate in provider implementations.
+  - `format_api_error` for consistent error formatting with HTTP status codes.
+- **Lint result location** (`LintResult.location`). Lint results now carry the
+  YAML source location (e.g. `doctena.com.yaml:106`), shown inside the
+  parentheses in text output and as `region.startLine` in SARIF.
+- **Extension hook system** (`octorules.extensions`). Five registries that allow
+  provider packages to plug in provider-specific features without coupling the
+  core: `register_plan_zone_hook` (two-phase prefetch/finalize for concurrent
+  API calls), `register_apply_extension`, `register_format_extension`,
+  `register_validate_extension`, `register_dump_extension`.
+- **`ZonePlan.extension_plans`** generic dict for extension-specific plan data.
+  `has_changes` and `total_changes` iterate extension plans generically.
+- **`dump_zone_rules` accepts `extra_sections`** for extension dump data.
+
+### Fixed
+- **`octorules: {ignored: true}` no longer deletes the rule from the provider.**
+  Ignored rules are now excluded from both desired and current during diff,
+  matching the octodns convention. Previously, an ignored rule that existed
+  upstream would be planned for deletion.
+
+### Changed
+- **Page Shield extracted to octorules-cloudflare.** All Page Shield planning,
+  applying, formatting, validation, and dumping code moved to
+  `octorules_cloudflare.page_shield`. Core retains backward-compat
+  `PageShieldPolicyPlan` stub and `ZonePlan.page_shield_policy_plans` property.
+- **Page Shield methods removed from `BaseProvider` protocol.** Providers no
+  longer need to implement `list_page_shield_policies`,
+  `create_page_shield_policy`, `update_page_shield_policy`,
+  `delete_page_shield_policy`, `get_all_page_shield_policies`.
+- `format_csp_value` moved from `octorules.expression` to
+  `octorules_cloudflare.page_shield`.
+- `format_page_shield_policy_plan` removed from `octorules.formatter`
+  (replaced by extension formatter).
+- `compute_checksum` and `check_safety` now iterate `extension_plans`
+  generically instead of hardcoding Page Shield.
+
 ## [0.16.0] - 2026-03-17
 
 ### Added

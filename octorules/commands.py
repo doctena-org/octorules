@@ -21,6 +21,13 @@ from octorules.config import (
     slugify,
 )
 from octorules.dumper import dump_zone_rules
+from octorules.extensions import (
+    call_apply_extensions,
+    call_dump_extensions,
+    call_plan_zone_finalize,
+    call_plan_zone_prefetch,
+    call_validate_extensions,
+)
 from octorules.formatter import build_report_data, print_report
 from octorules.phases import (
     KNOWN_NON_PHASE_KEYS,
@@ -37,20 +44,17 @@ from octorules.planner import (
     compute_checksum,
     diff_custom_ruleset,
     diff_lists_full,
-    diff_page_shield_policies,
     filter_by_target,
     plan_zone,
     prepare_desired_rules,
     validate_custom_ruleset,
     validate_list_entry,
-    validate_page_shield_policy,
     warn_unknown_phase_keys,
 )
 from octorules.processor import BaseProcessor
 from octorules.provider.base import (
     SUPPORTS_CUSTOM_RULESETS,
     SUPPORTS_LISTS,
-    SUPPORTS_PAGE_SHIELD,
     SUPPORTS_ZONE_DISCOVERY,
     BaseProvider,
     Scope,
@@ -371,12 +375,7 @@ def _phase_filter_to_provider_ids(phase_filter: list[str] | None) -> list[str] |
     return [PHASE_BY_NAME[p].provider_id for p in phase_filter if p in PHASE_BY_NAME]
 
 
-def _format_api_error(e: ProviderError) -> str:
-    """Format a provider error, including the HTTP status code when available."""
-    cause = e.__cause__
-    if cause is not None and hasattr(cause, "status_code"):
-        return f"[HTTP {cause.status_code}] {e}"
-    return str(e)
+from octorules.provider.utils import format_api_error as _format_api_error  # noqa: E402
 
 
 def _map_ordered(
@@ -491,69 +490,37 @@ def _plan_single_zone(
 
     provider_ids = _phase_filter_to_provider_ids(phase_filter)
 
-    # Start page shield fetch concurrently with phase rules
-    ps_desired = all_desired.get("page_shield_policies")
-    ps_future = None
-    bg = None
-    if ps_desired is not None:
-        if not provider_supports(provider, SUPPORTS_PAGE_SHIELD):
-            log.warning(
-                "Skipping page_shield_policies for %s: provider does not support page_shield",
-                zone_name,
-            )
-            ps_desired = None
-        else:
-            bg = ThreadPoolExecutor(max_workers=1)
-            ps_future = bg.submit(provider.get_all_page_shield_policies, scope)
+    # Start extension prefetch (e.g. Page Shield API call) concurrently
+    ext_contexts = call_plan_zone_prefetch(all_desired, scope, provider)
 
-    try:
-        current = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
+    current = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
 
-        # Exclude phases that failed to fetch — planning against missing data
-        # would incorrectly treat all existing rules as deletions.
-        failed_phases = getattr(current, "failed_phases", [])
-        if failed_phases:
-            failed_friendly = {
-                PHASE_BY_PROVIDER_ID[p].friendly_name
-                for p in failed_phases
-                if p in PHASE_BY_PROVIDER_ID
-            }
-            skipped = failed_friendly & set(desired.keys())
-            for name in sorted(skipped):
-                log.warning("Skipping %s for %s: failed to fetch current state", name, zone_name)
-            if skipped:
-                desired = {k: v for k, v in desired.items() if k not in failed_friendly}
+    # Exclude phases that failed to fetch — planning against missing data
+    # would incorrectly treat all existing rules as deletions.
+    failed_phases = getattr(current, "failed_phases", [])
+    if failed_phases:
+        failed_friendly = {
+            PHASE_BY_PROVIDER_ID[p].friendly_name
+            for p in failed_phases
+            if p in PHASE_BY_PROVIDER_ID
+        }
+        skipped = failed_friendly & set(desired.keys())
+        for name in sorted(skipped):
+            log.warning("Skipping %s for %s: failed to fetch current state", name, zone_name)
+        if skipped:
+            desired = {k: v for k, v in desired.items() if k not in failed_friendly}
 
-        zp = plan_zone(zone_name, desired, current, allow_unmanaged=zone_cfg.allow_unmanaged)
+    zp = plan_zone(zone_name, desired, current, allow_unmanaged=zone_cfg.allow_unmanaged)
 
-        # Apply process_changes hooks
-        if processors and zone_cfg.processors:
-            for proc_name in zone_cfg.processors:
-                zp = processors[proc_name].process_changes(zone_name, zp, provider)
+    # Apply process_changes hooks
+    if processors and zone_cfg.processors:
+        for proc_name in zone_cfg.processors:
+            zp = processors[proc_name].process_changes(zone_name, zp, provider)
 
-        # Plan Page Shield policies
-        if ps_future is not None:
-            try:
-                current_policies = ps_future.result()
-            except ProviderAuthError:
-                raise
-            except ProviderError as e:
-                log.warning(
-                    "Failed to fetch Page Shield policies for %s: %s",
-                    zone_name,
-                    _format_api_error(e),
-                )
-                current_policies = []
+    # Finalize extension hooks (join prefetched data, compute diffs)
+    call_plan_zone_finalize(zp, all_desired, scope, provider, ext_contexts)
 
-            policy_plans = diff_page_shield_policies(ps_desired, current_policies)
-            for pp in policy_plans:
-                if pp.has_changes:
-                    zp.page_shield_policy_plans.append(pp)
-
-        return (zone_name, zp, desired, current)
-    finally:
-        if bg is not None:
-            bg.shutdown(wait=True)
+    return (zone_name, zp, desired, current)
 
 
 def _plan_single_zone_safe(
@@ -1171,101 +1138,6 @@ def _apply_lists(
     return synced, None
 
 
-def _apply_page_shield_policies(
-    zp: ZonePlan,
-    scope: Scope,
-    provider: BaseProvider,
-) -> tuple[list[str], str | None]:
-    """Apply Page Shield policy changes. Returns (synced_labels, error_msg).
-
-    Order: creates first, then updates, then deletes.  Each stage is
-    parallelised via ``_apply_parallel``.
-    """
-    max_w = provider.max_workers
-    synced: list[str] = []
-
-    # Stage 1: Creates
-    create_tasks: list[tuple[str, Callable[[], None]]] = []
-    for psp in zp.page_shield_policy_plans:
-        if not psp.create:
-            continue
-        label = f"page_shield:{psp.description}"
-        full_label = f"{zp.zone_name}/{label}"
-        log.info("  %s/%s: creating policy", zp.zone_name, label)
-        # Build kwargs from changes (all fields are ADDs for create)
-        kwargs: dict = {"description": psp.description}
-        for c in psp.changes:
-            if c.normalized_desired:
-                for k, v in c.normalized_desired.items():
-                    kwargs[k] = v
-
-        def create_fn(_psp=psp, _kwargs=dict(kwargs), _label=label):
-            result = provider.create_page_shield_policy(scope, **_kwargs)
-            _psp.policy_id = result.get("id", "")
-            log.info("  %s/%s: created (id=%s)", zp.zone_name, _label, _psp.policy_id)
-
-        create_tasks.append((full_label, create_fn))
-
-    if create_tasks:
-        create_synced, create_error = _apply_parallel(create_tasks, max_w)
-        synced.extend(create_synced)
-        if create_error:
-            return synced, create_error
-
-    # Stage 2: Updates (has field changes but not create/delete)
-    update_tasks: list[tuple[str, Callable[[], None]]] = []
-    for psp in zp.page_shield_policy_plans:
-        if psp.create or psp.delete or not psp.changes:
-            continue
-        if not psp.policy_id:
-            continue
-        label = f"page_shield:{psp.description}"
-        full_label = f"{zp.zone_name}/{label}"
-        n_changes = len(psp.changes)
-        log.info("  %s/%s: applying %d change(s)", zp.zone_name, label, n_changes)
-        # Build the full updated policy from current + changes
-        kwargs = {"description": psp.description}
-        for c in psp.changes:
-            if c.normalized_desired:
-                for k, v in c.normalized_desired.items():
-                    kwargs[k] = v
-
-        def update_fn(_psp=psp, _kwargs=dict(kwargs), _label=label):
-            provider.update_page_shield_policy(scope, _psp.policy_id, **_kwargs)
-            log.info("  %s/%s: updated", zp.zone_name, _label)
-
-        update_tasks.append((full_label, update_fn))
-
-    if update_tasks:
-        update_synced, update_error = _apply_parallel(update_tasks, max_w)
-        synced.extend(update_synced)
-        if update_error:
-            return synced, update_error
-
-    # Stage 3: Deletes last
-    delete_tasks: list[tuple[str, Callable[[], None]]] = []
-    for psp in zp.page_shield_policy_plans:
-        if not psp.delete or not psp.policy_id:
-            continue
-        label = f"page_shield:{psp.description}"
-        full_label = f"{zp.zone_name}/{label}"
-        log.info("  %s/%s: deleting policy", zp.zone_name, label)
-
-        def del_fn(_psp=psp, _label=label):
-            provider.delete_page_shield_policy(scope, _psp.policy_id)
-            log.info("  %s/%s: deleted", zp.zone_name, _label)
-
-        delete_tasks.append((full_label, del_fn))
-
-    if delete_tasks:
-        del_synced, del_error = _apply_parallel(delete_tasks, max_w)
-        synced.extend(del_synced)
-        if del_error:
-            return synced, del_error
-
-    return synced, None
-
-
 def _apply_single_zone(
     zp: ZonePlan,
     desired: dict,
@@ -1287,12 +1159,12 @@ def _apply_single_zone(
         if list_error:
             return zp.zone_name, all_synced, list_error
 
-    # Apply Page Shield policies (zone-level, before custom rulesets and phases)
-    if zp.page_shield_policy_plans:
-        ps_synced, ps_error = _apply_page_shield_policies(zp, scope, provider)
-        all_synced.extend(ps_synced)
-        if ps_error:
-            return zp.zone_name, all_synced, ps_error
+    # Apply extension changes (e.g. Page Shield policies)
+    if zp.extension_plans:
+        ext_synced, ext_error = call_apply_extensions(zp, scope, provider)
+        all_synced.extend(ext_synced)
+        if ext_error:
+            return zp.zone_name, all_synced, ext_error
 
     # Apply custom rulesets next (before deploy rules reference them)
     if zp.custom_ruleset_plans:
@@ -1692,20 +1564,10 @@ def cmd_validate(
                     msg = f"  {zone_name}/lists: {e}"
                     errors.append(msg)
 
-        # Validate page_shield_policies entries
-        ps_entries = desired.get("page_shield_policies")
-        if isinstance(ps_entries, list):
-            for i, entry in enumerate(ps_entries):
-                try:
-                    validate_page_shield_policy(entry, i)
-                    desc = entry.get("description", f"index {i}")
-                    msg = f"  {zone_name}/page_shield:{desc}: OK"
-                    log.info("%s", msg)
-                    lines.append(msg)
-                    validated_count += 1
-                except RuleValidationError as e:
-                    msg = f"  {zone_name}/page_shield_policies: {e}"
-                    errors.append(msg)
+        # Validate extension entries (e.g. page_shield_policies)
+        pre_lines = len(lines)
+        call_validate_extensions(desired, zone_name, errors, lines)
+        validated_count += len(lines) - pre_lines
 
     if errors:
         log.error("Validation errors:")
@@ -1756,48 +1618,24 @@ def cmd_dump(
         provider = _get_zone_provider(zone_cfg, providers)
         scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
 
-        # Start page shield fetch concurrently with phase rules
-        ps_future = None
-        supports_ps = provider_supports(provider, SUPPORTS_PAGE_SHIELD)
-        if supports_ps:
-            bg = ThreadPoolExecutor(max_workers=1)
-            ps_future = bg.submit(provider.get_all_page_shield_policies, scope)
-        else:
-            bg = None
-
         try:
-            try:
-                rules = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
-            except ProviderAuthError:
-                raise
-            except ProviderError as e:
-                return zone_name, None, _format_api_error(e)
+            rules = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
+        except ProviderAuthError:
+            raise
+        except ProviderError as e:
+            return zone_name, None, _format_api_error(e)
 
-            # Fetch Page Shield policies
-            page_shield_policies: list[dict] | None = None
-            if ps_future is not None:
-                try:
-                    page_shield_policies = ps_future.result() or None
-                except ProviderAuthError:
-                    raise
-                except ProviderError as e:
-                    log.warning(
-                        "Failed to fetch Page Shield policies for %s: %s",
-                        zone_name,
-                        _format_api_error(e),
-                    )
+        # Call extension dump hooks (e.g. Page Shield)
+        ext_data = call_dump_extensions(scope, provider, out_dir)
 
-            result = dump_zone_rules(
-                zone_name,
-                rules,
-                out_dir,
-                page_shield_policies=page_shield_policies,
-                lists_dir=lists_dir,
-            )
-            return zone_name, result, None
-        finally:
-            if bg is not None:
-                bg.shutdown(wait=True)
+        result = dump_zone_rules(
+            zone_name,
+            rules,
+            out_dir,
+            lists_dir=lists_dir,
+            **ext_data,
+        )
+        return zone_name, result, None
 
     def _dump_account(provider: BaseProvider) -> tuple[bool, str | None]:
         account_label = slugify(provider.account_name)
@@ -1858,6 +1696,9 @@ def cmd_dump(
                         _format_api_error(e),
                     )
 
+            # Call extension dump hooks (e.g. Page Shield)
+            ext_data = call_dump_extensions(scope, provider, out_dir)
+
             result = dump_zone_rules(
                 account_label,
                 rules,
@@ -1865,6 +1706,7 @@ def cmd_dump(
                 custom_rulesets=custom_rulesets,
                 lists=lists,
                 lists_dir=lists_dir,
+                **ext_data,
             )
             if result:
                 log.info("Dumped account %s -> %s", provider.account_name, result)

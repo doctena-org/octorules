@@ -10,12 +10,12 @@ from html import escape as html_escape
 from typing import IO
 
 from octorules.expression import format_expression_display
+from octorules.extensions import get_format_extensions
 from octorules.phases import PHASE_BY_NAME, PHASE_BY_PROVIDER_ID
 from octorules.planner import (
     ChangeType,
     CustomRulesetPlan,
     ListPlan,
-    PageShieldPolicyPlan,
     PhasePlan,
     RuleChange,
     ZonePlan,
@@ -213,20 +213,6 @@ def format_list_plan(lp: ListPlan, use_color: bool = True) -> list[str]:
     return lines
 
 
-def format_page_shield_policy_plan(pp: PageShieldPolicyPlan, use_color: bool = True) -> list[str]:
-    """Format a Page Shield policy plan as lines of output."""
-    lines = []
-    header = f"  page_shield: {pp.description}"
-    lines.append(_color(header, BOLD, use_color))
-    if pp.create:
-        lines.append(_color("  + create policy", GREEN, use_color))
-    if pp.delete:
-        lines.append(_color("  - delete policy", RED, use_color))
-    for change in pp.changes:
-        lines.extend(format_change(change, use_color))
-    return lines
-
-
 def format_zone_plan(zone_plan: ZonePlan, use_color: bool = True) -> str:
     """Format a full zone plan as a string."""
     lines: list[str] = []
@@ -252,8 +238,10 @@ def format_zone_plan(zone_plan: ZonePlan, use_color: bool = True) -> str:
     for lp in zone_plan.list_plans:
         lines.extend(format_list_plan(lp, use_color))
 
-    for psp in zone_plan.page_shield_policy_plans:
-        lines.extend(format_page_shield_policy_plan(psp, use_color))
+    for name, fmt in get_format_extensions().items():
+        plans = zone_plan.extension_plans.get(name, [])
+        if plans:
+            lines.extend(fmt.format_text(plans, use_color))
 
     return "\n".join(lines)
 
@@ -316,19 +304,6 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             if lp_changes:
                 lp_entry["changes"] = lp_changes
             lp_plans.append(lp_entry)
-        psp_plans = []
-        for psp in zp.page_shield_policy_plans:
-            psp_entry: dict = {
-                "description": psp.description,
-                "create": psp.create,
-                "delete": psp.delete,
-            }
-            if psp.policy_id:
-                psp_entry["policy_id"] = psp.policy_id
-            psp_changes = [_change_to_dict(c) for c in psp.changes]
-            if psp_changes:
-                psp_entry["changes"] = psp_changes
-            psp_plans.append(psp_entry)
         zone_entry: dict = {
             "zone": zp.zone_name,
             "phase_plans": phase_plans,
@@ -340,8 +315,10 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             zone_entry["custom_ruleset_plans"] = cr_plans
         if lp_plans:
             zone_entry["list_plans"] = lp_plans
-        if psp_plans:
-            zone_entry["page_shield_policy_plans"] = psp_plans
+        for ext_name, fmt in get_format_extensions().items():
+            ext_plans = zp.extension_plans.get(ext_name, [])
+            if ext_plans:
+                zone_entry[f"{ext_name}_policy_plans"] = fmt.format_json(ext_plans)
         zones.append(zone_entry)
     result = {
         "zones": zones,
@@ -440,14 +417,10 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 pending_diffs.append([("description", old_desc, new_desc)])
             for c in lp.changes:
                 lines.append(_md_change_row(c, phase_label, pending_diffs, has_reorder=False))
-        for psp in zp.page_shield_policy_plans:
-            phase_label = f"page_shield:{psp.description}"
-            if psp.create:
-                lines.append(f"| + | {_md_escape(phase_label)} | | create policy |")
-            if psp.delete:
-                lines.append(f"| - | {_md_escape(phase_label)} | | delete policy |")
-            for c in psp.changes:
-                lines.append(_md_change_row(c, phase_label, pending_diffs, has_reorder=False))
+        for ext_name, fmt in get_format_extensions().items():
+            ext_plans = zp.extension_plans.get(ext_name, [])
+            if ext_plans:
+                lines.extend(fmt.format_markdown(ext_plans, pending_diffs))
         for diff_group in pending_diffs:
             lines.append("")
             lines.append("```diff")
@@ -655,33 +628,10 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
             lines.extend(_html_summary_row(lp_creates, lp_removes, lp_modifies, 0))
             lines.append("</table>")
 
-        for psp in zp.page_shield_policy_plans:
-            lines.append(f"<h3>page_shield: {e(psp.description)}</h3>")
-            lines.extend(_HTML_TABLE_HEADER)
-
-            psp_creates = psp_removes = psp_modifies = 0
-
-            if psp.create:
-                psp_creates += 1
-                lines.append("  <tr>")
-                lines.append("    <td>Create</td>")
-                lines.append("    <td></td>")
-                lines.append("    <td>create policy</td>")
-                lines.append("  </tr>")
-            if psp.delete:
-                psp_removes += 1
-                lines.append("  <tr>")
-                lines.append("    <td>Delete</td>")
-                lines.append("    <td></td>")
-                lines.append("    <td>delete policy</td>")
-                lines.append("  </tr>")
-
-            c_creates, c_removes, c_modifies, _ = _html_render_changes(psp.changes, lines)
-            psp_creates += c_creates
-            psp_removes += c_removes
-            psp_modifies += c_modifies
-            lines.extend(_html_summary_row(psp_creates, psp_removes, psp_modifies, 0))
-            lines.append("</table>")
+        for ext_name, fmt in get_format_extensions().items():
+            ext_plans = zp.extension_plans.get(ext_name, [])
+            if ext_plans:
+                fmt.format_html(ext_plans, lines)
 
     if not any(zp.has_changes for zp in zone_plans):
         lines.append("<b>No changes were planned</b>")
@@ -873,35 +823,11 @@ def build_report_data(
                 }
             )
 
-        # Include Page Shield policy data in report
-        for psp in zp.page_shield_policy_plans:
-            psp_adds = psp_removes = psp_modifies = 0
-            if psp.create:
-                psp_adds += 1
-            if psp.delete:
-                psp_removes += 1
-            for c in psp.changes:
-                if c.change_type == ChangeType.ADD:
-                    psp_adds += 1
-                elif c.change_type == ChangeType.REMOVE:
-                    psp_removes += 1
-                elif c.change_type == ChangeType.MODIFY:
-                    psp_modifies += 1
-            psp_status = "drifted" if (psp_adds or psp_removes or psp_modifies) else "in_sync"
-            if psp_status != "in_sync":
-                zone_has_drift = True
-            phases_data.append(
-                {
-                    "phase": f"page_shield:{psp.description}",
-                    "provider_id": "page_shield_policies",
-                    "status": psp_status,
-                    "yaml_rules": 0,
-                    "live_rules": 0,
-                    "adds": psp_adds,
-                    "removes": psp_removes,
-                    "modifies": psp_modifies,
-                }
-            )
+        # Include extension data in report
+        for ext_name, fmt in get_format_extensions().items():
+            ext_plans = zp.extension_plans.get(ext_name, [])
+            if ext_plans:
+                zone_has_drift = bool(fmt.format_report(ext_plans, zone_has_drift, phases_data))
 
         zone_status = "drifted" if zone_has_drift else "in_sync"
         if zone_status == "in_sync":

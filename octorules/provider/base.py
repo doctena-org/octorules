@@ -9,7 +9,7 @@ from typing import ClassVar, Protocol, runtime_checkable
 # they support via a ``SUPPORTS`` class variable.
 SUPPORTS_CUSTOM_RULESETS = "custom_rulesets"
 SUPPORTS_LISTS = "lists"
-SUPPORTS_PAGE_SHIELD = "page_shield"
+SUPPORTS_PAGE_SHIELD = "page_shield"  # kept for backward compat; used by CF extension
 SUPPORTS_ZONE_DISCOVERY = "zone_discovery"
 
 _SUPPORTS_ALL = frozenset(
@@ -162,34 +162,3 @@ class BaseProvider(Protocol):
     def get_all_lists(
         self, scope: Scope, *, list_names: list[str] | None = None
     ) -> dict[str, dict]: ...
-
-    # -- Page Shield Policies API --
-
-    def list_page_shield_policies(self, scope: Scope) -> list[dict]: ...
-
-    def create_page_shield_policy(
-        self,
-        scope: Scope,
-        *,
-        description: str,
-        action: str,
-        expression: str,
-        enabled: bool,
-        value: str,
-    ) -> dict: ...
-
-    def update_page_shield_policy(
-        self,
-        scope: Scope,
-        policy_id: str,
-        *,
-        description: str,
-        action: str,
-        expression: str,
-        enabled: bool,
-        value: str,
-    ) -> dict: ...
-
-    def delete_page_shield_policy(self, scope: Scope, policy_id: str) -> None: ...
-
-    def get_all_page_shield_policies(self, scope: Scope) -> list[dict]: ...

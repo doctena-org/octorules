@@ -85,6 +85,7 @@ def _to_json_data(ctx: LintContext) -> dict[str, Any]:
                 "ref": r.ref,
                 "field": r.field,
                 "suggestion": r.suggestion,
+                "location": r.location,
             }
             for r in ctx.results
         ],
@@ -130,11 +131,17 @@ def _to_sarif(ctx: LintContext) -> dict[str, Any]:
             ]
         # Location
         if ctx.file_path:
-            location: dict[str, Any] = {
-                "physicalLocation": {
-                    "artifactLocation": {"uri": ctx.file_path},
-                }
+            phys: dict[str, Any] = {
+                "artifactLocation": {"uri": ctx.file_path},
             }
+            # Extract line number from location "file.yaml:42"
+            if r.location and ":" in r.location:
+                try:
+                    line_no = int(r.location.rsplit(":", 1)[1])
+                    phys["region"] = {"startLine": line_no}
+                except (ValueError, IndexError):
+                    pass
+            location: dict[str, Any] = {"physicalLocation": phys}
             # Add logical location
             logical_parts = []
             if r.phase:

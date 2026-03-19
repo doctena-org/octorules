@@ -1756,6 +1756,33 @@ class TestIgnoredFiltering:
         refs = [c.ref for c in plan.changes]
         assert refs == ["live"]
 
+    def test_diff_phase_ignored_rule_not_deleted_from_current(self):
+        """Ignored rule existing in current should NOT produce a REMOVE.
+
+        octodns convention: ignored means invisible on both sides.
+        """
+        desired = [self._rule("live"), self._rule("skip", ignored=True)]
+        current = [
+            {"ref": "live", "expression": "true", "action": "block", "enabled": True},
+            {"ref": "skip", "expression": "true", "action": "block", "enabled": True},
+        ]
+        plan = diff_phase(WAF_PHASE, desired, current)
+        assert not plan.has_changes
+
+    def test_diff_phase_ignored_rule_only_in_current(self):
+        """Ignored rule only in current (not in desired YAML) still gets deleted.
+
+        Only refs explicitly marked ignored in YAML are excluded from current.
+        """
+        desired = [self._rule("live")]
+        current = [
+            {"ref": "live", "expression": "true", "action": "block", "enabled": True},
+            {"ref": "unmanaged", "expression": "true", "action": "block", "enabled": True},
+        ]
+        plan = diff_phase(WAF_PHASE, desired, current)
+        refs = [c.ref for c in plan.changes]
+        assert "unmanaged" in refs  # normal REMOVE behavior
+
     def test_diff_custom_ruleset_ignores_rule(self):
         rules = [self._rule("a"), self._rule("b", ignored=True)]
         plan = diff_custom_ruleset("rs-1", "test", "http_request_firewall_custom", rules, [])
@@ -1763,6 +1790,16 @@ class TestIgnoredFiltering:
         assert refs == ["a"]
         prepared_refs = [r["ref"] for r in plan.prepared_rules]
         assert prepared_refs == ["a"]
+
+    def test_diff_custom_ruleset_ignored_not_deleted_from_current(self):
+        """Ignored rule in custom ruleset should not be deleted from current."""
+        desired = [self._rule("a"), self._rule("b", ignored=True)]
+        current = [
+            {"ref": "a", "expression": "true", "action": "block", "enabled": True},
+            {"ref": "b", "expression": "true", "action": "block", "enabled": True},
+        ]
+        plan = diff_custom_ruleset("rs-1", "test", "http_request_firewall_custom", desired, current)
+        assert not plan.has_changes
 
 
 class TestOctoruleKeyStripping:

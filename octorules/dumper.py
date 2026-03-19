@@ -92,8 +92,9 @@ def dump_zone_rules(
     output_dir: Path,
     custom_rulesets: dict[str, dict] | None = None,
     lists: dict[str, dict] | None = None,
-    page_shield_policies: list[dict] | None = None,
     lists_dir: Path | None = None,
+    extra_sections: dict[str, list] | None = None,
+    **kwargs,
 ) -> Path | None:
     """Write a zone's rules to a YAML file.
 
@@ -150,23 +151,9 @@ def dump_zone_rules(
         if lists_list:
             output["lists"] = lists_list
 
-    if page_shield_policies:
-        from octorules.expression import format_csp_value
-
-        policies_list = []
-        psp_api_fields = get_api_fields("page_shield_policy")
-        for policy in sorted(page_shield_policies, key=lambda p: p.get("description", "")):
-            cleaned = {}
-            for k, v in policy.items():
-                if k in psp_api_fields:
-                    continue
-                if k == "value" and isinstance(v, str) and len(v) > 80:
-                    cleaned[k] = _LiteralStr(_strip_trailing_whitespace(format_csp_value(v)))
-                else:
-                    cleaned[k] = _literalize(v)
-            policies_list.append(cleaned)
-        if policies_list:
-            output["page_shield_policies"] = policies_list
+    # Merge extra sections from extension dump hooks
+    if extra_sections:
+        output.update(extra_sections)
 
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
