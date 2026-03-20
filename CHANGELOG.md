@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-03-19
+
 ### Added
 - **`octorules.provider.utils`** — shared provider helpers:
   - `make_error_wrapper` factory for mapping SDK exceptions to provider-agnostic
