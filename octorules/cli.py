@@ -141,7 +141,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument(
         "--checksum",
         action="store_true",
-        help="Print a SHA-256 checksum of the plan",
+        help="Print a SHA-256 checksum of the plan (use with 'sync --checksum HASH' for drift protection)",
     )
     plan_parser.add_argument(
         "--exit-code",
@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
     sync_parser.add_argument(
         "--checksum",
         metavar="HASH",
-        help="Verify plan checksum before applying",
+        help="Verify plan hasn't drifted since 'plan --checksum'; sync fails if state changed",
     )
     sync_parser.add_argument(
         "--force",
