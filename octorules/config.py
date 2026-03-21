@@ -131,7 +131,7 @@ def _resolve_secret(value: str, handlers: dict[str, object], source: str) -> str
     prefix, _, ref = value.partition("/")
     handler = handlers.get(prefix)
     if handler is None:
-        log.debug("No secret handler for prefix %r, passing through: %s", prefix, value)
+        log.debug("No secret handler for prefix %r, passing value through unchanged", prefix)
         return value  # not a secret ref
     return handler.fetch(ref, source)
 
