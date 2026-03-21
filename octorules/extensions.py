@@ -185,17 +185,21 @@ def call_plan_zone_prefetch(
     all_desired: dict,
     scope: Scope,
     provider: BaseProvider,
-) -> list[object]:
-    """Call prefetch hooks (before get_all_phase_rules). Returns list of contexts."""
-    contexts: list[object] = []
-    for prefetch, _finalize in _plan_zone_hooks:
+) -> list[tuple]:
+    """Call prefetch hooks. Returns list of (finalize_fn, context) pairs.
+
+    Snapshots the hook list so finalize uses the same hooks even if
+    registrations change between prefetch and finalize.
+    """
+    pairs: list[tuple] = []
+    for prefetch, finalize in _plan_zone_hooks:
         try:
             ctx = prefetch(all_desired, scope, provider)
         except Exception:
             log.exception("Error in plan zone prefetch hook %s", prefetch)
             raise
-        contexts.append(ctx)
-    return contexts
+        pairs.append((finalize, ctx))
+    return pairs
 
 
 def call_plan_zone_finalize(
@@ -203,12 +207,12 @@ def call_plan_zone_finalize(
     all_desired: dict,
     scope: Scope,
     provider: BaseProvider,
-    contexts: list[object],
+    prefetch_pairs: list[tuple],
 ) -> None:
-    """Call finalize hooks (after plan_zone) with prefetch contexts."""
-    for i, (_prefetch, finalize) in enumerate(_plan_zone_hooks):
+    """Call finalize hooks with their paired prefetch contexts."""
+    for finalize, ctx in prefetch_pairs:
         try:
-            finalize(zone_plan, all_desired, scope, provider, contexts[i])
+            finalize(zone_plan, all_desired, scope, provider, ctx)
         except Exception:
             log.exception("Error in plan zone finalize hook %s", finalize)
             raise
