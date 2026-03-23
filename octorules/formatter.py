@@ -18,7 +18,9 @@ from octorules.planner import (
     ListPlan,
     PhasePlan,
     RuleChange,
+    RuleDict,
     ZonePlan,
+    count_change_types,
 )
 
 # ANSI color codes
@@ -83,7 +85,7 @@ def _compute_field_diffs(change: RuleChange) -> list[tuple[str, object, object]]
     return diffs
 
 
-def _rule_detail_pairs(rule: dict | None) -> list[tuple[str, object]]:
+def _rule_detail_pairs(rule: RuleDict | None) -> list[tuple[str, object]]:
     """Extract key-value pairs from a normalized rule for Details display.
 
     Orders: action, description, expression first, then remaining alphabetically.
@@ -111,7 +113,7 @@ def _rule_detail_pairs(rule: dict | None) -> list[tuple[str, object]]:
     return pairs
 
 
-def _format_add_remove_details(rule: dict | None, use_color: bool) -> list[str]:
+def _format_add_remove_details(rule: RuleDict | None, use_color: bool) -> list[str]:
     """Format rule details for an ADD or REMOVE change."""
     details = []
     for key, val in _rule_detail_pairs(rule):
@@ -186,9 +188,13 @@ def format_phase_plan(phase_plan: PhasePlan, use_color: bool = True) -> list[str
 def format_custom_ruleset_plan(crp: CustomRulesetPlan, use_color: bool = True) -> list[str]:
     """Format a custom ruleset plan as lines of output."""
     lines = []
-    id_short = crp.ruleset_id[:8]
+    id_short = (crp.ruleset_id or "")[:8]
     header = f"  custom_ruleset: {crp.ruleset_name} ({id_short})"
     lines.append(_color(header, BOLD, use_color))
+    if crp.create:
+        lines.append(_color("  + create rule group", GREEN, use_color))
+    if crp.delete:
+        lines.append(_color("  - delete rule group", RED, use_color))
     for change in crp.changes:
         lines.extend(format_change(change, use_color))
     return lines
@@ -287,6 +293,8 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
                     "ruleset_id": crp.ruleset_id,
                     "ruleset_name": crp.ruleset_name,
                     "phase": crp.phase,
+                    "create": crp.create,
+                    "delete": crp.delete,
                     "changes": [_change_to_dict(c) for c in crp.changes],
                 }
             )
@@ -403,6 +411,10 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 lines.append(_md_change_row(c, pp.phase.friendly_name, pending_diffs))
         for crp in zp.custom_ruleset_plans:
             phase_label = f"custom_ruleset:{crp.ruleset_name}"
+            if crp.create:
+                lines.append(f"| + | {phase_label} | | create rule group |")
+            if crp.delete:
+                lines.append(f"| - | {phase_label} | | delete rule group |")
             for c in crp.changes:
                 lines.append(_md_change_row(c, phase_label, pending_diffs))
         for lp in zp.list_plans:
@@ -584,8 +596,28 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
         for crp in zp.custom_ruleset_plans:
             lines.append(f"<h3>custom_ruleset: {e(crp.ruleset_name)}</h3>")
             lines.extend(_HTML_TABLE_HEADER)
-            creates, removes, modifies, reorders = _html_render_changes(crp.changes, lines)
-            lines.extend(_html_summary_row(creates, removes, modifies, reorders))
+
+            crp_creates = crp_removes = 0
+
+            if crp.create:
+                crp_creates += 1
+                lines.append("  <tr>")
+                lines.append("    <td>Create</td>")
+                lines.append("    <td></td>")
+                lines.append("    <td>create rule group</td>")
+                lines.append("  </tr>")
+            if crp.delete:
+                crp_removes += 1
+                lines.append("  <tr>")
+                lines.append("    <td>Delete</td>")
+                lines.append("    <td></td>")
+                lines.append("    <td>delete rule group</td>")
+                lines.append("  </tr>")
+
+            c_creates, c_removes, c_modifies, c_reorders = _html_render_changes(crp.changes, lines)
+            crp_creates += c_creates
+            crp_removes += c_removes
+            lines.extend(_html_summary_row(crp_creates, crp_removes, c_modifies, c_reorders))
             lines.append("</table>")
 
         for lp in zp.list_plans:
@@ -726,15 +758,7 @@ def build_report_data(
 
             # Count changes from the phase plan if one exists
             pp = changes_index.get((zone_name, provider_id))
-            adds = removes = modifies = 0
-            if pp:
-                for c in pp.changes:
-                    if c.change_type == ChangeType.ADD:
-                        adds += 1
-                    elif c.change_type == ChangeType.REMOVE:
-                        removes += 1
-                    elif c.change_type == ChangeType.MODIFY:
-                        modifies += 1
+            adds, removes, modifies = count_change_types(pp.changes) if pp else (0, 0, 0)
 
             # Determine status
             has_yaml = friendly_name in desired
@@ -767,14 +791,11 @@ def build_report_data(
 
         # Include custom ruleset data in report
         for crp in zp.custom_ruleset_plans:
-            cr_adds = cr_removes = cr_modifies = 0
-            for c in crp.changes:
-                if c.change_type == ChangeType.ADD:
-                    cr_adds += 1
-                elif c.change_type == ChangeType.REMOVE:
-                    cr_removes += 1
-                elif c.change_type == ChangeType.MODIFY:
-                    cr_modifies += 1
+            cr_adds, cr_removes, cr_modifies = count_change_types(
+                crp.changes,
+                extra_creates=int(crp.create),
+                extra_removes=int(crp.delete),
+            )
             cr_status = "drifted" if (cr_adds or cr_removes or cr_modifies) else "in_sync"
             if cr_status != "in_sync":
                 zone_has_drift = True
@@ -793,20 +814,13 @@ def build_report_data(
 
         # Include list data in report
         for lp in zp.list_plans:
-            lp_adds = lp_removes = lp_modifies = 0
-            if lp.create:
-                lp_adds += 1
-            if lp.delete:
-                lp_removes += 1
+            lp_adds, lp_removes, lp_modifies = count_change_types(
+                lp.changes,
+                extra_creates=int(lp.create),
+                extra_removes=int(lp.delete),
+            )
             if lp.description_change is not None:
                 lp_modifies += 1
-            for c in lp.changes:
-                if c.change_type == ChangeType.ADD:
-                    lp_adds += 1
-                elif c.change_type == ChangeType.REMOVE:
-                    lp_removes += 1
-                elif c.change_type == ChangeType.MODIFY:
-                    lp_modifies += 1
             lp_status = "drifted" if (lp_adds or lp_removes or lp_modifies) else "in_sync"
             if lp_status != "in_sync":
                 zone_has_drift = True

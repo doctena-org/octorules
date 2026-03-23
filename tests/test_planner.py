@@ -1502,11 +1502,19 @@ class TestValidateCustomRuleset:
     def test_valid_entry_passes(self):
         validate_custom_ruleset(self._valid_entry(), 0)
 
-    def test_missing_id(self):
+    def test_missing_id_and_capacity(self):
+        """Missing id without capacity should require capacity for creates."""
         entry = self._valid_entry()
         del entry["id"]
-        with pytest.raises(RuleValidationError, match="missing required 'id'"):
+        with pytest.raises(RuleValidationError, match="require a 'capacity' field"):
             validate_custom_ruleset(entry, 0)
+
+    def test_missing_id_with_capacity_ok(self):
+        """Missing id with capacity is valid (CREATE)."""
+        entry = self._valid_entry()
+        del entry["id"]
+        entry["capacity"] = 100
+        validate_custom_ruleset(entry, 0)  # Should not raise
 
     def test_missing_name(self):
         entry = self._valid_entry()
@@ -1967,3 +1975,192 @@ class TestTargetsExcludedMutualExclusion:
         }
         with pytest.raises(RuleValidationError, match="mutually exclusive"):
             validate_custom_ruleset(entry, 0)
+
+
+# ---------------------------------------------------------------------------
+# Checksum determinism (stability across calls, unicode)
+# ---------------------------------------------------------------------------
+
+
+class TestChecksumDeterminism:
+    """Extended determinism tests for compute_checksum."""
+
+    def test_checksum_deterministic_across_calls(self):
+        """Same plan always produces same checksum."""
+        phase = get_phase("redirect_rules")
+        waf = get_phase("waf_custom_rules")
+        cache = get_phase("cache_rules")
+
+        # Build a complex plan with many change types, custom rulesets, lists
+        pp_redirect = PhasePlan(
+            phase=phase,
+            changes=[
+                RuleChange(ChangeType.ADD, "r1", phase, desired={"expression": "a"}),
+                RuleChange(ChangeType.REMOVE, "r2", phase, current={"expression": "b"}),
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "r3",
+                    phase,
+                    current={"expression": "old"},
+                    desired={"expression": "new"},
+                ),
+                RuleChange(ChangeType.REORDER, "*", phase),
+            ],
+        )
+        pp_waf = PhasePlan(
+            phase=waf,
+            changes=[
+                RuleChange(ChangeType.ADD, "w1", waf, desired={"expression": "waf-expr"}),
+            ],
+        )
+        pp_cache = PhasePlan(
+            phase=cache,
+            changes=[
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "c1",
+                    cache,
+                    current={"expression": "x"},
+                    desired={"expression": "y"},
+                ),
+            ],
+        )
+
+        from octorules.planner import CustomRulesetPlan, ListPlan, _make_synthetic_phase
+
+        cr_phase = _make_synthetic_phase("custom_ruleset", "MyRS", "http_request_firewall_custom")
+        crp = CustomRulesetPlan(
+            ruleset_id="rs1",
+            ruleset_name="MyRS",
+            phase="http_request_firewall_custom",
+            changes=[RuleChange(ChangeType.ADD, "cr1", cr_phase, desired={"expression": "true"})],
+        )
+        lp = ListPlan(
+            list_name="blocklist",
+            list_id="list-1",
+            list_kind="ip",
+            changes=[RuleChange(ChangeType.ADD, "item1", phase, desired={"ip": "1.2.3.4"})],
+        )
+
+        zp1 = ZonePlan(
+            zone_name="zone1.com",
+            phase_plans=[pp_redirect, pp_waf],
+            custom_ruleset_plans=[crp],
+            list_plans=[lp],
+        )
+        zp2 = ZonePlan(zone_name="zone2.com", phase_plans=[pp_cache])
+
+        checksums = [compute_checksum([zp1, zp2]) for _ in range(10)]
+        assert len(set(checksums)) == 1, f"Expected all identical, got {set(checksums)}"
+        assert len(checksums[0]) == 64
+
+    def test_checksum_deterministic_with_unicode(self):
+        """Checksum handles Unicode refs and expressions."""
+        phase = get_phase("waf_custom_rules")
+        changes = [
+            RuleChange(
+                ChangeType.ADD,
+                "regel-\u00fc\u00e4\u00f6",
+                phase,
+                desired={
+                    "expression": 'http.host eq "\u00e9xample.com"',
+                    "description": "\u2603 Snowman rule",
+                },
+            ),
+            RuleChange(
+                ChangeType.MODIFY,
+                "\u65e5\u672c\u8a9e-ref",
+                phase,
+                current={"expression": "\u65e7\u5f0f", "description": "\u53e4\u3044"},
+                desired={"expression": "\u65b0\u5f0f", "description": "\u65b0\u3057\u3044"},
+            ),
+        ]
+        pp = PhasePlan(phase=phase, changes=changes)
+        zp = ZonePlan(zone_name="\u00fc\u00f1\u00ee\u00e7\u00f6\u00f0\u00e9.com", phase_plans=[pp])
+
+        h1 = compute_checksum([zp])
+        h2 = compute_checksum([zp])
+        assert h1 == h2
+        assert len(h1) == 64
+        # Must be valid hex
+        int(h1, 16)
+
+
+# ---------------------------------------------------------------------------
+# Refless current rules in diff
+# ---------------------------------------------------------------------------
+
+
+class TestDiffReflessCurrentRules:
+    """Tests for _diff_rules when current rules lack a ref field."""
+
+    def test_diff_handles_refless_current_rules(self):
+        """Rules without ref in current are handled gracefully."""
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "new_expr", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r1", "expression": "old_expr", "action": "redirect", "enabled": True},
+            {"expression": "true", "action": "block"},  # no ref
+        ]
+        changes = _diff_rules(phase, desired, current)
+        # Should not crash; r1 should be matched and detected as MODIFY
+        types = {c.change_type for c in changes}
+        assert ChangeType.MODIFY in types
+        refs = {c.ref for c in changes if c.change_type == ChangeType.MODIFY}
+        assert "r1" in refs
+        # The refless rule has no ref, so _rules_by_ref skips it — it is NOT
+        # in current_refs, which means it won't appear as REMOVE either.
+        # This is the expected "silently skipped" behaviour.
+        assert not any(c.ref == "" for c in changes)
+
+    def test_reorder_detection_with_refless_current(self):
+        """Reorder detection works when current has refless rules."""
+        phase = get_phase("redirect_rules")
+        desired = [
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        current = [
+            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+            {"expression": "true", "action": "block"},  # no ref — ignored by _ref_order
+            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        changes = _diff_rules(phase, desired, current)
+        # Reorder should be detected between r1 and r2
+        assert any(c.change_type == ChangeType.REORDER for c in changes)
+
+
+# ---------------------------------------------------------------------------
+# Large ruleset reorder performance
+# ---------------------------------------------------------------------------
+
+
+class TestLargeRulesetReorderPerformance:
+    """Performance regression test for reorder detection with many rules."""
+
+    def test_large_ruleset_reorder_performance(self):
+        """Reorder detection with 500 rules completes quickly."""
+        import time
+
+        phase = get_phase("redirect_rules")
+        # Generate 500 rules with refs "r000" to "r499"
+        desired = [
+            {"ref": f"r{i:03d}", "expression": f"expr_{i}", "action": "redirect", "enabled": True}
+            for i in range(500)
+        ]
+        # Reverse the order for current
+        current = list(reversed(desired))
+
+        start = time.monotonic()
+        changes = _diff_rules(phase, desired, current)
+        elapsed = time.monotonic() - start
+
+        assert elapsed < 2.0, f"diff took {elapsed:.2f}s, expected < 2s"
+        # Should detect reorder (same set of refs, different order)
+        assert any(c.change_type == ChangeType.REORDER for c in changes)
+        # No adds, removes, or modifies (content is identical)
+        assert not any(c.change_type == ChangeType.ADD for c in changes)
+        assert not any(c.change_type == ChangeType.REMOVE for c in changes)
+        assert not any(c.change_type == ChangeType.MODIFY for c in changes)

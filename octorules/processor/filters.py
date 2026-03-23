@@ -27,7 +27,7 @@ class PhaseFilter(BaseProcessor):
         *,
         include: list[str] | None = None,
         exclude: list[str] | None = None,
-    ):
+    ) -> None:
         if include and exclude:
             raise ConfigError("PhaseFilter: 'include' and 'exclude' are mutually exclusive")
         if not include and not exclude:
@@ -54,7 +54,7 @@ class RefFilter(BaseProcessor):
         *,
         include: str | None = None,
         exclude: str | None = None,
-    ):
+    ) -> None:
         if include and exclude:
             raise ConfigError("RefFilter: 'include' and 'exclude' are mutually exclusive")
         if not include and not exclude:
@@ -88,7 +88,7 @@ class ChangeTypeFilter(BaseProcessor):
         exclude: Change types to block (e.g. ["REMOVE", "REORDER"]).
     """
 
-    def __init__(self, *, exclude: list[str]):
+    def __init__(self, *, exclude: list[str]) -> None:
         if not exclude:
             raise ConfigError("ChangeTypeFilter: 'exclude' must be a non-empty list")
         try:

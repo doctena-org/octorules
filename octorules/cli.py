@@ -167,6 +167,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Bypass safety threshold checks",
     )
+    sync_parser.add_argument(
+        "--audit-log",
+        metavar="PATH",
+        help="Write JSON lines audit log of sync results to PATH",
+    )
 
     validate_parser = sub.add_parser(
         "validate", parents=[shared], help="Validate config and rules files (offline)"
@@ -341,6 +346,7 @@ def main(argv: list[str] | None = None) -> None:
                     checksum=args.checksum,
                     force=args.force,
                     scope_filter=args.scope,
+                    audit_log=args.audit_log,
                 )
             )
         elif args.command == "compare":

@@ -12,7 +12,7 @@ class BaseSecrets:
     (the part after ``handler/``) into its plaintext value.
     """
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         self.name = name
         self.log = logging.getLogger(f"{__name__}.{name}")
 

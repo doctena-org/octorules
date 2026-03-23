@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+import json as _json
 import logging
 import re
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO
 
@@ -38,11 +40,12 @@ from octorules.phases import (
 )
 from octorules.plan_output import PlanText
 from octorules.planner import (
+    RuleDict,
     RuleValidationError,
     ZonePlan,
     check_safety,
     compute_checksum,
-    diff_custom_ruleset,
+    diff_custom_rulesets_full,
     diff_lists_full,
     filter_by_target,
     plan_zone,
@@ -64,6 +67,13 @@ from octorules.provider.exceptions import (
     ProviderAuthError,
     ProviderError,
 )
+
+# Mapping from YAML top-level keys to SUPPORTS feature constants.
+# Used by _validate_feature_support() to catch unsupported features early.
+_FEATURE_KEYS: dict[str, str] = {
+    "custom_rulesets": SUPPORTS_CUSTOM_RULESETS,
+    "lists": SUPPORTS_LISTS,
+}
 
 log = logging.getLogger(__name__)
 
@@ -316,8 +326,8 @@ def _validate_phases(phases: list[str] | None) -> list[str] | None:
 
 
 def _filter_desired_by_phase(
-    desired: dict[str, list[dict]], phases: list[str] | None
-) -> dict[str, list[dict]]:
+    desired: dict[str, list[RuleDict]], phases: list[str] | None
+) -> dict[str, list[RuleDict]]:
     """Filter desired rules dict to only include specified phases."""
     if phases is None:
         return desired
@@ -325,8 +335,8 @@ def _filter_desired_by_phase(
 
 
 def _filter_current_by_phase(
-    current: dict[str, list[dict]], phases: list[str] | None
-) -> dict[str, list[dict]]:
+    current: dict[str, list[RuleDict]], phases: list[str] | None
+) -> dict[str, list[RuleDict]]:
     """Filter current rules dict to only include phases matching the friendly names."""
     if phases is None:
         return current
@@ -465,6 +475,44 @@ def _apply_parallel(
     return successes, first_error
 
 
+_TaskList = list[tuple[str, Callable[[], None]]]
+
+
+def _run_staged_tasks(
+    stages: list[tuple[bool, _TaskList | Callable[[], _TaskList]]],
+    max_workers: int,
+) -> tuple[list[str], str | None]:
+    """Run task stages sequentially, parallelising within each stage.
+
+    *stages* is a list of ``(collect, tasks_or_builder)`` pairs.  Each element
+    is either a concrete task list or a zero-arg callable that returns one
+    (use a callable when the stage depends on state produced by an earlier
+    stage, e.g. IDs assigned during creates).
+
+    Each task list contains ``(label, fn)`` tuples executed via
+    :func:`_apply_parallel`.  Stages run in order; within each stage tasks
+    are parallelised.
+
+    When *collect* is True the stage's successful labels are included in the
+    returned list; when False they are discarded (useful for setup stages such
+    as creates whose labels should not appear in the "synced" report).
+
+    Returns ``(synced_labels, first_error)``.  Processing stops after the
+    first stage that produces an error.
+    """
+    synced: list[str] = []
+    for collect, tasks_or_builder in stages:
+        tasks = tasks_or_builder() if callable(tasks_or_builder) else tasks_or_builder
+        if not tasks:
+            continue
+        stage_synced, error = _apply_parallel(tasks, max_workers)
+        if collect:
+            synced.extend(stage_synced)
+        if error:
+            return synced, error
+    return synced, None
+
+
 def _plan_single_zone(
     config: Config,
     provider: BaseProvider,
@@ -477,6 +525,17 @@ def _plan_single_zone(
     zone_cfg = config.zones[zone_name]
     scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
     all_desired = config.load_zone_rules(zone_name)
+
+    # Warn about unsupported features early (uses already-loaded data)
+    for yaml_key, feature in _FEATURE_KEYS.items():
+        if yaml_key in all_desired and not provider_supports(provider, feature):
+            log.warning(
+                "Zone %s uses %r but provider %s does not support it",
+                zone_name,
+                yaml_key,
+                type(provider).__name__,
+            )
+
     desired = _filter_desired_by_phase(all_desired, phase_filter)
 
     # Apply process_desired hooks
@@ -577,7 +636,9 @@ def _plan_zones(
             for tname, prov in target_pairs:
                 work_items.append((zn, tname, tname, prov))
 
-    def _plan_one(item: tuple[str, str | None, str, BaseProvider]):
+    def _plan_one(
+        item: tuple[str, str | None, str, BaseProvider],
+    ) -> tuple[str, ZonePlan, dict, dict] | None:
         zn, target, tname, provider = item
         result = _plan_single_zone_safe(
             config, provider, zn, phase_filter, processors, target_name=tname
@@ -650,8 +711,7 @@ def _plan_account(
     if bg_workers:
         bg = ThreadPoolExecutor(max_workers=bg_workers)
         if custom_rulesets_desired:
-            desired_ids = [entry["id"] for entry in custom_rulesets_desired if "id" in entry]
-            cr_future = bg.submit(provider.get_all_custom_rulesets, scope, ruleset_ids=desired_ids)
+            cr_future = bg.submit(provider.get_all_custom_rulesets, scope)
         if lists_desired is not None:
             lists_future = bg.submit(provider.get_all_lists, scope)
 
@@ -706,14 +766,12 @@ def _plan_account(
                 )
                 custom_rulesets_current = {}
 
-            for entry in custom_rulesets_desired:
-                rs_id = entry.get("id", "")
-                rs_name = entry.get("name", "")
-                rs_phase = entry.get("phase", "")
-                desired_rules = entry.get("rules", [])
-                current_data = custom_rulesets_current.get(rs_id, {})
-                current_rules = current_data.get("rules", [])
-                crp = diff_custom_ruleset(rs_id, rs_name, rs_phase, desired_rules, current_rules)
+            # Re-key by name for diff_custom_rulesets_full
+            current_by_name = {
+                v.get("name", ""): {"id": k, **v} for k, v in custom_rulesets_current.items()
+            }
+            cr_plans = diff_custom_rulesets_full(custom_rulesets_desired, current_by_name)
+            for crp in cr_plans:
                 if crp.has_changes:
                     zp.custom_ruleset_plans.append(crp)
 
@@ -1002,13 +1060,36 @@ def _apply_custom_rulesets(
 ) -> tuple[list[str], str | None]:
     """Apply custom ruleset changes. Returns (synced_labels, error_msg).
 
-    Custom rulesets are applied before phase deploy rules so the child
-    rulesets contain the expected rules when deploy rules reference them.
+    Order: creates first, then rule updates, then deletes.
+    Each stage is parallelised via ``_apply_parallel``; stages run sequentially
+    so that creates complete before rule updates read ``ruleset_id``.
     """
-    max_w = provider.max_workers
-
-    tasks: list[tuple[str, Callable[[], None]]] = []
+    # Stage 1: Creates (not collected — setup only)
+    create_tasks: list[tuple[str, Callable[[], None]]] = []
     for crp in zp.custom_ruleset_plans:
+        if not crp.create:
+            continue
+        label = f"custom_ruleset:{crp.ruleset_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        log.info("  %s/%s: creating rule group", zp.zone_name, label)
+
+        def create_fn(_crp=crp, _label=label) -> None:
+            result = provider.create_custom_ruleset(
+                scope, _crp.ruleset_name, _crp.phase, _crp.capacity or 0
+            )
+            _crp.ruleset_id = result.get("id", "")
+            log.info("  %s/%s: created (id=%s)", zp.zone_name, _label, _crp.ruleset_id)
+            if _crp.prepared_rules:
+                provider.put_custom_ruleset(scope, _crp.ruleset_id, _crp.prepared_rules)
+                log.info("  %s/%s: rules applied", zp.zone_name, _label)
+
+        create_tasks.append((full_label, create_fn))
+
+    # Stage 2: Rule updates (existing rulesets with changes, not create/delete)
+    update_tasks: list[tuple[str, Callable[[], None]]] = []
+    for crp in zp.custom_ruleset_plans:
+        if crp.create or crp.delete:
+            continue
         if not crp.has_changes:
             continue
         label = f"custom_ruleset:{crp.ruleset_name}"
@@ -1019,13 +1100,35 @@ def _apply_custom_rulesets(
             log.warning("  %s/%s: no prepared rules, skipping", zp.zone_name, label)
             continue
 
-        def fn(rid=crp.ruleset_id, rules=crp.prepared_rules, _lbl=label):
+        def update_fn(rid=crp.ruleset_id, rules=crp.prepared_rules, _lbl=label) -> None:
             provider.put_custom_ruleset(scope, rid, rules)
             log.info("  %s/%s: done", zp.zone_name, _lbl)
 
-        tasks.append((full_label, fn))
+        update_tasks.append((full_label, update_fn))
 
-    return _apply_parallel(tasks, max_w)
+    # Stage 3: Deletes last
+    delete_tasks: list[tuple[str, Callable[[], None]]] = []
+    for crp in zp.custom_ruleset_plans:
+        if not crp.delete or not crp.ruleset_id:
+            continue
+        label = f"custom_ruleset:{crp.ruleset_name}"
+        full_label = f"{zp.zone_name}/{label}"
+        log.info("  %s/%s: deleting rule group", zp.zone_name, label)
+
+        def del_fn(_crp=crp, _label=label) -> None:
+            provider.delete_custom_ruleset(scope, _crp.ruleset_id)
+            log.info("  %s/%s: deleted", zp.zone_name, _label)
+
+        delete_tasks.append((full_label, del_fn))
+
+    return _run_staged_tasks(
+        [
+            (False, create_tasks),
+            (True, update_tasks),
+            (True, delete_tasks),
+        ],
+        provider.max_workers,
+    )
 
 
 def _apply_lists(
@@ -1039,11 +1142,8 @@ def _apply_lists(
     Each stage is parallelised via ``_apply_parallel``; stages run sequentially
     so that creates complete before item updates read ``list_id``.
     """
-    max_w = provider.max_workers
-    synced: list[str] = []
-
-    # Stage 1: Creates (don't add to synced — matches original behaviour)
-    create_tasks: list[tuple[str, Callable[[], None]]] = []
+    # Stage 1: Creates (not collected — setup only)
+    create_tasks: _TaskList = []
     for lp in zp.list_plans:
         if not lp.create:
             continue
@@ -1051,7 +1151,7 @@ def _apply_lists(
         full_label = f"{zp.zone_name}/{label}"
         log.info("  %s/%s: creating list (%s)", zp.zone_name, label, lp.list_kind)
 
-        def create_fn(_lp=lp, _label=label):
+        def create_fn(_lp=lp, _label=label) -> None:
             desc = _lp.description_change[1] if _lp.description_change else ""
             result = provider.create_list(scope, _lp.list_name, _lp.list_kind, desc)
             _lp.list_id = result.get("id", "")
@@ -1059,83 +1159,77 @@ def _apply_lists(
 
         create_tasks.append((full_label, create_fn))
 
-    if create_tasks:
-        _, create_error = _apply_parallel(create_tasks, max_w)
-        if create_error:
-            return synced, create_error
+    # Stages 2-4 are built lazily because they read list_id values assigned
+    # by create tasks in stage 1.
 
-    # Stage 2: Item updates
-    item_tasks: list[tuple[str, Callable[[], None]]] = []
-    for lp in zp.list_plans:
-        if not lp.changes or not lp.list_id:
-            continue
-        label = f"list:{lp.list_name}"
-        full_label = f"{zp.zone_name}/{label}"
-        n_changes = len(lp.changes)
-        log.info("  %s/%s: applying %d item change(s)", zp.zone_name, label, n_changes)
-        if lp.prepared_items is None:
-            log.warning("  %s/%s: no prepared items, skipping", zp.zone_name, label)
-            continue
+    def _build_item_tasks() -> _TaskList:
+        """Stage 2: Item updates."""
+        tasks: _TaskList = []
+        for lp in zp.list_plans:
+            if not lp.changes or not lp.list_id:
+                continue
+            label = f"list:{lp.list_name}"
+            full_label = f"{zp.zone_name}/{label}"
+            n_changes = len(lp.changes)
+            log.info("  %s/%s: applying %d item change(s)", zp.zone_name, label, n_changes)
+            if lp.prepared_items is None:
+                log.warning("  %s/%s: no prepared items, skipping", zp.zone_name, label)
+                continue
 
-        def item_fn(_lp=lp, _label=label):
-            op_id = provider.put_list_items(scope, _lp.list_id, _lp.prepared_items)
-            provider.poll_bulk_operation(scope, op_id)
-            log.info("  %s/%s: items updated", zp.zone_name, _label)
+            def item_fn(_lp=lp, _label=label) -> None:
+                op_id = provider.put_list_items(scope, _lp.list_id, _lp.prepared_items)
+                provider.poll_bulk_operation(scope, op_id)
+                log.info("  %s/%s: items updated", zp.zone_name, _label)
 
-        item_tasks.append((full_label, item_fn))
+            tasks.append((full_label, item_fn))
+        return tasks
 
-    if item_tasks:
-        item_synced, item_error = _apply_parallel(item_tasks, max_w)
-        synced.extend(item_synced)
-        if item_error:
-            return synced, item_error
+    def _build_desc_tasks() -> _TaskList:
+        """Stage 3: Description updates (skip if create already set it)."""
+        tasks: _TaskList = []
+        for lp in zp.list_plans:
+            if lp.description_change is None or lp.create or lp.delete:
+                continue
+            if not lp.list_id:
+                continue
+            label = f"list:{lp.list_name}"
+            full_label = f"{zp.zone_name}/{label}"
+            _, new_desc = lp.description_change
+            log.info("  %s/%s: updating description", zp.zone_name, label)
 
-    # Stage 3: Description updates (skip if create already set it)
-    desc_tasks: list[tuple[str, Callable[[], None]]] = []
-    for lp in zp.list_plans:
-        if lp.description_change is None or lp.create or lp.delete:
-            continue
-        if not lp.list_id:
-            continue
-        label = f"list:{lp.list_name}"
-        full_label = f"{zp.zone_name}/{label}"
-        _, new_desc = lp.description_change
-        log.info("  %s/%s: updating description", zp.zone_name, label)
+            def desc_fn(_lp=lp, _new_desc=new_desc, _label=label) -> None:
+                provider.update_list_description(scope, _lp.list_id, _new_desc or "")
+                log.info("  %s/%s: description updated", zp.zone_name, _label)
 
-        def desc_fn(_lp=lp, _new_desc=new_desc, _label=label):
-            provider.update_list_description(scope, _lp.list_id, _new_desc or "")
-            log.info("  %s/%s: description updated", zp.zone_name, _label)
+            tasks.append((full_label, desc_fn))
+        return tasks
 
-        desc_tasks.append((full_label, desc_fn))
+    def _build_delete_tasks() -> _TaskList:
+        """Stage 4: Deletes last."""
+        tasks: _TaskList = []
+        for lp in zp.list_plans:
+            if not lp.delete or not lp.list_id:
+                continue
+            label = f"list:{lp.list_name}"
+            full_label = f"{zp.zone_name}/{label}"
+            log.info("  %s/%s: deleting list", zp.zone_name, label)
 
-    if desc_tasks:
-        desc_synced, desc_error = _apply_parallel(desc_tasks, max_w)
-        synced.extend(desc_synced)
-        if desc_error:
-            return synced, desc_error
+            def del_fn(_lp=lp, _label=label) -> None:
+                provider.delete_list(scope, _lp.list_id)
+                log.info("  %s/%s: deleted", zp.zone_name, _label)
 
-    # Stage 4: Deletes last
-    delete_tasks: list[tuple[str, Callable[[], None]]] = []
-    for lp in zp.list_plans:
-        if not lp.delete or not lp.list_id:
-            continue
-        label = f"list:{lp.list_name}"
-        full_label = f"{zp.zone_name}/{label}"
-        log.info("  %s/%s: deleting list", zp.zone_name, label)
+            tasks.append((full_label, del_fn))
+        return tasks
 
-        def del_fn(_lp=lp, _label=label):
-            provider.delete_list(scope, _lp.list_id)
-            log.info("  %s/%s: deleted", zp.zone_name, _label)
-
-        delete_tasks.append((full_label, del_fn))
-
-    if delete_tasks:
-        del_synced, del_error = _apply_parallel(delete_tasks, max_w)
-        synced.extend(del_synced)
-        if del_error:
-            return synced, del_error
-
-    return synced, None
+    return _run_staged_tasks(
+        [
+            (False, create_tasks),
+            (True, _build_item_tasks),
+            (True, _build_desc_tasks),
+            (True, _build_delete_tasks),
+        ],
+        provider.max_workers,
+    )
 
 
 def _apply_single_zone(
@@ -1192,7 +1286,7 @@ def _apply_single_zone(
             phase_rules = desired.get(friendly_name, [])
             payload = prepare_desired_rules(phase_rules, phase)
 
-        def fn(_payload=payload, _phase=phase, _label=friendly_name):
+        def fn(_payload=payload, _phase=phase, _label=friendly_name) -> None:
             kw = scope.api_kwargs
             scope_key = next(iter(kw))
             log.debug(
@@ -1213,6 +1307,17 @@ def _apply_single_zone(
     return zp.zone_name, all_synced, phase_error
 
 
+@dataclass
+class SyncResult:
+    """Result of a single zone sync operation."""
+
+    zone_name: str
+    target: str | None
+    synced: list[str]
+    error: str | None
+    total_changes: int
+
+
 def _apply_zone_changes(
     actionable: list[ZonePlan],
     desired_by_zone: dict[str, dict],
@@ -1221,8 +1326,8 @@ def _apply_zone_changes(
     scope_map: dict[str, Scope] | None = None,
     provider_map: dict[tuple[str, str | None], BaseProvider] | None = None,
     executor: ThreadPoolExecutor | None = None,
-) -> int:
-    """Apply planned changes to provider in parallel across zones. Returns exit code."""
+) -> tuple[int, list[SyncResult]]:
+    """Apply planned changes to provider. Returns (exit_code, sync_results)."""
     total = len(actionable)
     log.info("Applying changes to %d zone(s)...", total)
 
@@ -1258,11 +1363,12 @@ def _apply_zone_changes(
 
     if not to_apply:
         log.info("Done.")
-        return 0
+        return 0, []
 
     # Apply zones in parallel, phases within each zone sequentially
     all_synced: list[str] = []
     had_error = False
+    sync_results: list[SyncResult] = []
 
     def _apply_one(
         item: tuple[ZonePlan, dict, Scope, BaseProvider],
@@ -1276,10 +1382,19 @@ def _apply_zone_changes(
         log.error("Authentication/permission error during sync: %s", _format_api_error(e))
         if all_synced:
             log.error("Successfully synced before failure: %s", ", ".join(all_synced))
-        return 1
+        return 1, sync_results
 
-    for zone_name, synced, error in results:
+    for (zp, _desired, _scope, _prov), (zone_name, synced, error) in zip(to_apply, results):
         all_synced.extend(synced)
+        sync_results.append(
+            SyncResult(
+                zone_name=zone_name,
+                target=zp.target,
+                synced=synced,
+                error=error,
+                total_changes=zp.total_changes,
+            )
+        )
         if error:
             log.error("API error syncing %s: %s", zone_name, error)
             had_error = True
@@ -1287,10 +1402,10 @@ def _apply_zone_changes(
     if had_error:
         if all_synced:
             log.error("Successfully synced before failure: %s", ", ".join(all_synced))
-        return 1
+        return 1, sync_results
 
     log.info("Done.")
-    return 0
+    return 0, sync_results
 
 
 _CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1303,6 +1418,7 @@ def cmd_sync(
     checksum: str | None = None,
     force: bool = False,
     scope_filter: str = "all",
+    audit_log: str | None = None,
 ) -> int:
     """Run the sync command. Returns exit code."""
     if checksum is not None and not _CHECKSUM_RE.match(checksum):
@@ -1326,10 +1442,34 @@ def cmd_sync(
             scope_filter,
             shared_ex,
             processors,
+            audit_log=audit_log,
         )
     finally:
         if shared_ex is not None:
             shared_ex.shutdown(wait=True)
+
+
+def _write_audit_log(path: str, results: list[SyncResult]) -> None:
+    """Write sync results as JSON lines to an audit log file."""
+    from datetime import datetime, timezone
+
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        with open(Path(path).resolve(), "w", encoding="utf-8") as f:
+            for r in results:
+                entry = {
+                    "timestamp": ts,
+                    "zone": r.zone_name,
+                    "target": r.target,
+                    "synced": r.synced,
+                    "total_changes": r.total_changes,
+                    "status": "error" if r.error else "ok",
+                    "error": r.error,
+                }
+                f.write(_json.dumps(entry, separators=(",", ":")) + "\n")
+        log.info("Audit log written to %s", path)
+    except OSError as e:
+        log.error("Failed to write audit log %s: %s", path, e)
 
 
 def _cmd_sync_inner(
@@ -1342,6 +1482,7 @@ def _cmd_sync_inner(
     scope_filter: str,
     executor: ThreadPoolExecutor | None,
     processors: dict[str, BaseProcessor] | None = None,
+    audit_log: str | None = None,
 ) -> int:
     """Inner sync logic using an optional shared executor."""
     r = _plan_all_scopes(
@@ -1374,7 +1515,7 @@ def _cmd_sync_inner(
             return 1
 
     actionable = [zp for zp in r.zone_plans if zp.has_changes]
-    return _apply_zone_changes(
+    exit_code, sync_results = _apply_zone_changes(
         actionable,
         r.desired_by_zone,
         config,
@@ -1383,6 +1524,9 @@ def _cmd_sync_inner(
         provider_map=r.provider_map,
         executor=executor,
     )
+    if audit_log and sync_results:
+        _write_audit_log(audit_log, sync_results)
+    return exit_code
 
 
 def cmd_lint(
