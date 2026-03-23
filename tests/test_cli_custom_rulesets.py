@@ -128,8 +128,8 @@ class TestCustomRulesetsPlanAccount:
             zones={},
         )
 
-    def test_plan_account_with_custom_rulesets(self, tmp_path):
-        """_plan_account should plan custom rulesets when present in YAML."""
+    def test_plan_account_with_custom_rulesets_existing(self, tmp_path):
+        """_plan_account should plan custom rulesets that exist in provider."""
         from octorules.commands import _plan_account
 
         config = self._make_config(
@@ -147,13 +147,52 @@ class TestCustomRulesetsPlanAccount:
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
-        provider.get_all_custom_rulesets.return_value = {}  # empty = all rules are new
+        # Provider already has the ruleset with different rules
+        provider.get_all_custom_rulesets.return_value = {
+            "rs1": {
+                "name": "Block attackers",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "true", "action": "log", "enabled": True}],
+            }
+        }
 
         zp, desired, current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 1
         crp = zp.custom_ruleset_plans[0]
         assert crp.ruleset_id == "rs1"
+        assert crp.ruleset_name == "Block attackers"
+        assert crp.has_changes
+        assert not crp.create
+        assert not crp.delete
+
+    def test_plan_account_with_custom_rulesets_create(self, tmp_path):
+        """_plan_account should detect new custom rulesets as creates."""
+        from octorules.commands import _plan_account
+
+        config = self._make_config(
+            tmp_path,
+            "custom_rulesets:\n"
+            "- name: Block attackers\n"
+            "  phase: http_request_firewall_custom\n"
+            "  capacity: 100\n"
+            "  rules:\n"
+            "  - ref: r1\n"
+            "    expression: 'true'\n"
+            "    action: block\n",
+        )
+        provider = MagicMock()
+        provider.account_id = "acct-123"
+        provider.account_name = "Test Account"
+        provider.get_all_phase_rules.return_value = {}
+        provider.get_all_custom_rulesets.return_value = {}  # empty = all rules are new
+
+        zp, desired, current = _plan_account(config, provider, None)
+        assert zp is not None
+        assert len(zp.custom_ruleset_plans) == 1
+        crp = zp.custom_ruleset_plans[0]
+        assert crp.ruleset_id is None
+        assert crp.create is True
         assert crp.ruleset_name == "Block attackers"
         assert crp.has_changes
 
@@ -335,8 +374,8 @@ class TestCustomRulesetsSync:
         )
 
     @patch("octorules.commands._init_providers")
-    def test_sync_applies_custom_rulesets(self, mock_init_provs, tmp_path, caplog):
-        """Sync should call put_custom_ruleset for custom ruleset changes."""
+    def test_sync_applies_custom_rulesets_update(self, mock_init_provs, tmp_path, caplog):
+        """Sync should call put_custom_ruleset for existing custom ruleset changes."""
         config = self._make_account_config(
             tmp_path,
             "custom_rulesets:\n"
@@ -353,7 +392,14 @@ class TestCustomRulesetsSync:
         mock_prov.account_name = "Test Account"
         mock_prov.max_workers = 1
         mock_prov.get_all_phase_rules.return_value = {}
-        mock_prov.get_all_custom_rulesets.return_value = {}
+        # Provider has the ruleset but with different rules
+        mock_prov.get_all_custom_rulesets.return_value = {
+            "rs1": {
+                "name": "Block attackers",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "true", "action": "log", "enabled": True}],
+            }
+        }
         mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
@@ -362,6 +408,42 @@ class TestCustomRulesetsSync:
         mock_prov.put_custom_ruleset.assert_called_once()
         call_args = mock_prov.put_custom_ruleset.call_args
         assert call_args[0][1] == "rs1"  # ruleset_id
+        assert "custom_ruleset:Block attackers" in caplog.text
+
+    @patch("octorules.commands._init_providers")
+    def test_sync_creates_new_custom_ruleset(self, mock_init_provs, tmp_path, caplog):
+        """Sync should call create_custom_ruleset for new rulesets."""
+        config = self._make_account_config(
+            tmp_path,
+            "custom_rulesets:\n"
+            "- name: Block attackers\n"
+            "  phase: http_request_firewall_custom\n"
+            "  capacity: 100\n"
+            "  rules:\n"
+            "  - ref: r1\n"
+            "    expression: 'true'\n"
+            "    action: block\n",
+        )
+        mock_prov = MagicMock()
+        mock_prov.account_id = "acct-123"
+        mock_prov.account_name = "Test Account"
+        mock_prov.max_workers = 1
+        mock_prov.get_all_phase_rules.return_value = {}
+        mock_prov.get_all_custom_rulesets.return_value = {}
+        mock_prov.create_custom_ruleset.return_value = {
+            "id": "new-rs-id",
+            "name": "Block attackers",
+        }
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_sync(config, None, scope_filter="account")
+        assert result == 0
+        mock_prov.create_custom_ruleset.assert_called_once()
+        # After create, put_custom_ruleset should be called with the new ID
+        mock_prov.put_custom_ruleset.assert_called_once()
+        call_args = mock_prov.put_custom_ruleset.call_args
+        assert call_args[0][1] == "new-rs-id"  # ruleset_id from create
         assert "custom_ruleset:Block attackers" in caplog.text
 
     @patch("octorules.commands._init_providers")
@@ -385,7 +467,14 @@ class TestCustomRulesetsSync:
         mock_prov.account_name = "Test Account"
         mock_prov.max_workers = 1
         mock_prov.get_all_phase_rules.return_value = {}
-        mock_prov.get_all_custom_rulesets.return_value = {}
+        # Provider has the ruleset with different rules so it's an update (not create)
+        mock_prov.get_all_custom_rulesets.return_value = {
+            "rs1": {
+                "name": "Block attackers",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "true", "action": "log", "enabled": True}],
+            }
+        }
         mock_prov.put_custom_ruleset.side_effect = ProviderError("Forbidden")
         mock_init_provs.return_value = {"cloudflare": mock_prov}
 
@@ -528,3 +617,40 @@ class TestApplyCustomRulesets:
         assert error is None
         assert len(synced) == 0
         provider.put_custom_ruleset.assert_not_called()
+
+    def test_sync_create_succeeds_put_fails(self):
+        """When create_custom_ruleset succeeds but put_custom_ruleset fails, error is returned."""
+        from octorules.commands import _apply_custom_rulesets
+        from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.provider.exceptions import ProviderError
+
+        phase = _make_synthetic_phase(
+            "custom_ruleset",
+            "New RS",
+            "http_request_firewall_custom",
+        )
+        crp = CustomRulesetPlan(
+            ruleset_name="New RS",
+            phase="http_request_firewall_custom",
+            create=True,
+            changes=[RuleChange(ChangeType.ADD, "r1", phase)],
+            prepared_rules=[{"ref": "r1", "expression": "true", "action": "block"}],
+        )
+        zp = ZonePlan(zone_name="test-account", custom_ruleset_plans=[crp])
+        scope = Scope(account_id="acct-123", label="Test Account")
+        provider = MagicMock()
+        provider.max_workers = 1
+        # create succeeds and returns an ID
+        provider.create_custom_ruleset.return_value = {"id": "new-id"}
+        # put fails after create
+        provider.put_custom_ruleset.side_effect = ProviderError("rate limited")
+
+        synced, error = _apply_custom_rulesets(zp, scope, provider)
+        assert error is not None
+        assert "rate limited" in error
+        # create was called (the ruleset was created)
+        provider.create_custom_ruleset.assert_called_once()
+        # put was attempted with the new ID
+        provider.put_custom_ruleset.assert_called_once()
+        put_args = provider.put_custom_ruleset.call_args
+        assert put_args[0][1] == "new-id"

@@ -37,7 +37,7 @@ class Manager:
             mgr.sync(force=True)
     """
 
-    def __init__(self, config: Config | str | Path):
+    def __init__(self, config: Config | str | Path) -> None:
         if isinstance(config, Config):
             self.config = config
         else:

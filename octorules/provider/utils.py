@@ -59,9 +59,9 @@ def make_error_wrapper(
                 ...
     """
 
-    def decorator(fn):
+    def decorator(fn: Callable) -> Callable:
         @functools.wraps(fn)
-        def wrapper(*args, **kwargs):
+        def wrapper(*args: object, **kwargs: object) -> object:
             try:
                 return fn(*args, **kwargs)
             except ProviderError:

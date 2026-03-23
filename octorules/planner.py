@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from functools import cached_property
 from operator import itemgetter
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from octorules.expression import normalize_expression
 from octorules.phases import (
@@ -27,6 +27,11 @@ if TYPE_CHECKING:
     from octorules.config import ZoneConfig
 
 log = logging.getLogger(__name__)
+
+# Type aliases for rule/item dicts passed through the system.
+# These are provider-formatted dicts with string keys; the exact
+# shape depends on the provider (Cloudflare, AWS, Google).
+RuleDict = dict[str, Any]
 
 _OCTORULES_KEY = "octorules"
 
@@ -48,29 +53,52 @@ class RuleChange:
     change_type: ChangeType
     ref: str
     phase: Phase
-    current: dict | None = None
-    desired: dict | None = None
+    current: RuleDict | None = None
+    desired: RuleDict | None = None
 
     @cached_property
-    def normalized_current(self) -> dict | None:
+    def normalized_current(self) -> RuleDict | None:
         """Return normalized current rule, cached after first access."""
         if self.current is None:
             return None
         return normalize_rule(self.current)
 
     @cached_property
-    def normalized_desired(self) -> dict | None:
+    def normalized_desired(self) -> RuleDict | None:
         """Return normalized desired rule, cached after first access."""
         if self.desired is None:
             return None
         return normalize_rule(self.desired)
 
 
+def count_change_types(
+    changes: list[RuleChange],
+    *,
+    extra_creates: int = 0,
+    extra_removes: int = 0,
+) -> tuple[int, int, int]:
+    """Count ADD/REMOVE/MODIFY changes, with optional lifecycle adjustments.
+
+    Returns (adds, removes, modifies).
+    """
+    adds = extra_creates
+    removes = extra_removes
+    modifies = 0
+    for c in changes:
+        if c.change_type == ChangeType.ADD:
+            adds += 1
+        elif c.change_type == ChangeType.REMOVE:
+            removes += 1
+        elif c.change_type == ChangeType.MODIFY:
+            modifies += 1
+    return adds, removes, modifies
+
+
 @dataclass
 class PhasePlan:
     phase: Phase
     changes: list[RuleChange] = field(default_factory=list)
-    prepared_rules: list[dict] | None = field(default=None, repr=False, compare=False)
+    prepared_rules: list[RuleDict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def has_changes(self) -> bool:
@@ -79,15 +107,27 @@ class PhasePlan:
 
 @dataclass
 class CustomRulesetPlan:
-    ruleset_id: str
     ruleset_name: str
     phase: str
+    ruleset_id: str | None = None  # None for CREATE
+    create: bool = False
+    delete: bool = False
+    capacity: int | None = None  # required for CREATE (AWS WAF)
     changes: list[RuleChange] = field(default_factory=list)
-    prepared_rules: list[dict] | None = field(default=None, repr=False, compare=False)
+    prepared_rules: list[RuleDict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def has_changes(self) -> bool:
-        return len(self.changes) > 0
+        return self.create or self.delete or len(self.changes) > 0
+
+    @property
+    def total_changes(self) -> int:
+        count = len(self.changes)
+        if self.create:
+            count += 1
+        if self.delete:
+            count += 1
+        return count
 
 
 @dataclass
@@ -99,7 +139,7 @@ class ListPlan:
     delete: bool = False  # list will be deleted
     description_change: tuple[str | None, str | None] | None = None  # (current, desired)
     changes: list[RuleChange] = field(default_factory=list)  # item changes
-    prepared_items: list[dict] | None = field(default=None, repr=False, compare=False)
+    prepared_items: list[RuleDict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def has_changes(self) -> bool:
@@ -203,7 +243,7 @@ class ZonePlan:
         )
         return (
             sum(len(pp.changes) for pp in self.phase_plans)
-            + sum(len(crp.changes) for crp in self.custom_ruleset_plans)
+            + sum(crp.total_changes for crp in self.custom_ruleset_plans)
             + sum(lp.total_changes for lp in self.list_plans)
             + ext_total
         )
@@ -214,7 +254,7 @@ class ZonePlan:
 _ZonePlan_orig_init = ZonePlan.__init__
 
 
-def _zone_plan_init(self, *args, page_shield_policy_plans=None, **kwargs):
+def _zone_plan_init(self, *args, page_shield_policy_plans=None, **kwargs) -> None:
     _ZonePlan_orig_init(self, *args, **kwargs)
     if page_shield_policy_plans:
         self.extension_plans["page_shield"] = list(page_shield_policy_plans)
@@ -243,7 +283,7 @@ def _normalize_value(v: object, *, key: str = "") -> object:
     return v
 
 
-def normalize_rule(rule: dict) -> dict:
+def normalize_rule(rule: RuleDict) -> RuleDict:
     """Strip API-only fields, the ``octorules:`` metadata key, and normalize expression values."""
     excluded = _api_only_fields() | {_OCTORULES_KEY}
     return {k: _normalize_value(v, key=k) for k, v in rule.items() if k not in excluded}
@@ -339,7 +379,7 @@ def _validate_octorules_meta(rule: dict, ref: str) -> None:
         )
 
 
-def validate_rules(rules: list[dict], phase: Phase) -> None:
+def validate_rules(rules: list[RuleDict], phase: Phase) -> None:
     """Validate a list of desired rules for a phase.
 
     Checks:
@@ -380,7 +420,7 @@ def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
         log.warning("%s in rules for %s", unknown_phase_message(key), zone_name)
 
 
-def _rules_by_ref(rules: list[dict]) -> dict[str, dict]:
+def _rules_by_ref(rules: list[RuleDict]) -> dict[str, RuleDict]:
     """Index a list of rules by their ref field.
 
     If duplicate refs exist, the last one wins and a warning is logged.
@@ -395,12 +435,12 @@ def _rules_by_ref(rules: list[dict]) -> dict[str, dict]:
     return result
 
 
-def _ref_order(rules: list[dict]) -> list[str]:
+def _ref_order(rules: list[RuleDict]) -> list[str]:
     """Extract the ordered list of refs."""
     return [r["ref"] for r in rules if "ref" in r]
 
 
-def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
+def prepare_desired_rules(rules: list[RuleDict], phase: Phase) -> list[RuleDict]:
     """Prepare desired rules: validate, filter ignored, strip metadata, prepare.
 
     Universal steps (always applied):
@@ -425,8 +465,8 @@ def prepare_desired_rules(rules: list[dict], phase: Phase) -> list[dict]:
 
 def _diff_rules(
     phase: Phase,
-    desired_rules: list[dict],
-    current_rules: list[dict],
+    desired_rules: list[RuleDict],
+    current_rules: list[RuleDict],
     *,
     allow_unmanaged: bool = False,
 ) -> list[RuleChange]:
@@ -503,8 +543,8 @@ def _diff_rules(
 
 def diff_phase(
     phase: Phase,
-    desired_rules: list[dict],
-    current_rules: list[dict],
+    desired_rules: list[RuleDict],
+    current_rules: list[RuleDict],
     *,
     allow_unmanaged: bool = False,
 ) -> PhasePlan:
@@ -523,8 +563,8 @@ def diff_phase(
 
 def plan_zone(
     zone_name: str,
-    desired_rules_by_phase: dict[str, list[dict]],
-    current_rules_by_provider_id: dict[str, list[dict]],
+    desired_rules_by_phase: dict[str, list[RuleDict]],
+    current_rules_by_provider_id: dict[str, list[RuleDict]],
     *,
     allow_unmanaged: bool = False,
 ) -> ZonePlan:
@@ -567,10 +607,26 @@ def plan_zone(
 def validate_custom_ruleset(entry: dict, index: int) -> None:
     """Validate a custom_rulesets entry from YAML.
 
-    Checks: id, name, phase, and rules list are present and valid.
+    Checks: name, phase, and rules list are present and valid.
+    ``id`` is optional — absent means CREATE (new ruleset).
+    ``capacity`` is required for creates (AWS WAF).
     """
     ctx = f"custom_rulesets[{index}]"
-    rid = _require_string_field(entry, "id", ctx)
+    # id is optional: present = existing ruleset (update), absent = create
+    rid = entry.get("id")
+    if rid is not None:
+        if not isinstance(rid, str) or not rid:
+            raise RuleValidationError(f"{ctx} has invalid 'id' (must be a non-empty string)")
+    else:
+        # New ruleset — capacity is required
+        capacity = entry.get("capacity")
+        if capacity is None:
+            raise RuleValidationError(f"{ctx} new custom rulesets require a 'capacity' field")
+    # Validate capacity when present (regardless of create/update)
+    capacity = entry.get("capacity")
+    if capacity is not None:
+        if not isinstance(capacity, int) or capacity <= 0:
+            raise RuleValidationError(f"{ctx} 'capacity' must be a positive integer")
     _require_string_field(entry, "name", ctx)
     _require_string_field(entry, "phase", ctx)
     phase = entry["phase"]
@@ -584,7 +640,7 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
         raise RuleValidationError(f"{ctx} 'rules' must be a list")
     # Validate individual rules
     seen_refs: set[str] = set()
-    label = entry.get("name") or rid
+    label = entry.get("name") or rid or f"index {index}"
     for ri, rule in enumerate(rules):
         rule_ctx = f"Rule at index {ri} in custom ruleset {label!r}"
         ref = _require_string_field(rule, "ref", rule_ctx)
@@ -621,14 +677,14 @@ def diff_custom_ruleset(
     ruleset_id: str,
     ruleset_name: str,
     phase: str,
-    desired_rules: list[dict],
-    current_rules: list[dict],
+    desired_rules: list[RuleDict],
+    current_rules: list[RuleDict],
 ) -> CustomRulesetPlan:
     """Compute the diff for a single custom ruleset."""
     plan = CustomRulesetPlan(
-        ruleset_id=ruleset_id,
         ruleset_name=ruleset_name,
         phase=phase,
+        ruleset_id=ruleset_id,
     )
 
     ignored_refs = {r.get("ref") for r in desired_rules if _is_ignored(r)} - {None}
@@ -654,6 +710,67 @@ def diff_custom_ruleset(
     synthetic_phase = _make_synthetic_phase("custom_ruleset", ruleset_name, phase)
     plan.changes = _diff_rules(synthetic_phase, plan.prepared_rules, current_rules)
     return plan
+
+
+def diff_custom_rulesets_full(
+    desired_rulesets: list[dict],
+    current_rulesets: dict[str, dict],
+) -> list[CustomRulesetPlan]:
+    """Compute the full diff for all custom rulesets including creates and deletes.
+
+    Args:
+        desired_rulesets: List of desired custom ruleset entries from YAML.
+        current_rulesets: Dict of {name: {id, name, phase, rules, ...}} from provider.
+
+    Returns list of CustomRulesetPlan objects.
+    """
+    plans: list[CustomRulesetPlan] = []
+    desired_names = {entry["name"] for entry in desired_rulesets}
+
+    # Rulesets in desired
+    for entry in desired_rulesets:
+        name = entry["name"]
+        phase = entry["phase"]
+        desired_rules = entry.get("rules", [])
+        current = current_rulesets.get(name)
+
+        if current is None:
+            # CREATE — new ruleset
+            crp = diff_custom_ruleset(
+                ruleset_id="",  # placeholder, not used for creates
+                ruleset_name=name,
+                phase=phase,
+                desired_rules=desired_rules,
+                current_rules=[],
+            )
+            crp.ruleset_id = None
+            crp.create = True
+            crp.capacity = entry.get("capacity")
+            plans.append(crp)
+        else:
+            # EXISTING — diff rules
+            crp = diff_custom_ruleset(
+                ruleset_id=current["id"],
+                ruleset_name=name,
+                phase=phase,
+                desired_rules=desired_rules,
+                current_rules=current.get("rules", []),
+            )
+            if crp.has_changes:
+                plans.append(crp)
+
+    # Rulesets in current but not in desired -> DELETE
+    for name, current in current_rulesets.items():
+        if name not in desired_names:
+            crp = CustomRulesetPlan(
+                ruleset_name=name,
+                phase=current.get("phase", ""),
+                ruleset_id=current["id"],
+                delete=True,
+            )
+            plans.append(crp)
+
+    return plans
 
 
 def _serialize_change(change: RuleChange) -> dict:
@@ -691,14 +808,21 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
             zone_data["phase_plans"].append(phase_data)
         if zp.custom_ruleset_plans:
             cr_plans = []
-            for crp in sorted(zp.custom_ruleset_plans, key=lambda c: c.ruleset_id):
-                cr_data = {
+            for crp in sorted(
+                zp.custom_ruleset_plans,
+                key=lambda c: (c.ruleset_name, c.ruleset_id or ""),
+            ):
+                cr_data: dict = {
                     "ruleset_id": crp.ruleset_id,
-                    "changes": sorted(
+                    "ruleset_name": crp.ruleset_name,
+                    "create": crp.create,
+                    "delete": crp.delete,
+                }
+                if crp.changes:
+                    cr_data["changes"] = sorted(
                         [_serialize_change(c) for c in crp.changes],
                         key=itemgetter("change_type", "ref"),
-                    ),
-                }
+                    )
                 cr_plans.append(cr_data)
             zone_data["custom_ruleset_plans"] = cr_plans
         if zp.list_plans:
@@ -756,7 +880,7 @@ class SafetyViolation:
 
 def check_safety(
     zone_plan: ZonePlan,
-    current_rules_by_provider_id: dict[str, list[dict]],
+    current_rules_by_provider_id: dict[str, list[RuleDict]],
     zone_config: ZoneConfig,
 ) -> list[SafetyViolation]:
     """Check if the plan exceeds safety thresholds for a zone.
@@ -774,19 +898,9 @@ def check_safety(
     delete_phases: list[str] = []
     update_phases: list[str] = []
 
-    def _tally(
-        changes: list[RuleChange],
-        label: str,
-        extra_deletes: int = 0,
-    ) -> None:
+    def _tally(changes: list[RuleChange], label: str, extra_deletes: int = 0) -> None:
         nonlocal delete_count, update_count
-        deletes = extra_deletes
-        updates = 0
-        for c in changes:
-            if c.change_type == ChangeType.REMOVE:
-                deletes += 1
-            elif c.change_type == ChangeType.MODIFY:
-                updates += 1
+        _, deletes, updates = count_change_types(changes, extra_removes=extra_deletes)
         if deletes:
             delete_count += deletes
             delete_phases.append(label)
@@ -797,7 +911,7 @@ def check_safety(
     for pp in zone_plan.phase_plans:
         _tally(pp.changes, pp.phase.friendly_name)
     for crp in zone_plan.custom_ruleset_plans:
-        _tally(crp.changes, f"custom_ruleset:{crp.ruleset_name}")
+        _tally(crp.changes, f"custom_ruleset:{crp.ruleset_name}", extra_deletes=int(crp.delete))
     for lp in zone_plan.list_plans:
         _tally(lp.changes, f"list:{lp.list_name}", extra_deletes=int(lp.delete))
     for ext_name, ext_plans in zone_plan.extension_plans.items():
@@ -867,7 +981,7 @@ def _item_identity(item: dict, kind: str) -> str:
     return ""
 
 
-def _items_by_identity(items: list[dict], kind: str) -> dict[str, dict]:
+def _items_by_identity(items: list[RuleDict], kind: str) -> dict[str, RuleDict]:
     """Index items by their identity key.
 
     Items with empty identity keys are skipped with a warning.  Duplicate keys
@@ -887,7 +1001,7 @@ def _items_by_identity(items: list[dict], kind: str) -> dict[str, dict]:
     return result
 
 
-def normalize_list_item(item: dict) -> dict:
+def normalize_list_item(item: RuleDict) -> RuleDict:
     """Strip list_item API fields for comparison. No expression normalization needed."""
     excluded = get_api_fields("list_item")
     return {k: v for k, v in item.items() if k not in excluded}
@@ -932,8 +1046,8 @@ def diff_list(
     list_name: str,
     list_id: str | None,
     list_kind: str,
-    desired_items: list[dict],
-    current_items: list[dict],
+    desired_items: list[RuleDict],
+    current_items: list[RuleDict],
     *,
     desired_description: str | None = None,
     current_description: str | None = None,

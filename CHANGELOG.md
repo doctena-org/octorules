@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Custom ruleset lifecycle** (`diff_custom_rulesets_full`). Full create/update/delete
+  diffing for custom rulesets, matching the lists pattern. `CustomRulesetPlan` now
+  has `create`, `delete`, `capacity`, and `total_changes` fields.
+- `create_custom_ruleset` and `delete_custom_ruleset` on `BaseProvider` protocol.
+- **`--audit-log PATH`** for `sync` command. Writes JSON lines with per-zone sync
+  results (zone, synced phases, status, error, timestamp).
+- **Feature support warning** in `_plan_single_zone`. Warns when YAML uses
+  features (custom_rulesets, lists) not supported by the zone's provider.
+
+### Fixed
+- Config safety parsing: error messages no longer risk `KeyError` when the
+  invalid value comes from a default (store raw value before conversion).
+
+### Changed
+- `validate_custom_ruleset`: `id` is now optional. New rulesets require `capacity`
+  instead. Existing YAML with `id` fields continues to work unchanged.
+- `_apply_custom_rulesets`: staged execution (creates → updates → deletes),
+  matching the lists apply pattern.
+- `count_change_types` helper extracts duplicated ADD/REMOVE/MODIFY tallying
+  from formatter and planner into a single function.
+- `_run_staged_tasks` orchestrator extracts the repeated create→update→delete
+  apply pattern from `_apply_custom_rulesets` and `_apply_lists`.
+- `RuleDict` type alias for `dict[str, Any]` used across planner, formatter,
+  and commands for clearer type annotations.
+
 ## [0.17.0] - 2026-03-19
 
 ### Added

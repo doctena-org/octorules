@@ -66,10 +66,11 @@ def sample_config(tmp_path):
 
 
 class TestBuildParser:
-    def test_plan_command(self):
+    @pytest.mark.parametrize("cmd", ["plan", "dump", "validate", "versions", "compare", "report"])
+    def test_command_parses(self, cmd):
         parser = build_parser()
-        args = parser.parse_args(["plan"])
-        assert args.command == "plan"
+        args = parser.parse_args([cmd])
+        assert args.command == cmd
 
     def test_sync_command(self):
         parser = build_parser()
@@ -77,148 +78,72 @@ class TestBuildParser:
         assert args.command == "sync"
         assert args.doit is True
 
-    def test_sync_requires_doit(self):
+    @pytest.mark.parametrize(
+        "argv,attr,expected",
+        [
+            (["--debug", "plan"], "debug", True),
+            (["--quiet", "plan"], "quiet", True),
+            (["--config", "my.yaml", "plan"], "config", "my.yaml"),
+            (["--zone", "example.com", "plan"], "zones", ["example.com"]),
+            (["--scope", "zones", "plan"], "scope", "zones"),
+            (["--scope", "account", "plan"], "scope", "account"),
+            (["plan"], "scope", "all"),
+        ],
+    )
+    def test_flag_sets_attribute(self, argv, attr, expected):
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        assert getattr(args, attr) == expected
+
+    @pytest.mark.parametrize(
+        "argv,attr,expected",
+        [
+            (["dump", "--output-dir", "/tmp/out"], "output_dir", "/tmp/out"),
+            (["validate", "--output", "/tmp/val.txt"], "validate_output", "/tmp/val.txt"),
+            (["validate"], "validate_output", None),
+            (["report", "--output-format", "csv"], "report_format", "csv"),
+            (["report", "--output-format", "json"], "report_format", "json"),
+            (["report"], "report_format", "csv"),
+            (["compare", "--checksum"], "checksum", True),
+            (["compare"], "checksum", False),
+        ],
+    )
+    def test_subcommand_flag(self, argv, attr, expected):
+        parser = build_parser()
+        args = parser.parse_args(argv)
+        assert getattr(args, attr) == expected
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["sync"],
+            ["report", "--output-format", "xml"],
+            ["--scope", "invalid", "plan"],
+        ],
+    )
+    def test_invalid_args_exit(self, argv):
         parser = build_parser()
         with pytest.raises(SystemExit):
-            parser.parse_args(["sync"])
+            parser.parse_args(argv)
 
-    def test_dump_command(self):
+    @pytest.mark.parametrize(
+        "argv,checks",
+        [
+            (["dump", "--config", "my.yaml"], {"config": "my.yaml", "command": "dump"}),
+            (["plan", "--zone", "example.com"], {"zones": ["example.com"]}),
+            (["plan", "--debug"], {"debug": True}),
+            (
+                ["--debug", "plan", "--zone", "example.com"],
+                {"debug": True, "zones": ["example.com"]},
+            ),
+            (["--config", "my.yaml", "plan"], {"config": "my.yaml"}),
+        ],
+    )
+    def test_flag_ordering(self, argv, checks):
         parser = build_parser()
-        args = parser.parse_args(["dump"])
-        assert args.command == "dump"
-
-    def test_zone_filter(self):
-        parser = build_parser()
-        args = parser.parse_args(["--zone", "example.com", "plan"])
-        assert args.zones == ["example.com"]
-
-    def test_config_path(self):
-        parser = build_parser()
-        args = parser.parse_args(["--config", "my.yaml", "plan"])
-        assert args.config == "my.yaml"
-
-    def test_dump_output_dir(self):
-        parser = build_parser()
-        args = parser.parse_args(["dump", "--output-dir", "/tmp/out"])
-        assert args.output_dir == "/tmp/out"
-
-    def test_validate_command(self):
-        parser = build_parser()
-        args = parser.parse_args(["validate"])
-        assert args.command == "validate"
-
-    def test_versions_command(self):
-        parser = build_parser()
-        args = parser.parse_args(["versions"])
-        assert args.command == "versions"
-
-    def test_debug_flag(self):
-        parser = build_parser()
-        args = parser.parse_args(["--debug", "plan"])
-        assert args.debug is True
-
-    def test_quiet_flag(self):
-        parser = build_parser()
-        args = parser.parse_args(["--quiet", "plan"])
-        assert args.quiet is True
-
-    def test_compare_command(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare"])
-        assert args.command == "compare"
-
-    def test_report_command(self):
-        parser = build_parser()
-        args = parser.parse_args(["report"])
-        assert args.command == "report"
-
-    def test_report_output_format_csv(self):
-        parser = build_parser()
-        args = parser.parse_args(["report", "--output-format", "csv"])
-        assert args.report_format == "csv"
-
-    def test_report_output_format_json(self):
-        parser = build_parser()
-        args = parser.parse_args(["report", "--output-format", "json"])
-        assert args.report_format == "json"
-
-    def test_report_output_format_default(self):
-        parser = build_parser()
-        args = parser.parse_args(["report"])
-        assert args.report_format == "csv"
-
-    def test_report_invalid_format_exits(self):
-        parser = build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["report", "--output-format", "xml"])
-
-    def test_compare_checksum_flag(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare", "--checksum"])
-        assert args.checksum is True
-
-    def test_compare_checksum_default(self):
-        parser = build_parser()
-        args = parser.parse_args(["compare"])
-        assert args.checksum is False
-
-    def test_validate_output_flag(self):
-        parser = build_parser()
-        args = parser.parse_args(["validate", "--output", "/tmp/val.txt"])
-        assert args.validate_output == "/tmp/val.txt"
-
-    def test_validate_output_default(self):
-        parser = build_parser()
-        args = parser.parse_args(["validate"])
-        assert args.validate_output is None
-
-    def test_scope_default(self):
-        parser = build_parser()
-        args = parser.parse_args(["plan"])
-        assert args.scope == "all"
-
-    def test_scope_zones(self):
-        parser = build_parser()
-        args = parser.parse_args(["--scope", "zones", "plan"])
-        assert args.scope == "zones"
-
-    def test_scope_account(self):
-        parser = build_parser()
-        args = parser.parse_args(["--scope", "account", "plan"])
-        assert args.scope == "account"
-
-    def test_scope_invalid(self):
-        parser = build_parser()
-        with pytest.raises(SystemExit):
-            parser.parse_args(["--scope", "invalid", "plan"])
-
-    def test_config_after_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["dump", "--config", "my.yaml"])
-        assert args.config == "my.yaml"
-        assert args.command == "dump"
-
-    def test_zone_after_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["plan", "--zone", "example.com"])
-        assert args.zones == ["example.com"]
-
-    def test_debug_after_subcommand(self):
-        parser = build_parser()
-        args = parser.parse_args(["plan", "--debug"])
-        assert args.debug is True
-
-    def test_mixed_flags_before_and_after(self):
-        parser = build_parser()
-        args = parser.parse_args(["--debug", "plan", "--zone", "example.com"])
-        assert args.debug is True
-        assert args.zones == ["example.com"]
-
-    def test_config_before_still_works(self):
-        """Ensure flags before the subcommand still work after the refactor."""
-        parser = build_parser()
-        args = parser.parse_args(["--config", "my.yaml", "plan"])
-        assert args.config == "my.yaml"
+        args = parser.parse_args(argv)
+        for attr, expected in checks.items():
+            assert getattr(args, attr) == expected
 
 
 class TestGetZones:
@@ -2971,3 +2896,91 @@ class TestMultiProviderReport:
         aws_scopes = [c.args[0] for c in aws_prov.get_all_phase_rules.call_args_list]
         assert any(s.zone_id == "zone-cf" for s in cf_scopes)
         assert any(s.zone_id == "wacl-1" for s in aws_scopes)
+
+
+# ---------------------------------------------------------------------------
+# Audit log tests
+# ---------------------------------------------------------------------------
+
+
+class TestAuditLog:
+    """Tests for _write_audit_log and its integration with cmd_sync."""
+
+    def test_audit_log_writes_json_lines(self, tmp_path):
+        """_write_audit_log writes valid JSON lines with correct fields."""
+        import json
+
+        from octorules.commands import SyncResult, _write_audit_log
+
+        results = [
+            SyncResult(
+                zone_name="ok.com",
+                target=None,
+                synced=["redirect_rules"],
+                error=None,
+                total_changes=3,
+            ),
+            SyncResult(
+                zone_name="fail.com",
+                target="cloudflare",
+                synced=[],
+                error="API timeout",
+                total_changes=1,
+            ),
+        ]
+        audit_path = str(tmp_path / "audit.jsonl")
+        _write_audit_log(audit_path, results)
+
+        lines = (tmp_path / "audit.jsonl").read_text().strip().splitlines()
+        assert len(lines) == 2
+
+        required_keys = {
+            "timestamp",
+            "zone",
+            "target",
+            "synced",
+            "total_changes",
+            "status",
+            "error",
+        }
+        for line in lines:
+            entry = json.loads(line)
+            assert required_keys <= set(entry.keys()), f"Missing keys in {entry}"
+
+        ok_entry = json.loads(lines[0])
+        assert ok_entry["zone"] == "ok.com"
+        assert ok_entry["status"] == "ok"
+        assert ok_entry["error"] is None
+        assert ok_entry["total_changes"] == 3
+        assert ok_entry["synced"] == ["redirect_rules"]
+
+        fail_entry = json.loads(lines[1])
+        assert fail_entry["zone"] == "fail.com"
+        assert fail_entry["target"] == "cloudflare"
+        assert fail_entry["status"] == "error"
+        assert fail_entry["error"] == "API timeout"
+
+    def test_audit_log_failure_does_not_abort_sync(self, tmp_path, caplog):
+        """If audit log write fails, _write_audit_log logs error but does not raise."""
+        from octorules.commands import SyncResult, _write_audit_log
+
+        audit_path = str(tmp_path / "audit.jsonl")
+
+        results = [
+            SyncResult(
+                zone_name="ok.com",
+                target=None,
+                synced=["redirect_rules"],
+                error=None,
+                total_changes=1,
+            ),
+        ]
+
+        # Simulate an OS-level write failure (e.g. disk full, permission denied)
+        with (
+            patch("builtins.open", side_effect=OSError("Permission denied")),
+            caplog.at_level(logging.ERROR, logger="octorules"),
+        ):
+            _write_audit_log(audit_path, results)
+
+        assert "Failed to write audit log" in caplog.text

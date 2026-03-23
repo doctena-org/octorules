@@ -11,7 +11,7 @@ from octorules.planner import ZonePlan
 class PlanOutput:
     """Base class for plan output handlers."""
 
-    def __init__(self, name: str, path: str | None = None):
+    def __init__(self, name: str, path: str | None = None) -> None:
         self.name = name
         self.path = path
 

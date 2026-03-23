@@ -18,6 +18,7 @@ from octorules.planner import (
     check_safety,
     compute_checksum,
     diff_custom_ruleset,
+    diff_custom_rulesets_full,
     plan_zone,
     validate_custom_ruleset,
     warn_unknown_phase_keys,
@@ -188,10 +189,21 @@ class TestValidateCustomRuleset:
         }
         validate_custom_ruleset(entry, 0)  # Should not raise
 
-    def test_missing_id(self):
+    def test_missing_id_and_capacity(self):
+        """Missing id without capacity should require capacity for creates."""
         entry = {"name": "Block", "phase": "http_request_firewall_custom", "rules": []}
-        with pytest.raises(RuleValidationError, match="missing required 'id'"):
+        with pytest.raises(RuleValidationError, match="require a 'capacity' field"):
             validate_custom_ruleset(entry, 0)
+
+    def test_missing_id_with_capacity_ok(self):
+        """Missing id with capacity is valid (CREATE)."""
+        entry = {
+            "name": "Block",
+            "phase": "http_request_firewall_custom",
+            "capacity": 100,
+            "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
+        }
+        validate_custom_ruleset(entry, 0)  # Should not raise
 
     def test_missing_name(self):
         entry = {"id": "rs1", "phase": "http_request_firewall_custom", "rules": []}
@@ -404,3 +416,306 @@ class TestCheckSafetyWithCustomRulesets:
         assert len(violations) == 1
         assert violations[0].kind == "delete"
         assert "custom_ruleset:Block" in violations[0].phases
+
+    def test_custom_ruleset_delete_flag_counted(self):
+        """CustomRulesetPlan.delete=True should be counted as an extra delete in safety checks."""
+        crp = CustomRulesetPlan(
+            ruleset_name="Block",
+            phase="http_request_firewall_custom",
+            ruleset_id="rs1",
+            delete=True,
+        )
+        zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
+        current = {"http_request_firewall_custom": [{"ref": f"r{i}"} for i in range(5)]}
+        cfg = ZoneConfig(
+            name="test.com",
+            zone_id="z1",
+            sources=["rules"],
+            delete_threshold=10.0,
+            min_existing=3,
+        )
+        violations = check_safety(zp, current, cfg)
+        assert len(violations) == 1
+        assert violations[0].kind == "delete"
+        assert violations[0].count == 1
+
+
+class TestCustomRulesetPlanCreateDelete:
+    """Tests for CustomRulesetPlan create/delete lifecycle."""
+
+    def test_has_changes_create(self):
+        crp = CustomRulesetPlan(ruleset_name="Test", phase="p", create=True)
+        assert crp.has_changes
+
+    def test_has_changes_delete(self):
+        crp = CustomRulesetPlan(ruleset_name="Test", phase="p", ruleset_id="rs1", delete=True)
+        assert crp.has_changes
+
+    def test_total_changes_create_with_rules(self):
+        crp = CustomRulesetPlan(
+            ruleset_name="Test",
+            phase="p",
+            create=True,
+            changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+        )
+        assert crp.total_changes == 2  # 1 for create + 1 rule ADD
+
+    def test_total_changes_delete_only(self):
+        crp = CustomRulesetPlan(ruleset_name="Test", phase="p", ruleset_id="rs1", delete=True)
+        assert crp.total_changes == 1
+
+    def test_total_changes_no_lifecycle(self):
+        crp = CustomRulesetPlan(
+            ruleset_name="Test",
+            phase="p",
+            ruleset_id="rs1",
+            changes=[RuleChange(ChangeType.MODIFY, "r1", REDIRECT_PHASE)],
+        )
+        assert crp.total_changes == 1
+
+    def test_zone_plan_total_changes_with_create(self):
+        crp = CustomRulesetPlan(
+            ruleset_name="Test",
+            phase="p",
+            create=True,
+            changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+        )
+        zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
+        assert zp.total_changes == 2
+
+    def test_capacity_stored(self):
+        crp = CustomRulesetPlan(ruleset_name="Test", phase="p", create=True, capacity=500)
+        assert crp.capacity == 500
+
+    def test_ruleset_id_none_for_create(self):
+        crp = CustomRulesetPlan(ruleset_name="Test", phase="p", create=True)
+        assert crp.ruleset_id is None
+
+
+class TestDiffCustomRulesetsFull:
+    """Tests for diff_custom_rulesets_full function."""
+
+    def test_create_new_ruleset(self):
+        desired = [
+            {
+                "name": "Block",
+                "phase": "http_request_firewall_custom",
+                "capacity": 100,
+                "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
+            }
+        ]
+        plans = diff_custom_rulesets_full(desired, {})
+        assert len(plans) == 1
+        crp = plans[0]
+        assert crp.create is True
+        assert crp.ruleset_id is None
+        assert crp.ruleset_name == "Block"
+        assert crp.capacity == 100
+        assert len(crp.changes) == 1
+        assert crp.changes[0].change_type == ChangeType.ADD
+
+    def test_delete_existing_ruleset(self):
+        current = {
+            "Old": {
+                "id": "rs-old",
+                "name": "Old",
+                "phase": "http_request_firewall_custom",
+                "rules": [],
+            },
+        }
+        plans = diff_custom_rulesets_full([], current)
+        assert len(plans) == 1
+        crp = plans[0]
+        assert crp.delete is True
+        assert crp.ruleset_id == "rs-old"
+        assert crp.ruleset_name == "Old"
+
+    def test_update_existing_ruleset(self):
+        desired = [
+            {
+                "name": "Block",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "new", "action": "block"}],
+            }
+        ]
+        current = {
+            "Block": {
+                "id": "rs1",
+                "name": "Block",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "old", "action": "block", "enabled": True}],
+            },
+        }
+        plans = diff_custom_rulesets_full(desired, current)
+        assert len(plans) == 1
+        crp = plans[0]
+        assert crp.create is False
+        assert crp.delete is False
+        assert crp.ruleset_id == "rs1"
+        assert any(c.change_type == ChangeType.MODIFY for c in crp.changes)
+
+    def test_no_changes_existing_ruleset(self):
+        desired = [
+            {
+                "name": "Block",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
+            }
+        ]
+        current = {
+            "Block": {
+                "id": "rs1",
+                "name": "Block",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
+            },
+        }
+        plans = diff_custom_rulesets_full(desired, current)
+        assert len(plans) == 0  # no changes means no plan
+
+    def test_mixed_create_update_delete(self):
+        desired = [
+            {
+                "name": "New",
+                "phase": "http_request_firewall_custom",
+                "capacity": 200,
+                "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
+            },
+            {
+                "name": "Existing",
+                "phase": "http_request_firewall_custom",
+                "rules": [{"ref": "r2", "expression": "changed", "action": "log"}],
+            },
+        ]
+        current = {
+            "Existing": {
+                "id": "rs2",
+                "name": "Existing",
+                "phase": "http_request_firewall_custom",
+                "rules": [
+                    {"ref": "r2", "expression": "original", "action": "log", "enabled": True}
+                ],
+            },
+            "Obsolete": {
+                "id": "rs3",
+                "name": "Obsolete",
+                "phase": "http_request_firewall_custom",
+                "rules": [],
+            },
+        }
+        plans = diff_custom_rulesets_full(desired, current)
+        names = {p.ruleset_name for p in plans}
+        assert names == {"New", "Existing", "Obsolete"}
+
+        new_plan = next(p for p in plans if p.ruleset_name == "New")
+        assert new_plan.create is True
+        assert new_plan.capacity == 200
+
+        existing_plan = next(p for p in plans if p.ruleset_name == "Existing")
+        assert existing_plan.create is False
+        assert existing_plan.ruleset_id == "rs2"
+
+        obsolete_plan = next(p for p in plans if p.ruleset_name == "Obsolete")
+        assert obsolete_plan.delete is True
+        assert obsolete_plan.ruleset_id == "rs3"
+
+    def test_empty_desired_empty_current(self):
+        plans = diff_custom_rulesets_full([], {})
+        assert plans == []
+
+
+class TestValidateCustomRulesetCapacity:
+    """Tests for capacity validation in validate_custom_ruleset."""
+
+    def test_capacity_zero_invalid(self):
+        entry = {
+            "name": "X",
+            "phase": "http_request_firewall_custom",
+            "capacity": 0,
+        }
+        with pytest.raises(RuleValidationError, match="'capacity' must be a positive integer"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_capacity_negative_invalid(self):
+        entry = {
+            "name": "X",
+            "phase": "http_request_firewall_custom",
+            "capacity": -5,
+        }
+        with pytest.raises(RuleValidationError, match="'capacity' must be a positive integer"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_capacity_string_invalid(self):
+        entry = {
+            "name": "X",
+            "phase": "http_request_firewall_custom",
+            "capacity": "100",
+        }
+        with pytest.raises(RuleValidationError, match="'capacity' must be a positive integer"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_capacity_on_existing_ruleset_ok(self):
+        """Existing rulesets (with id) can also have capacity."""
+        entry = {
+            "id": "rs1",
+            "name": "X",
+            "phase": "http_request_firewall_custom",
+            "capacity": 100,
+        }
+        validate_custom_ruleset(entry, 0)  # Should not raise
+
+    def test_invalid_id_type(self):
+        entry = {
+            "id": 123,
+            "name": "X",
+            "phase": "http_request_firewall_custom",
+        }
+        with pytest.raises(RuleValidationError, match="invalid 'id'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_empty_id_invalid(self):
+        entry = {
+            "id": "",
+            "name": "X",
+            "phase": "http_request_firewall_custom",
+        }
+        with pytest.raises(RuleValidationError, match="invalid 'id'"):
+            validate_custom_ruleset(entry, 0)
+
+
+class TestChecksumWithCreateDelete:
+    """Tests that checksum captures create/delete state for custom rulesets."""
+
+    def test_checksum_differs_create_vs_update(self):
+        c1 = RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, desired={"expression": "true"})
+        crp_create = CustomRulesetPlan(
+            ruleset_name="Block",
+            phase="p",
+            create=True,
+            changes=[c1],
+        )
+        crp_update = CustomRulesetPlan(
+            ruleset_name="Block",
+            phase="p",
+            ruleset_id="rs1",
+            changes=[c1],
+        )
+        zp1 = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp_create])
+        zp2 = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp_update])
+        assert compute_checksum([zp1]) != compute_checksum([zp2])
+
+    def test_checksum_includes_delete(self):
+        crp_delete = CustomRulesetPlan(
+            ruleset_name="Block",
+            phase="p",
+            ruleset_id="rs1",
+            delete=True,
+        )
+        crp_no_delete = CustomRulesetPlan(
+            ruleset_name="Block",
+            phase="p",
+            ruleset_id="rs1",
+        )
+        zp1 = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp_delete])
+        zp2 = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp_no_delete])
+        assert compute_checksum([zp1]) != compute_checksum([zp2])

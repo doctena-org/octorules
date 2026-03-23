@@ -64,7 +64,7 @@ class PhaseRulesResult(dict):
 
     failed_phases: list[str]
 
-    def __init__(self, data=None, *, failed_phases: list[str] | None = None):
+    def __init__(self, data=None, *, failed_phases: list[str] | None = None) -> None:
         super().__init__(data or {})
         self.failed_phases = failed_phases or []
 
@@ -136,6 +136,12 @@ class BaseProvider(Protocol):
     def get_custom_ruleset(self, scope: Scope, ruleset_id: str) -> list[dict]: ...
 
     def put_custom_ruleset(self, scope: Scope, ruleset_id: str, rules: list[dict]) -> int: ...
+
+    def create_custom_ruleset(
+        self, scope: Scope, name: str, phase: str, capacity: int, description: str = ""
+    ) -> dict: ...
+
+    def delete_custom_ruleset(self, scope: Scope, ruleset_id: str) -> None: ...
 
     def get_all_custom_rulesets(
         self, scope: Scope, *, ruleset_ids: list[str] | None = None

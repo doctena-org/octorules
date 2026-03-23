@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,7 +30,7 @@ class ContextDict(dict):
 
     __slots__ = ("context",)
 
-    def __init__(self, *args: object, context: str = "", **kwargs: object):
+    def __init__(self, *args: object, context: str = "", **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         self.context = context
 
@@ -50,7 +50,7 @@ def _make_include_loader(base_path: Path, visited: set[Path]) -> type:
     """
 
     class IncludeLoader(yaml.SafeLoader):
-        def construct_yaml_map(self, node):
+        def construct_yaml_map(self, node) -> Iterator[ContextDict]:
             mark = node.start_mark
             ctx = f"{Path(mark.name).name}:{mark.line + 1}" if mark and mark.name else ""
             data = ContextDict(context=ctx)
@@ -333,25 +333,26 @@ def _parse_zone(
         raise ConfigError(f"'zones.{zone_name}.safety' must be a mapping{zd_ctx}")
     ctx = f"zones.{zone_name}.safety"
     zs_ctx = _ctx(zone_safety)
+    raw_delete = zone_safety.get("delete_threshold", default_delete)
     try:
-        delete_threshold = float(zone_safety.get("delete_threshold", default_delete))
+        delete_threshold = float(raw_delete)
     except (ValueError, TypeError) as exc:
         raise ConfigError(
-            f"'{ctx}.delete_threshold' must be numeric"
-            f" (got {zone_safety['delete_threshold']!r}){zs_ctx}"
+            f"'{ctx}.delete_threshold' must be numeric (got {raw_delete!r}){zs_ctx}"
         ) from exc
+    raw_update = zone_safety.get("update_threshold", default_update)
     try:
-        update_threshold = float(zone_safety.get("update_threshold", default_update))
+        update_threshold = float(raw_update)
     except (ValueError, TypeError) as exc:
         raise ConfigError(
-            f"'{ctx}.update_threshold' must be numeric"
-            f" (got {zone_safety['update_threshold']!r}){zs_ctx}"
+            f"'{ctx}.update_threshold' must be numeric (got {raw_update!r}){zs_ctx}"
         ) from exc
+    raw_min = zone_safety.get("min_existing", default_min)
     try:
-        min_existing = int(zone_safety.get("min_existing", default_min))
+        min_existing = int(raw_min)
     except (ValueError, TypeError) as exc:
         raise ConfigError(
-            f"'{ctx}.min_existing' must be an integer (got {zone_safety['min_existing']!r}){zs_ctx}"
+            f"'{ctx}.min_existing' must be an integer (got {raw_min!r}){zs_ctx}"
         ) from exc
     _validate_safety(delete_threshold, update_threshold, min_existing, ctx)
 
