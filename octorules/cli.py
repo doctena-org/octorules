@@ -141,7 +141,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument(
         "--checksum",
         action="store_true",
-        help="Print a SHA-256 checksum of the plan (use with 'sync --checksum HASH' for drift protection)",
+        help="Print a SHA-256 checksum of the plan"
+        " (use with 'sync --checksum HASH' for drift protection)",
     )
     plan_parser.add_argument(
         "--exit-code",
