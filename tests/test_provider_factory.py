@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,13 +17,9 @@ from octorules.commands import (
 )
 from octorules.config import ConfigError
 
-_cf_installed: bool
-try:
-    import octorules_cloudflare  # noqa: F401
-
-    _cf_installed = True
-except ImportError:
-    _cf_installed = False
+_cf_installed = importlib.util.find_spec("octorules_cloudflare") is not None
+_aws_installed = importlib.util.find_spec("octorules_aws") is not None
+_google_installed = importlib.util.find_spec("octorules_google") is not None
 
 
 def _mock_config(**overrides):
@@ -110,13 +109,43 @@ class TestInitProviderDynamicImport:
         assert provider is mock_cls.return_value
 
 
-class TestLoadProviderClass:
-    @pytest.mark.skipif(not _cf_installed, reason="octorules-cloudflare not installed")
-    def test_load_existing_class(self):
-        from octorules.commands import _get_cloudflare_provider
+_PROVIDER_CLASS_PATHS = [
+    pytest.param(
+        "octorules.provider.CloudflareProvider",
+        id="cloudflare",
+        marks=pytest.mark.skipif(not _cf_installed, reason="octorules-cloudflare not installed"),
+    ),
+    pytest.param(
+        "octorules_aws.AwsWafProvider",
+        id="aws",
+        marks=pytest.mark.skipif(not _aws_installed, reason="octorules-aws not installed"),
+    ),
+    pytest.param(
+        "octorules_google.CloudArmorProvider",
+        id="google",
+        marks=pytest.mark.skipif(not _google_installed, reason="octorules-google not installed"),
+    ),
+]
 
-        cls = _load_provider_class("octorules.provider.CloudflareProvider")
-        assert cls is _get_cloudflare_provider()
+
+class TestLoadProviderClass:
+    @pytest.mark.parametrize("class_path", _PROVIDER_CLASS_PATHS)
+    def test_load_existing_class(self, class_path):
+        """_load_provider_class resolves a real provider class path (subprocess)."""
+        code = (
+            f"from octorules.commands import _load_provider_class\n"
+            f"cls = _load_provider_class({class_path!r})\n"
+            f"assert cls is not None\n"
+            f"print('OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
 
     def test_invalid_path_no_dot(self):
         with pytest.raises(ConfigError, match="Invalid provider class path"):
@@ -258,13 +287,25 @@ class TestInitProviders:
 
 
 class TestResolveProviderClass:
-    @pytest.mark.skipif(not _cf_installed, reason="octorules-cloudflare not installed")
-    def test_explicit_class_path(self):
-        """class_path provided -> loaded via _load_provider_class."""
-        from octorules.commands import _get_cloudflare_provider
-
-        cls = _resolve_provider_class("cloudflare", "octorules.provider.CloudflareProvider")
-        assert cls is _get_cloudflare_provider()
+    @pytest.mark.parametrize("class_path", _PROVIDER_CLASS_PATHS)
+    def test_explicit_class_path(self, class_path):
+        """class_path provided -> loaded via _load_provider_class (subprocess)."""
+        # Extract a provider name from the class path for _resolve_provider_class
+        provider_name = class_path.rsplit(".", 1)[0].replace("octorules.", "").replace("_", "-")
+        code = (
+            f"from octorules.commands import _resolve_provider_class\n"
+            f"cls = _resolve_provider_class({provider_name!r}, {class_path!r})\n"
+            f"assert cls is not None\n"
+            f"print('OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
 
     @patch("importlib.metadata.entry_points")
     def test_entry_point_discovery(self, mock_eps):

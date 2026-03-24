@@ -45,8 +45,14 @@ def _test_prepare_rule(rule: dict, phase: Phase) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Test phase definitions — mirrors the 23 Cloudflare phases so core tests
-# can exercise phase-dependent logic without requiring octorules-cloudflare.
+# Test phase definitions.
+#
+# The first 23 phases use Cloudflare-style names and all set prepare_rule to
+# exercise the full preparation pipeline.  The additional "bare_*" phases
+# have NO prepare_rule (matching AWS/Google providers, which register phases
+# without a prepare hook).  This ensures core handles both patterns:
+#   - With prepare_rule: expression normalization, enabled defaulting, etc.
+#   - Without prepare_rule (None): rules passed through unmodified.
 # ---------------------------------------------------------------------------
 
 # Phase specs: (friendly_name, provider_id, default_action, zone_level, account_level)
@@ -76,9 +82,19 @@ _TEST_PHASE_SPECS: list[tuple] = [
     ("url_normalization", "http_request_sanitize", None, True, False),
 ]
 
+# Phases that mirror AWS/Google style — no prepare_rule, zone-level only.
+_TEST_BARE_PHASE_SPECS: list[tuple] = [
+    ("bare_custom_rules", "bare_custom", None, True, False),
+    ("bare_rate_rules", "bare_rate", None, True, False),
+    ("bare_managed_rules", "bare_managed", None, True, False),
+]
+
 _TEST_PHASES: list[Phase] = [
     Phase(name, pid, action, zone_level=zl, account_level=al, prepare_rule=_test_prepare_rule)
     for name, pid, action, zl, al in _TEST_PHASE_SPECS
+] + [
+    Phase(name, pid, action, zone_level=zl, account_level=al)
+    for name, pid, action, zl, al in _TEST_BARE_PHASE_SPECS
 ]
 
 # Non-phase keys that core tests depend on (normally registered by providers).

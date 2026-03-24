@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -17,26 +20,58 @@ from octorules.provider.base import (
     provider_supports,
 )
 
-_cf_installed: bool
-try:
-    import octorules_cloudflare  # noqa: F401
-
-    _cf_installed = True
-except ImportError:
-    _cf_installed = False
+# Check provider availability without importing (avoids phase registration
+# collisions with conftest's test phases).
+_PROVIDERS = {
+    "octorules_cloudflare": "octorules_cloudflare:CloudflareProvider",
+    "octorules_aws": "octorules_aws:AwsWafProvider",
+    "octorules_google": "octorules_google:CloudArmorProvider",
+}
+_available_providers = {
+    pkg: class_path
+    for pkg, class_path in _PROVIDERS.items()
+    if importlib.util.find_spec(pkg) is not None
+}
 
 
 class TestBaseProviderProtocol:
-    @pytest.mark.skipif(not _cf_installed, reason="octorules-cloudflare not installed")
-    def test_cloudflare_provider_satisfies_base_protocol(self):
-        """CloudflareProvider must be recognized as a BaseProvider at runtime."""
-        from octorules.provider import CloudflareProvider
+    @pytest.mark.parametrize(
+        "pkg,class_path",
+        [
+            pytest.param(
+                pkg,
+                cp,
+                id=pkg,
+                marks=pytest.mark.skipif(
+                    pkg not in _available_providers, reason=f"{pkg} not installed"
+                ),
+            )
+            for pkg, cp in _PROVIDERS.items()
+        ],
+    )
+    def test_provider_satisfies_base_protocol(self, pkg, class_path):
+        """Each installed provider must be recognized as a BaseProvider at runtime.
 
-        # Use __new__ to avoid __init__ (which needs a token/client).
-        # Note: issubclass() doesn't work with runtime_checkable protocols that
-        # have non-method members (properties), so we use isinstance() instead.
-        instance = CloudflareProvider.__new__(CloudflareProvider)
-        assert isinstance(instance, BaseProvider)
+        Runs in a subprocess to avoid phase registration collisions with
+        conftest's test phases.
+        """
+        module, cls_name = class_path.split(":")
+        code = (
+            f"from {module} import {cls_name}\n"
+            f"from octorules.provider.base import BaseProvider\n"
+            f"instance = {cls_name}.__new__({cls_name})\n"
+            f"assert isinstance(instance, BaseProvider), "
+            f"'{cls_name} does not satisfy BaseProvider protocol'\n"
+            f"print('OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
 
 
 class TestScopeImportPaths:
