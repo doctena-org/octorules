@@ -34,6 +34,7 @@ from octorules.planner import (
 REDIRECT_PHASE = get_phase("redirect_rules")
 CACHE_PHASE = get_phase("cache_rules")
 WAF_PHASE = get_phase("waf_custom_rules")
+BARE_PHASE = get_phase("bare_custom_rules")  # prepare_rule=None (AWS/Google style)
 
 
 class TestNormalizeRule:
@@ -268,6 +269,33 @@ class TestPrepareDesiredRules:
         rules = [{"ref": "r1", "expression": "true", "action": "log"}]
         prepared = prepare_desired_rules(rules, sd_phase)
         assert prepared[0]["action"] == "log"
+
+    def test_bare_phase_no_prepare_rule(self):
+        """Phases without prepare_rule (AWS/Google) pass rules through unmodified."""
+        assert BARE_PHASE.prepare_rule is None
+        rules = [{"ref": "r1", "expression": "  a  and  b  ", "action": "block"}]
+        prepared = prepare_desired_rules(rules, BARE_PHASE)
+        # Expression is NOT normalized (no prepare_rule to collapse whitespace)
+        assert prepared[0]["expression"] == "  a  and  b  "
+        # No 'enabled' injected
+        assert "enabled" not in prepared[0]
+        # Explicit action preserved
+        assert prepared[0]["action"] == "block"
+
+    def test_bare_phase_requires_action(self):
+        """Bare phases with default_action=None require action in YAML."""
+        rules = [{"ref": "r1", "expression": "true"}]
+        # validate_rules (called inside prepare_desired_rules) checks required fields,
+        # but without prepare_rule there's no injection — so the rule just passes through
+        # without an action field.
+        prepared = prepare_desired_rules(rules, BARE_PHASE)
+        assert "action" not in prepared[0]
+
+    def test_bare_phase_does_not_mutate_input(self):
+        rules = [{"ref": "r1", "expression": "x", "action": "allow"}]
+        original = rules[0].copy()
+        prepare_desired_rules(rules, BARE_PHASE)
+        assert rules[0] == original
 
 
 class TestDiffPhase:

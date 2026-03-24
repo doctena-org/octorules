@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-03-24
+
+### Changed
+- Replace bare `except StopIteration` with `next(iter, None)` sentinel pattern
+  in `expression.py` display formatter (4 occurrences). More Pythonic and
+  future-proof.
+- Provider plugin integration tests now cover all three providers (Cloudflare,
+  AWS, Google) instead of Cloudflare only. Tests use `find_spec` for
+  availability checks and subprocesses to avoid phase registration collisions.
+- Custom ruleset validation error now lists actual registered phase IDs instead
+  of a hardcoded Cloudflare example.
+- Add `timeout=120` to all `future.result()` calls in account planning and
+  dump operations (custom rulesets + lists), matching the Page Shield pattern.
+
+### Added
+- `TestMultiProviderCoexistence` tests: verify all providers register phases
+  without collision, API fields merge correctly, and no phase names overlap.
+- `TestEntryPointDiscovery` tests: verify `_resolve_provider_class` and
+  `_discover_provider_modules` find real providers via entry points.
+- `bare_*` test phases (no `prepare_rule`) in conftest to exercise the
+  `prepare_rule=None` planner path used by AWS/Google providers.
+- Config validation edge case tests: circular `!include` detection, deeply
+  nested includes, special-character filenames, safety threshold inheritance.
+- Concurrent `_apply_parallel` error scenario tests: partial failures,
+  auth error propagation, exception handling under `ThreadPoolExecutor`.
+
 ## [0.18.0] - 2026-03-23
 
 ### Added

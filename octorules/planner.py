@@ -631,9 +631,9 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
     _require_string_field(entry, "phase", ctx)
     phase = entry["phase"]
     if phase not in PHASE_BY_PROVIDER_ID:
+        valid = ", ".join(sorted(PHASE_BY_PROVIDER_ID)[:5])
         raise RuleValidationError(
-            f"{ctx} has invalid 'phase' {phase!r}."
-            f" Use a valid provider phase ID (e.g. 'http_request_firewall_custom')"
+            f"{ctx} has invalid 'phase' {phase!r}. Use a valid provider phase ID (e.g. {valid})"
         )
     rules = entry.get("rules", [])
     if not isinstance(rules, list):
@@ -692,7 +692,7 @@ def diff_custom_ruleset(
     if ignored_refs:
         current_rules = [r for r in current_rules if r.get("ref") not in ignored_refs]
     # Resolve the Phase object for the prepare_rule hook.
-    # Custom rulesets pass the provider_id string (e.g. "http_request_firewall_custom").
+    # Custom rulesets pass the provider_id string (looked up in PHASE_BY_PROVIDER_ID).
     phase_obj = (
         PHASE_BY_NAME.get(phase) or PHASE_BY_PROVIDER_ID.get(phase)
         if isinstance(phase, str)

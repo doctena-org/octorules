@@ -2160,3 +2160,340 @@ class TestContextTracking:
         nested = result["top"]
         assert isinstance(nested, ContextDict)
         assert "test.yaml:2" in nested.context
+
+
+class TestIncludeEdgeCases:
+    """Edge-case tests for !include: circular chains, deep nesting, special chars."""
+
+    def test_three_way_circular_include(self, tmp_path):
+        """A includes B, B includes C, C includes A — should detect the cycle."""
+        (tmp_path / "a.yaml").write_text("data: !include b.yaml\n")
+        (tmp_path / "b.yaml").write_text("data: !include c.yaml\n")
+        (tmp_path / "c.yaml").write_text("data: !include a.yaml\n")
+        from octorules.config import _yaml_load
+
+        with pytest.raises(ConfigError, match="Circular include"):
+            _yaml_load(tmp_path / "a.yaml")
+
+    def test_four_way_circular_include(self, tmp_path):
+        """A->B->C->D->A circular chain at depth 4."""
+        (tmp_path / "a.yaml").write_text("x: !include b.yaml\n")
+        (tmp_path / "b.yaml").write_text("x: !include c.yaml\n")
+        (tmp_path / "c.yaml").write_text("x: !include d.yaml\n")
+        (tmp_path / "d.yaml").write_text("x: !include a.yaml\n")
+        from octorules.config import _yaml_load
+
+        with pytest.raises(ConfigError, match="Circular include"):
+            _yaml_load(tmp_path / "a.yaml")
+
+    @pytest.mark.parametrize("depth", [4, 6, 10])
+    def test_deeply_nested_includes(self, tmp_path, depth):
+        """Chain of N nested includes (A->B->C->...->leaf) resolves correctly."""
+        from octorules.config import _yaml_load
+
+        # Create the leaf file
+        (tmp_path / f"level{depth}.yaml").write_text("answer: 42\n")
+        # Create intermediate files chaining from level0 down to level{depth}
+        for i in range(depth):
+            (tmp_path / f"level{i}.yaml").write_text(f"nested: !include level{i + 1}.yaml\n")
+        data = _yaml_load(tmp_path / "level0.yaml")
+        # Walk the nested chain to reach the leaf value
+        node = data
+        for _ in range(depth):
+            node = node["nested"]
+        assert node["answer"] == 42
+
+    def test_include_filename_with_spaces(self, tmp_path):
+        """!include with spaces in the filename works correctly."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "my fragment file.yaml").write_text("value: spaced\n")
+        (tmp_path / "main.yaml").write_text("data: !include my fragment file.yaml\n")
+        result = _yaml_load(tmp_path / "main.yaml")
+        assert result["data"]["value"] == "spaced"
+
+    def test_include_filename_with_unicode(self, tmp_path):
+        """!include with unicode characters in the filename works correctly."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "regeln.yaml").write_text("value: unicode_ok\n")
+        (tmp_path / "main.yaml").write_text("data: !include regeln.yaml\n")
+        result = _yaml_load(tmp_path / "main.yaml")
+        assert result["data"]["value"] == "unicode_ok"
+
+    def test_include_filename_with_hyphens_and_dots(self, tmp_path):
+        """!include with hyphens and dots in the filename."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "my-config.v2.yaml").write_text("version: 2\n")
+        (tmp_path / "main.yaml").write_text("cfg: !include my-config.v2.yaml\n")
+        result = _yaml_load(tmp_path / "main.yaml")
+        assert result["cfg"]["version"] == 2
+
+    def test_diamond_include_allowed(self, tmp_path):
+        """Two files both include the same shared file — not a cycle."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "shared.yaml").write_text("shared_key: common\n")
+        (tmp_path / "left.yaml").write_text("left: !include shared.yaml\n")
+        (tmp_path / "right.yaml").write_text("right: !include shared.yaml\n")
+        (tmp_path / "root.yaml").write_text("a: !include left.yaml\nb: !include right.yaml\n")
+        result = _yaml_load(tmp_path / "root.yaml")
+        assert result["a"]["left"]["shared_key"] == "common"
+        assert result["b"]["right"]["shared_key"] == "common"
+
+    def test_include_scalar_value(self, tmp_path):
+        """!include that resolves to a scalar (not a mapping or list)."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "value.yaml").write_text("42\n")
+        (tmp_path / "main.yaml").write_text("answer: !include value.yaml\n")
+        result = _yaml_load(tmp_path / "main.yaml")
+        assert result["answer"] == 42
+
+    def test_include_list_value(self, tmp_path):
+        """!include that resolves to a list."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "items.yaml").write_text("- one\n- two\n- three\n")
+        (tmp_path / "main.yaml").write_text("items: !include items.yaml\n")
+        result = _yaml_load(tmp_path / "main.yaml")
+        assert result["items"] == ["one", "two", "three"]
+
+    def test_include_empty_file(self, tmp_path):
+        """!include of an empty file returns None for that key."""
+        from octorules.config import _yaml_load
+
+        (tmp_path / "empty.yaml").write_text("")
+        (tmp_path / "main.yaml").write_text("data: !include empty.yaml\n")
+        result = _yaml_load(tmp_path / "main.yaml")
+        assert result["data"] is None
+
+    def test_circular_via_config_from_file(self, tmp_path):
+        """Circular include detected when loading through Config.from_file."""
+        (tmp_path / "loop.yaml").write_text("extra: !include loop.yaml\n")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: tok\nzones: {}\nextra: !include loop.yaml\n"
+        )
+        with pytest.raises(ConfigError, match="Circular include"):
+            Config.from_file(config_file)
+
+    def test_path_traversal_via_dot_segments_in_nested_include(self, tmp_path):
+        """Path traversal blocked even when nested includes try to escape."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        # The nested include tries ../../ to escape sub/
+        (sub / "inner.yaml").write_text("bad: !include ../../etc/passwd\n")
+        (sub / "outer.yaml").write_text("nested: !include inner.yaml\n")
+        from octorules.config import _yaml_load
+
+        with pytest.raises(ConfigError, match="escapes base directory"):
+            _yaml_load(sub / "outer.yaml")
+
+
+class TestSafetyThresholdInheritance:
+    """Edge-case tests for multi-level safety threshold inheritance.
+
+    Safety thresholds flow: hardcoded defaults -> provider safety -> zone safety.
+    Each level should only override the fields it specifies, inheriting the rest.
+    """
+
+    def test_zone_inherits_unset_fields_from_provider(self, tmp_path):
+        """Zone overrides delete_threshold; update_threshold and min_existing
+        should still come from the provider, not fall back to hardcoded defaults."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(
+                extra_cf=(
+                    "    safety:\n"
+                    "      delete_threshold: 50\n"
+                    "      update_threshold: 40\n"
+                    "      min_existing: 7\n"
+                ),
+                extra_zone="    safety:\n      delete_threshold: 80\n",
+            )
+        )
+        config = Config.from_file(config_file)
+        zone = config.zones["example.com"]
+        assert zone.delete_threshold == 80.0  # overridden by zone
+        assert zone.update_threshold == 40.0  # inherited from provider
+        assert zone.min_existing == 7  # inherited from provider
+
+    def test_zone_overrides_only_min_existing(self, tmp_path):
+        """Zone overrides only min_existing; thresholds inherit from provider."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(
+                extra_cf=(
+                    "    safety:\n"
+                    "      delete_threshold: 15\n"
+                    "      update_threshold: 25\n"
+                    "      min_existing: 10\n"
+                ),
+                extra_zone="    safety:\n      min_existing: 1\n",
+            )
+        )
+        config = Config.from_file(config_file)
+        zone = config.zones["example.com"]
+        assert zone.delete_threshold == 15.0
+        assert zone.update_threshold == 25.0
+        assert zone.min_existing == 1
+
+    def test_zone_overrides_all_three(self, tmp_path):
+        """Zone overrides all three safety fields; provider values ignored."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(
+                extra_cf=(
+                    "    safety:\n"
+                    "      delete_threshold: 10\n"
+                    "      update_threshold: 20\n"
+                    "      min_existing: 5\n"
+                ),
+                extra_zone=(
+                    "    safety:\n"
+                    "      delete_threshold: 90\n"
+                    "      update_threshold: 80\n"
+                    "      min_existing: 0\n"
+                ),
+            )
+        )
+        config = Config.from_file(config_file)
+        zone = config.zones["example.com"]
+        assert zone.delete_threshold == 90.0
+        assert zone.update_threshold == 80.0
+        assert zone.min_existing == 0
+
+    def test_zone_empty_safety_inherits_all_from_provider(self, tmp_path):
+        """Zone with empty safety: {} inherits all values from provider."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(
+                extra_cf=(
+                    "    safety:\n"
+                    "      delete_threshold: 60\n"
+                    "      update_threshold: 55\n"
+                    "      min_existing: 8\n"
+                ),
+                extra_zone="    safety: {}\n",
+            )
+        )
+        config = Config.from_file(config_file)
+        zone = config.zones["example.com"]
+        assert zone.delete_threshold == 60.0
+        assert zone.update_threshold == 55.0
+        assert zone.min_existing == 8
+
+    def test_zone_null_safety_inherits_all_from_provider(self, tmp_path):
+        """Zone with safety: null inherits all values from provider."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(
+                extra_cf=(
+                    "    safety:\n"
+                    "      delete_threshold: 45\n"
+                    "      update_threshold: 35\n"
+                    "      min_existing: 6\n"
+                ),
+                extra_zone="    safety:\n",
+            )
+        )
+        config = Config.from_file(config_file)
+        zone = config.zones["example.com"]
+        assert zone.delete_threshold == 45.0
+        assert zone.update_threshold == 35.0
+        assert zone.min_existing == 6
+
+    def test_provider_partial_safety_rest_defaults(self, tmp_path):
+        """Provider sets only delete_threshold; zone inherits that, rest are
+        hardcoded defaults (30.0, 30.0, 3)."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_cf="    safety:\n      delete_threshold: 99\n"))
+        config = Config.from_file(config_file)
+        zone = config.zones["example.com"]
+        assert zone.delete_threshold == 99.0
+        assert zone.update_threshold == 30.0  # hardcoded default
+        assert zone.min_existing == 3  # hardcoded default
+
+    def test_multi_zone_different_inheritance(self, tmp_path):
+        """Two zones with different overrides against the same provider."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "    safety:\n"
+            "      delete_threshold: 50\n"
+            "      update_threshold: 40\n"
+            "      min_existing: 5\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  zone-a.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    safety:\n"
+            "      delete_threshold: 10\n"
+            "  zone-b.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    safety:\n"
+            "      min_existing: 0\n"
+        )
+        config = Config.from_file(config_file)
+
+        zone_a = config.zones["zone-a.com"]
+        assert zone_a.delete_threshold == 10.0  # zone override
+        assert zone_a.update_threshold == 40.0  # inherited from provider
+        assert zone_a.min_existing == 5  # inherited from provider
+
+        zone_b = config.zones["zone-b.com"]
+        assert zone_b.delete_threshold == 50.0  # inherited from provider
+        assert zone_b.update_threshold == 40.0  # inherited from provider
+        assert zone_b.min_existing == 0  # zone override
+
+    def test_multi_provider_zone_inherits_from_correct_target(self, tmp_path):
+        """Each zone inherits safety from its own target provider, not from the other."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  prov_a:\n"
+            "    class: some.ProviderA\n"
+            "    safety:\n"
+            "      delete_threshold: 10\n"
+            "      update_threshold: 20\n"
+            "      min_existing: 1\n"
+            "  prov_b:\n"
+            "    class: some.ProviderB\n"
+            "    safety:\n"
+            "      delete_threshold: 90\n"
+            "      update_threshold: 80\n"
+            "      min_existing: 9\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  zone-x.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - prov_a\n"
+            "  zone-y.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    targets:\n"
+            "      - prov_b\n"
+        )
+        config = Config.from_file(config_file)
+
+        zx = config.zones["zone-x.com"]
+        assert zx.delete_threshold == 10.0
+        assert zx.update_threshold == 20.0
+        assert zx.min_existing == 1
+
+        zy = config.zones["zone-y.com"]
+        assert zy.delete_threshold == 90.0
+        assert zy.update_threshold == 80.0
+        assert zy.min_existing == 9

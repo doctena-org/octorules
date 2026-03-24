@@ -755,7 +755,7 @@ def _plan_account(
         # Plan custom rulesets
         if cr_future is not None:
             try:
-                custom_rulesets_current = cr_future.result()
+                custom_rulesets_current = cr_future.result(timeout=120)
             except ProviderAuthError:
                 raise
             except ProviderError as e:
@@ -778,7 +778,7 @@ def _plan_account(
         # Plan lists
         if lists_future is not None:
             try:
-                current_lists = lists_future.result()
+                current_lists = lists_future.result(timeout=120)
             except ProviderAuthError:
                 raise
             except ProviderError as e:
@@ -1816,7 +1816,7 @@ def cmd_dump(
             custom_rulesets: dict[str, dict] | None = None
             if cr_future is not None:
                 try:
-                    custom_rulesets = cr_future.result() or None
+                    custom_rulesets = cr_future.result(timeout=120) or None
                 except ProviderAuthError:
                     raise
                 except ProviderError as e:
@@ -1830,7 +1830,7 @@ def cmd_dump(
             lists: dict[str, dict] | None = None
             if lists_future is not None:
                 try:
-                    lists = lists_future.result() or None
+                    lists = lists_future.result(timeout=120) or None
                 except ProviderAuthError:
                     raise
                 except ProviderError as e:

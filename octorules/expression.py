@@ -164,10 +164,10 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
     scanner = QuoteAwareScanner(expr)
     scan_iter = iter(scanner)
     while i < n:
-        try:
-            _idx, ch, in_quote = next(scan_iter)
-        except StopIteration:
+        _item = next(scan_iter, None)
+        if _item is None:
             break
+        _idx, ch, in_quote = _item
 
         if in_quote:
             out.append(ch)
@@ -206,9 +206,7 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
                     # Skip ahead in both the string and the scanner
                     skip = end - i
                     for _ in range(skip):
-                        try:
-                            next(scan_iter)
-                        except StopIteration:
+                        if next(scan_iter, None) is None:
                             break
                     i = end + 1
                     continue
@@ -228,9 +226,7 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
             out.append("and ")
             # Skip 4 more chars (" and" minus the current " ")
             for _ in range(4):
-                try:
-                    next(scan_iter)
-                except StopIteration:
+                if next(scan_iter, None) is None:
                     break
             i += 5
             continue
@@ -240,9 +236,7 @@ def format_expression_display(expr: str, max_line: int = 80) -> str:
             out.append("  " * depth)
             out.append("or ")
             for _ in range(3):
-                try:
-                    next(scan_iter)
-                except StopIteration:
+                if next(scan_iter, None) is None:
                     break
             i += 4
             continue
