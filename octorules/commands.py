@@ -1893,6 +1893,96 @@ def cmd_dump(
     return 1 if had_errors else 0
 
 
+def cmd_audit(
+    config: Config,
+    zone_filter: list[str] | None,
+    phase_filter: list[str] | None = None,
+    checks: list[str] | None = None,
+    cdn_timeout: int = 15,
+    cdn_stale_days: int = 60,
+) -> int:
+    """Run audit checks on rules files. Returns exit code.
+
+    Processes every ``*.yaml`` file in the rules directory, not just
+    configured zones.
+
+    Offline checks (ip-overlap, ip-shadow, zone-drift) analyse local YAML
+    rules.  The cdn-ranges check fetches CDN IP ranges from the internet.
+    """
+    from octorules.audit import (
+        ALL_CHECKS,
+        RuleIPInfo,
+        audit_zone_rules,
+        format_findings,
+        run_audit,
+    )
+    from octorules.phases import ALL_FRIENDLY_NAMES
+
+    # Import provider modules to trigger audit extension registration,
+    # without constructing provider instances (no API credentials needed).
+    _discover_provider_modules()
+
+    selected_checks = frozenset(checks) if checks else ALL_CHECKS
+    invalid = selected_checks - ALL_CHECKS
+    if invalid:
+        log.error(
+            "Unknown audit check(s): %s. Valid: %s",
+            ", ".join(sorted(invalid)),
+            ", ".join(sorted(ALL_CHECKS)),
+        )
+        return 1
+
+    # Discover all rules files in the directory.  When --zone is given,
+    # restrict to those names; otherwise glob every *.yaml file.
+    if zone_filter:
+        file_stems = list(zone_filter)
+    else:
+        file_stems = sorted(p.stem for p in config.rules_dir.glob("*.yaml"))
+    if not file_stems:
+        log.info("No rules files found in %s", config.rules_dir)
+        return 0
+
+    all_rule_ips: list[RuleIPInfo] = []
+    phase_order = list(ALL_FRIENDLY_NAMES)
+
+    for stem in file_stems:
+        rules_data = config.load_rules_by_stem(stem)
+        desired = _filter_desired_by_phase(rules_data, phase_filter)
+        # Preserve the lists section through phase filtering so list IPs
+        # always participate in audit checks (lists aren't a phase).
+        if "lists" in rules_data and "lists" not in desired:
+            desired["lists"] = rules_data["lists"]
+        if not desired:
+            log.info("  %s: no rules (skipped)", stem)
+            continue
+
+        infos = audit_zone_rules(desired, stem)
+        all_rule_ips.extend(infos)
+        log.info("  %s: extracted %d rule(s) with IP ranges", stem, len(infos))
+
+    if not all_rule_ips:
+        log.info("No IP ranges found in any rules — nothing to audit.")
+        return 0
+
+    findings = run_audit(
+        all_rule_ips,
+        phase_order,
+        checks=selected_checks,
+        cdn_timeout=cdn_timeout,
+        cdn_stale_days=cdn_stale_days,
+    )
+
+    if findings:
+        output = format_findings(findings)
+        if output:
+            print(output)
+        print(f"\nAudit: {len(findings)} finding(s).", file=sys.stderr)
+        return 1
+    else:
+        print("Audit: no findings.", file=sys.stderr)
+        return 0
+
+
 def cmd_versions() -> int:
     """Print versions of octorules and key dependencies. Returns exit code."""
     import platform

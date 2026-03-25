@@ -28,3 +28,4 @@ jobs:
       - run: ruff check octorules/ tests/
       - run: ruff format --check octorules/ tests/
       - run: yamllint --no-warnings .github/workflows/*.yaml
+      - run: python scripts/sync_cdn_ranges.py --check

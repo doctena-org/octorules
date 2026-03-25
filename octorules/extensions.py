@@ -1,13 +1,14 @@
 """Extension hook registries for provider-specific features.
 
 Providers register hooks at import time to extend core functionality
-without coupling the core to any specific provider.  Five registries:
+without coupling the core to any specific provider.  Six registries:
 
 - **plan_zone_hook**: Called during zone planning to add extension plans.
 - **apply_extension**: Called during sync to apply extension-specific changes.
 - **format_extension**: Provides formatters for extension plan types.
 - **validate_extension**: Called during offline validation.
 - **dump_extension**: Called during dump to export extension data.
+- **audit_extension**: Called during audit to extract IP ranges from rules.
 
 Extension plans are stored generically in ``ZonePlan.extension_plans``
 as ``dict[str, list]``, keyed by extension name (e.g. ``"page_shield"``).
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from octorules.audit import RuleIPInfo
     from octorules.planner import ZonePlan
     from octorules.provider.base import BaseProvider, Scope
 
@@ -53,6 +55,10 @@ ValidateExtensionFn = Callable[[dict, str, list[str], list[str]], None]
 # (scope, provider, out_dir) -> dict | None
 # Returns data to merge into dump output, or None.
 DumpExtensionFn = Callable[["Scope", "BaseProvider", "Path"], dict | None]
+
+# (rules_data, phase_name) -> list[RuleIPInfo]
+# Extracts IP ranges from provider-specific rules in a given phase.
+AuditExtensionFn = Callable[[dict, str], list["RuleIPInfo"]]
 
 
 class FormatExtension(Protocol):
@@ -90,6 +96,7 @@ _apply_extensions: dict[str, ApplyExtensionFn] = {}
 _format_extensions: dict[str, FormatExtension] = {}
 _validate_extensions: list[ValidateExtensionFn] = []
 _dump_extensions: list[DumpExtensionFn] = []
+_audit_extensions: dict[str, AuditExtensionFn] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +141,16 @@ def register_dump_extension(fn: DumpExtensionFn) -> None:
         _dump_extensions.append(fn)
 
 
+def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
+    """Register an IP-extraction function for audit checks.
+
+    *fn* receives ``(rules_data, phase_name)`` and returns a list of
+    :class:`RuleIPInfo` objects describing the IPs referenced by each rule
+    in that phase.
+    """
+    _audit_extensions[name] = fn
+
+
 # ---------------------------------------------------------------------------
 # Unregister (for test teardown)
 # ---------------------------------------------------------------------------
@@ -174,6 +191,11 @@ def unregister_dump_extension(fn: DumpExtensionFn) -> None:
         _dump_extensions.remove(fn)
     except ValueError:
         pass
+
+
+def unregister_audit_extension(name: str) -> None:
+    """Remove an audit extension."""
+    _audit_extensions.pop(name, None)
 
 
 # ---------------------------------------------------------------------------
@@ -259,6 +281,20 @@ def call_dump_extensions(
         if data:
             result.update(data)
     return result
+
+
+def call_audit_extensions(rules_data: dict, phase_name: str) -> list[RuleIPInfo]:
+    """Call all registered audit extractors for a phase.
+
+    Returns a flat list of :class:`RuleIPInfo` from all providers.
+    """
+    results: list = []
+    for name, fn in _audit_extensions.items():
+        try:
+            results.extend(fn(rules_data, phase_name))
+        except Exception:
+            log.exception("Error in audit extension %s for phase %s", name, phase_name)
+    return results
 
 
 def get_format_extensions() -> dict[str, FormatExtension]:

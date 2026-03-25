@@ -7,6 +7,7 @@ from pathlib import Path
 
 from octorules.commands import (
     _validate_phases,
+    cmd_audit,
     cmd_compare,
     cmd_dump,
     cmd_lint,
@@ -177,6 +178,26 @@ class Manager:
             lint_plan=plan,
             output_file=output,
             exit_code=exit_code,
+        )
+
+    def audit(
+        self,
+        *,
+        zones: list[str] | None = None,
+        phases: list[str] | None = None,
+        checks: list[str] | None = None,
+        cdn_timeout: int = 15,
+        cdn_stale_days: int = 60,
+    ) -> int:
+        """Run the audit command. Returns exit code."""
+        _validate_phases(phases)
+        return cmd_audit(
+            self.config,
+            zones,
+            phase_filter=phases,
+            checks=checks,
+            cdn_timeout=cdn_timeout,
+            cdn_stale_days=cdn_stale_days,
         )
 
     def close(self) -> None:

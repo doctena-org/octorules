@@ -743,6 +743,16 @@ class Config:
         slug = slugify(account_name)
         return self._load_rules_file(f"account:{account_name}", slug, f"account {account_name}")
 
+    def load_rules_by_stem(self, file_stem: str) -> dict:
+        """Load a rules YAML file by filename stem.
+
+        Unlike :meth:`load_zone_rules`, this does not check the zone's
+        ``sources`` list — it unconditionally loads ``{file_stem}.yaml``
+        from the rules directory.  Useful for offline tools (audit, lint)
+        that need to process every file regardless of config.
+        """
+        return self._load_rules_file(f"stem:{file_stem}", file_stem, file_stem)
+
 
 def resolve_zone_ids(
     config: Config,
