@@ -1,0 +1,1078 @@
+"""Tests for the audit module — IP overlap, shadow, CDN ranges, zone drift."""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import patch
+
+import yaml
+
+from octorules.audit import (
+    AuditFinding,
+    CdnRangeResult,
+    FindingSeverity,
+    RuleIPInfo,
+    _load_baked_in_ranges,
+    _parse_aws_cloudfront_ips,
+    _parse_cloudflare_ips,
+    _parse_google_cloud_ips,
+    _to_network,
+    audit_zone_rules,
+    check_cdn_ranges,
+    check_ip_overlap,
+    check_ip_shadow,
+    check_zone_drift,
+    fetch_cdn_ranges,
+    format_findings,
+    run_audit,
+)
+from octorules.extensions import (
+    _audit_extensions,
+    register_audit_extension,
+    unregister_audit_extension,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_rule_ip(
+    zone: str = "example.com",
+    phase: str = "waf_custom_rules",
+    ref: str = "rule1",
+    action: str = "block",
+    ips: list[str] | None = None,
+) -> RuleIPInfo:
+    return RuleIPInfo(
+        zone_name=zone,
+        phase_name=phase,
+        ref=ref,
+        action=action,
+        ip_ranges=ips or [],
+    )
+
+
+# ---------------------------------------------------------------------------
+# _to_network
+# ---------------------------------------------------------------------------
+
+
+class TestToNetwork:
+    def test_valid_ipv4(self):
+        net = _to_network("192.168.1.0/24")
+        assert net is not None
+        assert str(net) == "192.168.1.0/24"
+
+    def test_valid_ipv6(self):
+        net = _to_network("2001:db8::/32")
+        assert net is not None
+        assert str(net) == "2001:db8::/32"
+
+    def test_single_host(self):
+        net = _to_network("10.0.0.1")
+        assert net is not None
+        assert str(net) == "10.0.0.1/32"
+
+    def test_invalid(self):
+        assert _to_network("not-an-ip") is None
+
+    def test_empty_string(self):
+        assert _to_network("") is None
+
+
+# ---------------------------------------------------------------------------
+# check_ip_overlap
+# ---------------------------------------------------------------------------
+
+
+class TestCheckIPOverlap:
+    def test_no_overlap(self):
+        rules = [
+            _make_rule_ip(ref="r1", ips=["10.0.0.0/24"]),
+            _make_rule_ip(ref="r2", ips=["10.0.1.0/24"]),
+        ]
+        assert check_ip_overlap(rules) == []
+
+    def test_overlap_different_rules(self):
+        rules = [
+            _make_rule_ip(ref="r1", ips=["10.0.0.0/16"]),
+            _make_rule_ip(ref="r2", ips=["10.0.1.0/24"]),
+        ]
+        findings = check_ip_overlap(rules)
+        assert len(findings) == 1
+        assert findings[0].check == "ip-overlap"
+        assert "10.0.1.0/24" in findings[0].message
+        assert "10.0.0.0/16" in findings[0].message
+
+    def test_no_overlap_same_rule_different_cidrs(self):
+        """Intra-rule overlap is skipped (linter handles that)."""
+        rules = [
+            _make_rule_ip(ref="r1", ips=["10.0.0.0/16", "10.0.1.0/24"]),
+        ]
+        # Intra-rule: same ref + same phase → skipped
+        assert check_ip_overlap(rules) == []
+
+    def test_cross_phase_overlap(self):
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="r2", phase="phase_b", ips=["10.0.0.0/24"]),
+        ]
+        findings = check_ip_overlap(rules)
+        assert len(findings) == 1
+
+    def test_no_overlap_different_families(self):
+        rules = [
+            _make_rule_ip(ref="r1", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="r2", ips=["2001:db8::/32"]),
+        ]
+        assert check_ip_overlap(rules) == []
+
+    def test_empty_input(self):
+        assert check_ip_overlap([]) == []
+
+    def test_invalid_cidr_skipped(self):
+        rules = [
+            _make_rule_ip(ref="r1", ips=["not-valid"]),
+            _make_rule_ip(ref="r2", ips=["10.0.0.0/8"]),
+        ]
+        assert check_ip_overlap(rules) == []
+
+    def test_exact_duplicate_overlap(self):
+        rules = [
+            _make_rule_ip(ref="r1", ips=["10.0.0.0/24"]),
+            _make_rule_ip(ref="r2", ips=["10.0.0.0/24"]),
+        ]
+        findings = check_ip_overlap(rules)
+        assert len(findings) == 1
+
+
+# ---------------------------------------------------------------------------
+# check_ip_shadow
+# ---------------------------------------------------------------------------
+
+
+class TestCheckIPShadow:
+    PHASE_ORDER = ["phase_a", "phase_b", "phase_c"]
+
+    def test_no_shadow(self):
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", action="block", ips=["10.0.0.0/24"]),
+            _make_rule_ip(ref="r2", phase="phase_b", action="block", ips=["10.0.1.0/24"]),
+        ]
+        assert check_ip_shadow(rules, self.PHASE_ORDER) == []
+
+    def test_shadow_by_earlier_phase(self):
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", action="block", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="r2", phase="phase_b", action="allow", ips=["10.0.1.0/24"]),
+        ]
+        findings = check_ip_shadow(rules, self.PHASE_ORDER)
+        assert len(findings) == 1
+        assert findings[0].check == "ip-shadow"
+        assert "r2" in findings[0].message
+        assert "r1" in findings[0].message
+
+    def test_no_shadow_when_later_phase(self):
+        """Later-phase rule cannot shadow an earlier one."""
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_b", action="allow", ips=["10.0.1.0/24"]),
+            _make_rule_ip(ref="r2", phase="phase_a", action="block", ips=["10.0.0.0/8"]),
+        ]
+        # r1 is in phase_b, r2 is in phase_a (earlier). r1 is shadowed by r2.
+        findings = check_ip_shadow(rules, self.PHASE_ORDER)
+        assert len(findings) == 1
+        assert "r1" in findings[0].ref
+
+    def test_no_shadow_non_blocking_action(self):
+        """Allow action in earlier phase doesn't shadow."""
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", action="allow", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="r2", phase="phase_b", action="block", ips=["10.0.1.0/24"]),
+        ]
+        assert check_ip_shadow(rules, self.PHASE_ORDER) == []
+
+    def test_shadow_google_deny_action(self):
+        """Google deny(403) format recognized as blocking."""
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", action="deny(403)", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="r2", phase="phase_b", action="allow", ips=["10.0.1.0/24"]),
+        ]
+        findings = check_ip_shadow(rules, self.PHASE_ORDER)
+        assert len(findings) == 1
+
+    def test_partial_coverage_not_shadowed(self):
+        """Not all IPs covered → not shadowed."""
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", action="block", ips=["10.0.0.0/24"]),
+            _make_rule_ip(
+                ref="r2", phase="phase_b", action="allow", ips=["10.0.0.0/25", "172.16.0.0/24"]
+            ),
+        ]
+        assert check_ip_shadow(rules, self.PHASE_ORDER) == []
+
+    def test_empty_input(self):
+        assert check_ip_shadow([], self.PHASE_ORDER) == []
+
+
+# ---------------------------------------------------------------------------
+# check_cdn_ranges
+# ---------------------------------------------------------------------------
+
+
+class TestCheckCDNRanges:
+    CDN = {"CloudProvider": ["198.51.100.0/24", "2001:db8:face::/48"]}
+
+    def test_match(self):
+        rules = [_make_rule_ip(ref="r1", ips=["198.51.100.128/25"])]
+        findings = check_cdn_ranges(rules, self.CDN)
+        assert len(findings) == 1
+        assert findings[0].check == "cdn-ranges"
+        assert "CloudProvider" in findings[0].message
+
+    def test_no_match(self):
+        rules = [_make_rule_ip(ref="r1", ips=["10.0.0.0/8"])]
+        assert check_cdn_ranges(rules, self.CDN) == []
+
+    def test_empty_cdn(self):
+        rules = [_make_rule_ip(ref="r1", ips=["198.51.100.0/24"])]
+        assert check_cdn_ranges(rules, {}) == []
+
+    def test_ipv6_match(self):
+        rules = [_make_rule_ip(ref="r1", ips=["2001:db8:face::1/128"])]
+        findings = check_cdn_ranges(rules, self.CDN)
+        assert len(findings) == 1
+
+    def test_invalid_cidr_skipped(self):
+        rules = [_make_rule_ip(ref="r1", ips=["garbage"])]
+        assert check_cdn_ranges(rules, self.CDN) == []
+
+
+# ---------------------------------------------------------------------------
+# check_zone_drift
+# ---------------------------------------------------------------------------
+
+
+class TestCheckZoneDrift:
+    def test_no_drift(self):
+        rules = [
+            _make_rule_ip(zone="zone-a", ref="r1", action="block", ips=["10.0.0.0/24"]),
+            _make_rule_ip(zone="zone-b", ref="r2", action="block", ips=["10.0.0.0/24"]),
+        ]
+        assert check_zone_drift(rules) == []
+
+    def test_drift_different_actions(self):
+        rules = [
+            _make_rule_ip(zone="zone-a", ref="r1", action="block", ips=["10.0.0.0/24"]),
+            _make_rule_ip(zone="zone-b", ref="r2", action="allow", ips=["10.0.0.0/24"]),
+        ]
+        findings = check_zone_drift(rules)
+        assert len(findings) == 1
+        assert findings[0].check == "zone-drift"
+        assert "zone-a" in findings[0].message
+        assert "zone-b" in findings[0].message
+
+    def test_single_zone_no_drift(self):
+        rules = [
+            _make_rule_ip(zone="zone-a", ref="r1", action="block", ips=["10.0.0.0/24"]),
+            _make_rule_ip(zone="zone-a", ref="r2", action="allow", ips=["10.0.0.0/24"]),
+        ]
+        # Same zone — not drift
+        assert check_zone_drift(rules) == []
+
+    def test_empty_input(self):
+        assert check_zone_drift([]) == []
+
+    def test_normalizes_cidr(self):
+        """10.0.0.1/24 normalizes to 10.0.0.0/24."""
+        rules = [
+            _make_rule_ip(zone="zone-a", ref="r1", action="block", ips=["10.0.0.1/24"]),
+            _make_rule_ip(zone="zone-b", ref="r2", action="allow", ips=["10.0.0.0/24"]),
+        ]
+        findings = check_zone_drift(rules)
+        assert len(findings) == 1
+
+    def test_list_pseudo_rules_excluded(self):
+        """List pseudo-rules (phase_name='lists') don't trigger drift."""
+        rules = [
+            _make_rule_ip(zone="zone-a", ref="r1", action="block", ips=["10.0.0.0/24"]),
+            _make_rule_ip(
+                zone="zone-b", ref="list:orphan", phase="lists", action="", ips=["10.0.0.0/24"]
+            ),
+        ]
+        assert check_zone_drift(rules) == []
+
+
+# ---------------------------------------------------------------------------
+# CDN parsers
+# ---------------------------------------------------------------------------
+
+
+class TestCDNParsers:
+    def test_cloudflare_parser(self):
+        data = {"result": {"ipv4_cidrs": ["1.1.1.0/24"], "ipv6_cidrs": ["2606:4700::/32"]}}
+        cidrs = _parse_cloudflare_ips(data)
+        assert "1.1.1.0/24" in cidrs
+        assert "2606:4700::/32" in cidrs
+
+    def test_cloudflare_parser_bad_data(self):
+        assert _parse_cloudflare_ips({}) == []
+        assert _parse_cloudflare_ips("not a dict") == []
+
+    def test_aws_parser(self):
+        data = {
+            "prefixes": [
+                {"ip_prefix": "13.32.0.0/15", "service": "CLOUDFRONT"},
+                {"ip_prefix": "3.5.0.0/19", "service": "EC2"},
+            ],
+            "ipv6_prefixes": [
+                {"ipv6_prefix": "2600:9000::/28", "service": "CLOUDFRONT"},
+            ],
+        }
+        cidrs = _parse_aws_cloudfront_ips(data)
+        assert "13.32.0.0/15" in cidrs
+        assert "3.5.0.0/19" not in cidrs  # EC2, not CLOUDFRONT
+        assert "2600:9000::/28" in cidrs
+
+    def test_aws_parser_bad_data(self):
+        assert _parse_aws_cloudfront_ips({}) == []
+        assert _parse_aws_cloudfront_ips("not a dict") == []
+
+    def test_google_parser(self):
+        data = {"prefixes": [{"ipv4Prefix": "8.8.8.0/24"}, {"ipv6Prefix": "2001:4860::/32"}]}
+        cidrs = _parse_google_cloud_ips(data)
+        assert "8.8.8.0/24" in cidrs
+        assert "2001:4860::/32" in cidrs
+
+    def test_google_parser_bad_data(self):
+        assert _parse_google_cloud_ips({}) == []
+        assert _parse_google_cloud_ips("not a dict") == []
+
+
+# ---------------------------------------------------------------------------
+# fetch_cdn_ranges (with a local HTTP server)
+# ---------------------------------------------------------------------------
+
+
+class TestFetchCDNRanges:
+    def test_fetch_success_returns_api_source(self):
+        """When APIs succeed, source is 'api'."""
+
+        def mock_fetch(url, timeout=15):
+            if "cloudflare" in url:
+                return {"result": {"ipv4_cidrs": ["1.1.1.0/24"], "ipv6_cidrs": []}}
+            return None
+
+        with patch("octorules.audit._fetch_json", side_effect=mock_fetch):
+            result = fetch_cdn_ranges()
+        assert result.source == "api"
+        assert result.generated_at is None
+        assert "Cloudflare" in result.ranges
+
+    def test_fetch_failure_falls_back_to_baked_in(self):
+        """When all CDN APIs fail, falls back to baked-in data."""
+        with patch("octorules.audit._fetch_json", return_value=None):
+            result = fetch_cdn_ranges(timeout=1)
+        assert result.source == "baked-in"
+        # Baked-in files exist (generated by sync script), so ranges should be populated
+        assert len(result.ranges) > 0
+        assert result.generated_at is not None
+
+    def test_fetch_partial_success_uses_api(self):
+        """When some CDN APIs succeed, source is 'api' (not baked-in)."""
+
+        def mock_fetch(url, timeout=15):
+            if "cloudflare" in url:
+                return {"result": {"ipv4_cidrs": ["1.1.1.0/24"], "ipv6_cidrs": []}}
+            return None
+
+        with patch("octorules.audit._fetch_json", side_effect=mock_fetch):
+            result = fetch_cdn_ranges()
+        assert result.source == "api"
+        assert "Cloudflare" in result.ranges
+        assert "AWS CloudFront" not in result.ranges
+
+
+# ---------------------------------------------------------------------------
+# CdnRangeResult
+# ---------------------------------------------------------------------------
+
+
+class TestCdnRangeResult:
+    def test_api_source_never_stale(self):
+        result = CdnRangeResult(ranges={}, source="api", generated_at=None)
+        assert not result.is_stale(max_age_days=1)
+
+    def test_fresh_baked_in_not_stale(self):
+        from datetime import datetime, timedelta, timezone
+
+        recent = datetime.now(timezone.utc) - timedelta(days=30)
+        result = CdnRangeResult(ranges={}, source="baked-in", generated_at=recent)
+        assert not result.is_stale(max_age_days=60)
+
+    def test_old_baked_in_is_stale(self):
+        from datetime import datetime, timedelta, timezone
+
+        old = datetime.now(timezone.utc) - timedelta(days=61)
+        result = CdnRangeResult(ranges={}, source="baked-in", generated_at=old)
+        assert result.is_stale(max_age_days=60)
+
+    def test_boundary_not_stale(self):
+        from datetime import datetime, timedelta, timezone
+
+        # 59 days ago is definitely not stale at threshold of 60
+        just_under = datetime.now(timezone.utc) - timedelta(days=59)
+        result = CdnRangeResult(ranges={}, source="baked-in", generated_at=just_under)
+        assert not result.is_stale(max_age_days=60)
+
+
+# ---------------------------------------------------------------------------
+# _load_baked_in_ranges
+# ---------------------------------------------------------------------------
+
+
+class TestLoadBakedInRanges:
+    def test_loads_real_baked_in_files(self):
+        """The actual baked-in JSON files load successfully."""
+        result = _load_baked_in_ranges()
+        assert result.source == "baked-in"
+        assert result.generated_at is not None
+        assert "Cloudflare" in result.ranges
+        assert "AWS CloudFront" in result.ranges
+        assert "Google Cloud" in result.ranges
+        assert len(result.ranges["Cloudflare"]) > 0
+
+    def test_missing_files_returns_empty(self, tmp_path):
+        """If data dir doesn't exist, returns empty ranges."""
+        with patch("octorules.audit._CDN_DATA_DIR", tmp_path / "nonexistent"):
+            result = _load_baked_in_ranges()
+        assert result.ranges == {}
+        assert result.generated_at is None
+
+    def test_corrupt_json_skipped(self, tmp_path):
+        """Corrupt JSON files are skipped with a warning."""
+        data_dir = tmp_path / "cdn_ranges"
+        data_dir.mkdir()
+        (data_dir / "cloudflare.json").write_text("not json{{{")
+        with patch("octorules.audit._CDN_DATA_DIR", data_dir):
+            result = _load_baked_in_ranges()
+        assert "Cloudflare" not in result.ranges
+
+
+# ---------------------------------------------------------------------------
+# format_findings
+# ---------------------------------------------------------------------------
+
+
+class TestFormatFindings:
+    def test_empty(self):
+        assert format_findings([]) == ""
+
+    def test_groups_by_check(self):
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="overlap"),
+            AuditFinding(check="cdn-ranges", severity=FindingSeverity.INFO, message="cdn hit"),
+        ]
+        output = format_findings(findings)
+        assert "[ip-overlap]" in output
+        assert "[cdn-ranges]" in output
+        assert "overlap" in output
+        assert "cdn hit" in output
+
+
+# ---------------------------------------------------------------------------
+# run_audit
+# ---------------------------------------------------------------------------
+
+
+class TestRunAudit:
+    PHASE_ORDER = ["phase_a", "phase_b"]
+
+    def test_only_selected_checks(self):
+        rules = [
+            _make_rule_ip(ref="r1", phase="phase_a", action="block", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="r2", phase="phase_b", action="allow", ips=["10.0.0.0/24"]),
+        ]
+        # Only run ip-overlap, not ip-shadow
+        findings = run_audit(
+            rules, self.PHASE_ORDER, checks=frozenset({"ip-overlap"}), cdn_timeout=1
+        )
+        assert all(f.check == "ip-overlap" for f in findings)
+
+    def test_all_checks(self):
+        """Runs without error with all checks enabled (mocking CDN)."""
+        rules = [
+            _make_rule_ip(
+                zone="zone-a", ref="r1", phase="phase_a", action="block", ips=["10.0.0.0/8"]
+            ),
+            _make_rule_ip(
+                zone="zone-a", ref="r2", phase="phase_b", action="allow", ips=["10.0.0.0/24"]
+            ),
+        ]
+        empty_cdn = CdnRangeResult(ranges={}, source="api")
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=empty_cdn):
+            findings = run_audit(rules, self.PHASE_ORDER)
+        # Should have ip-overlap and ip-shadow findings at minimum
+        checks_found = {f.check for f in findings}
+        assert "ip-overlap" in checks_found
+        assert "ip-shadow" in checks_found
+
+    def test_empty_input(self):
+        empty_cdn = CdnRangeResult(ranges={}, source="api")
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=empty_cdn):
+            findings = run_audit([], self.PHASE_ORDER)
+        assert findings == []
+
+    def test_stale_baked_in_injects_warning(self):
+        """When baked-in CDN data is stale, a warning finding is injected."""
+        from datetime import datetime, timedelta, timezone
+
+        old_date = datetime.now(timezone.utc) - timedelta(days=90)
+        stale_cdn = CdnRangeResult(
+            ranges={"TestCDN": ["198.51.100.0/24"]},
+            source="baked-in",
+            generated_at=old_date,
+        )
+        rules = [_make_rule_ip(ref="r1", ips=["198.51.100.128/25"])]
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=stale_cdn):
+            findings = run_audit(rules, self.PHASE_ORDER, cdn_stale_days=60)
+        cdn_findings = [f for f in findings if f.check == "cdn-ranges"]
+        # Should have at least the CDN match + the staleness warning
+        assert len(cdn_findings) >= 2
+        stale_warnings = [f for f in cdn_findings if "baked-in" in f.message]
+        assert len(stale_warnings) == 1
+        assert "90 days old" in stale_warnings[0].message
+
+    def test_fresh_baked_in_no_warning(self):
+        """Fresh baked-in CDN data does not produce a staleness warning."""
+        from datetime import datetime, timedelta, timezone
+
+        recent = datetime.now(timezone.utc) - timedelta(days=10)
+        fresh_cdn = CdnRangeResult(
+            ranges={"TestCDN": ["198.51.100.0/24"]},
+            source="baked-in",
+            generated_at=recent,
+        )
+        rules = [_make_rule_ip(ref="r1", ips=["198.51.100.128/25"])]
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=fresh_cdn):
+            findings = run_audit(rules, self.PHASE_ORDER, cdn_stale_days=60)
+        stale_warnings = [f for f in findings if "baked-in" in f.message]
+        assert len(stale_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# audit_zone_rules (extension integration)
+# ---------------------------------------------------------------------------
+
+
+class TestAuditZoneRules:
+    def test_calls_registered_extensions(self):
+        """audit_zone_rules calls registered audit extensions."""
+        called = []
+
+        def fake_extractor(rules_data, phase_name):
+            called.append(phase_name)
+            if phase_name == "test_phase":
+                return [
+                    RuleIPInfo(
+                        zone_name="",
+                        phase_name=phase_name,
+                        ref="r1",
+                        action="block",
+                        ip_ranges=["10.0.0.0/24"],
+                    )
+                ]
+            return []
+
+        register_audit_extension("test_provider", fake_extractor)
+        try:
+            rules_data = {"test_phase": [{"ref": "r1"}], "other_phase": []}
+            results = audit_zone_rules(rules_data, "example.com")
+            assert len(results) == 1
+            assert results[0].zone_name == "example.com"
+            assert results[0].ref == "r1"
+            assert "test_phase" in called
+        finally:
+            unregister_audit_extension("test_provider")
+
+    def test_no_extensions_no_lists_returns_empty(self):
+        # Clear all audit extensions for this test
+        saved = dict(_audit_extensions)
+        _audit_extensions.clear()
+        try:
+            results = audit_zone_rules({"some_phase": []}, "example.com")
+            assert results == []
+        finally:
+            _audit_extensions.update(saved)
+
+    def test_unreferenced_lists_extracted_as_pseudo_rules(self):
+        """Unreferenced IP lists are extracted as pseudo-rules."""
+        saved = dict(_audit_extensions)
+        _audit_extensions.clear()
+        try:
+            rules_data = {
+                "some_phase": [],
+                "lists": [
+                    {
+                        "name": "blocked-ips",
+                        "kind": "ip",
+                        "items": [{"ip": "10.0.0.0/24"}, {"ip": "172.16.0.0/12"}],
+                    },
+                    {
+                        "name": "hostnames",
+                        "kind": "hostname",
+                        "items": [{"hostname": "example.com"}],
+                    },
+                ],
+            }
+            results = audit_zone_rules(rules_data, "zone-a")
+            assert len(results) == 1
+            assert results[0].ref == "list:blocked-ips"
+            assert results[0].phase_name == "lists"
+            assert results[0].zone_name == "zone-a"
+            assert "10.0.0.0/24" in results[0].ip_ranges
+            assert "172.16.0.0/12" in results[0].ip_ranges
+        finally:
+            _audit_extensions.update(saved)
+
+    def test_list_refs_resolved_into_rule(self):
+        """list_refs from extractor are resolved to IPs from lists section."""
+        called = []
+
+        def fake_extractor(rules_data, phase_name):
+            called.append(phase_name)
+            if phase_name == "test_phase":
+                return [
+                    RuleIPInfo(
+                        zone_name="",
+                        phase_name=phase_name,
+                        ref="r1",
+                        action="block",
+                        ip_ranges=["1.2.3.0/24"],  # inline IP
+                        list_refs=["office-ips"],  # references a list
+                    )
+                ]
+            return []
+
+        register_audit_extension("test_resolver", fake_extractor)
+        try:
+            rules_data = {
+                "test_phase": [{"ref": "r1"}],
+                "lists": [
+                    {
+                        "name": "office-ips",
+                        "kind": "ip",
+                        "items": [{"ip": "10.0.0.0/24"}, {"ip": "172.16.0.0/12"}],
+                    },
+                ],
+            }
+            results = audit_zone_rules(rules_data, "zone-a")
+            # Should have 1 rule (with resolved list IPs), no standalone list pseudo-rule
+            rule_results = [r for r in results if r.ref == "r1"]
+            list_results = [r for r in results if r.ref.startswith("list:")]
+            assert len(rule_results) == 1
+            assert len(list_results) == 0  # Referenced list is NOT standalone
+            # Rule should have inline IP + resolved list IPs
+            assert "1.2.3.0/24" in rule_results[0].ip_ranges
+            assert "10.0.0.0/24" in rule_results[0].ip_ranges
+            assert "172.16.0.0/12" in rule_results[0].ip_ranges
+        finally:
+            unregister_audit_extension("test_resolver")
+
+    def test_unreferenced_list_still_included(self):
+        """Lists NOT referenced by any rule still appear as pseudo-rules."""
+
+        def fake_extractor(rules_data, phase_name):
+            if phase_name == "test_phase":
+                return [
+                    RuleIPInfo(
+                        zone_name="",
+                        phase_name=phase_name,
+                        ref="r1",
+                        action="block",
+                        ip_ranges=[],
+                        list_refs=["used-list"],
+                    )
+                ]
+            return []
+
+        register_audit_extension("test_unref", fake_extractor)
+        try:
+            rules_data = {
+                "test_phase": [{"ref": "r1"}],
+                "lists": [
+                    {
+                        "name": "used-list",
+                        "kind": "ip",
+                        "items": [{"ip": "10.0.0.0/24"}],
+                    },
+                    {
+                        "name": "orphaned-list",
+                        "kind": "ip",
+                        "items": [{"ip": "192.168.0.0/16"}],
+                    },
+                ],
+            }
+            results = audit_zone_rules(rules_data, "zone-a")
+            refs = {r.ref for r in results}
+            assert "r1" in refs  # Rule with resolved list
+            assert "list:orphaned-list" in refs  # Unreferenced list
+            assert "list:used-list" not in refs  # Referenced → merged into r1
+        finally:
+            unregister_audit_extension("test_unref")
+
+    def test_unreferenced_lists_participate_in_overlap(self):
+        """Unreferenced list IPs are checked against rule IPs for overlaps."""
+        rule_ips = [
+            _make_rule_ip(ref="r1", phase="waf", ips=["10.0.0.0/8"]),
+            _make_rule_ip(ref="list:blocked", phase="lists", ips=["10.0.1.0/24"]),
+        ]
+        findings = check_ip_overlap(rule_ips)
+        assert len(findings) == 1
+        assert "list:blocked" in findings[0].message or "r1" in findings[0].message
+
+
+# ---------------------------------------------------------------------------
+# Extension registry
+# ---------------------------------------------------------------------------
+
+
+class TestAuditExtensionRegistry:
+    def test_register_unregister(self):
+        fn = lambda data, phase: []  # noqa: E731
+        register_audit_extension("test", fn)
+        assert "test" in _audit_extensions
+        unregister_audit_extension("test")
+        assert "test" not in _audit_extensions
+
+    def test_unregister_nonexistent(self):
+        """Unregistering non-existent extension doesn't raise."""
+        unregister_audit_extension("does_not_exist")
+
+
+# ---------------------------------------------------------------------------
+# cmd_audit integration tests
+# ---------------------------------------------------------------------------
+
+
+def _write_config_and_rules(
+    tmp_path: Path,
+    zone_rules: dict[str, dict],
+    *,
+    extra_files: dict[str, dict] | None = None,
+) -> Path:
+    """Create a config file and rules files, return the config path."""
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+
+    zones_section = {}
+    for name in zone_rules:
+        zones_section[name] = {"sources": ["rules"]}
+
+    config_data = {
+        "providers": {
+            "cloudflare": {"token": "fake"},
+            "rules": {"directory": str(rules_dir)},
+        },
+        "zones": zones_section,
+    }
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(config_data, f)
+
+    for name, rules in zone_rules.items():
+        with open(rules_dir / f"{name}.yaml", "w") as f:
+            yaml.dump(rules, f)
+
+    # Write extra files not in zones (e.g. account rules)
+    if extra_files:
+        for name, rules in extra_files.items():
+            with open(rules_dir / f"{name}.yaml", "w") as f:
+                yaml.dump(rules, f)
+
+    return config_path
+
+
+def _cf_extract_ips(rules_data: dict, phase_name: str) -> list[RuleIPInfo]:
+    """Test audit extractor — mimics the Cloudflare extractor for waf phases."""
+    from octorules.phases import PHASE_BY_NAME
+
+    if phase_name not in PHASE_BY_NAME:
+        return []
+    rules = rules_data.get(phase_name)
+    if not isinstance(rules, list):
+        return []
+    results: list[RuleIPInfo] = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        expr = rule.get("expression", "")
+        if not isinstance(expr, str):
+            continue
+        # Simple regex extraction for tests
+        import re
+
+        ips = re.findall(r"(\d+\.\d+\.\d+\.\d+(?:/\d+)?)", expr)
+        if ips:
+            results.append(
+                RuleIPInfo(
+                    zone_name="",
+                    phase_name=phase_name,
+                    ref=str(rule.get("ref", "")),
+                    action=str(rule.get("action", "")),
+                    ip_ranges=ips,
+                )
+            )
+    return results
+
+
+class TestCmdAudit:
+    """Integration tests for cmd_audit.
+
+    Uses a test audit extractor rather than relying on provider packages,
+    since the conftest registers test phases that conflict with provider
+    phase registration.
+    """
+
+    _empty_cdn = CdnRangeResult(ranges={}, source="api")
+
+    def setup_method(self):
+        register_audit_extension("test_cf", _cf_extract_ips)
+
+    def teardown_method(self):
+        unregister_audit_extension("test_cf")
+
+    def test_discovers_all_yaml_files(self, tmp_path):
+        """Audit processes every *.yaml in rules_dir, not just zones."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/24}",
+                        }
+                    ]
+                },
+            },
+            extra_files={
+                "account-rules": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r2",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/24}",
+                        }
+                    ]
+                },
+            },
+        )
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["zone-drift"])
+
+        # Both files processed → zone-drift should NOT fire (same action)
+        assert exit_code == 0
+
+    def test_discovers_extra_files_with_drift(self, tmp_path):
+        """Extra file with different action triggers zone-drift."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/24}",
+                        }
+                    ]
+                },
+            },
+            extra_files={
+                "account-rules": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r2",
+                            "action": "skip",
+                            "expression": "ip.src in {10.0.0.0/24}",
+                        }
+                    ]
+                },
+            },
+        )
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["zone-drift"])
+
+        assert exit_code == 1  # drift found
+
+    def test_zone_filter_restricts_to_named_files(self, tmp_path):
+        """--zone restricts audit to that file only."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/8}",
+                        }
+                    ]
+                },
+                "zone-b": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r2",
+                            "action": "allow",
+                            "expression": "ip.src in {10.0.0.0/8}",
+                        }
+                    ]
+                },
+            },
+        )
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            # Only zone-a → no drift possible
+            exit_code = cmd_audit(config, zone_filter=["zone-a"], checks=["zone-drift"])
+        assert exit_code == 0
+
+    def test_invalid_check_returns_error(self, tmp_path):
+        """Unknown --check name returns exit code 1."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(tmp_path, zone_rules={})
+        config = Config.from_file(str(config_path))
+        exit_code = cmd_audit(config, zone_filter=None, checks=["bogus-check"])
+        assert exit_code == 1
+
+    def test_no_rules_files_returns_zero(self, tmp_path):
+        """Empty rules directory → exit 0."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(tmp_path, zone_rules={})
+        config = Config.from_file(str(config_path))
+        exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
+        assert exit_code == 0
+
+    def test_no_ips_returns_zero(self, tmp_path):
+        """Rules with no IPs → exit 0."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": 'http.host eq "example.com"',
+                        }
+                    ]
+                },
+            },
+        )
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None)
+        assert exit_code == 0
+
+    def test_phase_filter(self, tmp_path):
+        """--phase restricts which phases are audited."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/8}",
+                        }
+                    ],
+                    "rate_limiting_rules": [
+                        {
+                            "ref": "r2",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/24}",
+                        }
+                    ],
+                },
+            },
+        )
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            # Only rate_limiting_rules → single rule, no overlap
+            exit_code = cmd_audit(
+                config,
+                zone_filter=None,
+                phase_filter=["rate_limiting_rules"],
+                checks=["ip-overlap"],
+            )
+        assert exit_code == 0
+
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            # Both phases → overlap between r1 and r2
+            exit_code = cmd_audit(
+                config,
+                zone_filter=None,
+                checks=["ip-overlap"],
+            )
+        assert exit_code == 1
+
+    def test_list_ips_included_in_audit(self, tmp_path):
+        """IPs from lists section participate in overlap checks."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": "ip.src in {10.0.0.0/8}",
+                        }
+                    ],
+                    "lists": [
+                        {
+                            "name": "office-ips",
+                            "kind": "ip",
+                            "items": [{"ip": "10.0.1.0/24"}],
+                        }
+                    ],
+                },
+            },
+        )
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
+        # 10.0.1.0/24 (list) overlaps 10.0.0.0/8 (rule)
+        assert exit_code == 1

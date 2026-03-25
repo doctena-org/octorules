@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-03-25
+
+### Added
+- New `octorules audit` subcommand for cross-rule, cross-list, cross-zone IP
+  analysis. Four checks: `ip-overlap`, `ip-shadow`, `cdn-ranges`, `zone-drift`.
+- Audit extension registry (`register_audit_extension`) in `extensions.py` —
+  providers register IP extractors at import time, same pattern as lint plugins.
+- Provider-agnostic list resolution: rules that reference IP lists (via
+  `$list_name` in Cloudflare or `IPSetReferenceStatement` in AWS) have their
+  IPs resolved from the `lists` section automatically. Unreferenced lists are
+  still audited as standalone entries.
+- Baked-in CDN IP ranges (`octorules/data/cdn_ranges/`) with API-first fetch
+  and offline fallback. Staleness warning when baked-in data exceeds
+  `--cdn-stale-days` (default 60).
+- `Config.load_rules_by_stem()` public method for loading rules files by
+  filename stem without checking zone sources.
+- `scripts/sync_cdn_ranges.py` maintainer script to refresh baked-in CDN data.
+- Pre-commit hook (`scripts/hooks/pre-commit`) for CDN data staleness check.
+
 ## [0.18.1] - 2026-03-24
 
 ### Changed

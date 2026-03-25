@@ -27,6 +27,7 @@ from octorules.commands import (
     _plan_zones,
     _validate_phases,
     _write_output_file,
+    cmd_audit,
     cmd_compare,
     cmd_dump,
     cmd_lint,
@@ -66,6 +67,7 @@ __all__ = [
     "_validate_phases",
     "_write_output_file",
     "build_parser",
+    "cmd_audit",
     "cmd_compare",
     "cmd_dump",
     "cmd_lint",
@@ -251,6 +253,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit with 1 when errors are found, 2 when warnings are found (useful for CI)",
     )
 
+    audit_parser = sub.add_parser(
+        "audit",
+        parents=[shared],
+        help="Audit rules for cross-rule IP overlaps, CDN ranges, and zone drift",
+    )
+    audit_parser.add_argument(
+        "--check",
+        action="append",
+        dest="audit_checks",
+        help="Only run specific check(s); can be repeated"
+        " (ip-overlap, ip-shadow, cdn-ranges, zone-drift)",
+    )
+    audit_parser.add_argument(
+        "--cdn-timeout",
+        type=int,
+        default=15,
+        dest="cdn_timeout",
+        help="Timeout in seconds for CDN range API fetches (default: 15)",
+    )
+    audit_parser.add_argument(
+        "--cdn-stale-days",
+        type=int,
+        default=60,
+        dest="cdn_stale_days",
+        help="Warn if baked-in CDN ranges are older than this many days (default: 60)",
+    )
+
     sub.add_parser("versions", parents=[shared], help="Show versions of octorules and dependencies")
 
     # Provide defaults for subcommand-specific attributes so getattr is never needed
@@ -267,6 +296,9 @@ def build_parser() -> argparse.ArgumentParser:
         lint_plan="enterprise",
         lint_output=None,
         lint_exit_code=False,
+        audit_checks=None,
+        cdn_timeout=15,
+        cdn_stale_days=60,
     )
 
     return parser
@@ -386,6 +418,17 @@ def main(argv: list[str] | None = None) -> None:
                     zone_plans=zone_plans,
                     output_file=args.lint_output,
                     exit_code=args.lint_exit_code,
+                )
+            )
+        elif args.command == "audit":
+            sys.exit(
+                cmd_audit(
+                    config,
+                    args.zones,
+                    phase_filter=phase_filter,
+                    checks=args.audit_checks,
+                    cdn_timeout=args.cdn_timeout,
+                    cdn_stale_days=args.cdn_stale_days,
                 )
             )
         elif args.command == "validate":
