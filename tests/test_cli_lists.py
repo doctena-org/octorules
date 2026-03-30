@@ -195,7 +195,7 @@ class TestListsPlanAccount:
         provider.get_all_phase_rules.return_value = {}
         provider.get_all_lists.return_value = {}  # empty = new list
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.list_plans) == 1
         lp = zp.list_plans[0]
@@ -221,7 +221,7 @@ class TestListsPlanAccount:
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.list_plans) == 0
         provider.get_all_lists.assert_not_called()
@@ -253,7 +253,7 @@ class TestListsPlanAccount:
             }
         }
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.list_plans) == 0  # no changes = not added
 
@@ -278,7 +278,7 @@ class TestListsPlanAccount:
             }
         }
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.list_plans) == 1
         lp = zp.list_plans[0]
@@ -301,7 +301,7 @@ class TestListsPlanAccount:
         provider.get_all_lists.side_effect = ProviderError("Server error")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            zp, desired, current = _plan_account(config, provider, None)
+            zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert "Failed to fetch lists" in caplog.text
         # Changes still detected because current is empty fallback
@@ -781,7 +781,7 @@ class TestApplyLists:
         provider.put_list_items.return_value = "op-123"
         provider.poll_bulk_operation.return_value = "completed"
 
-        synced, error = _apply_lists(zp, scope, provider)
+        _synced, error = _apply_lists(zp, scope, provider)
         assert error is None
         # update_list_description should NOT be called (create already set it)
         provider.update_list_description.assert_not_called()

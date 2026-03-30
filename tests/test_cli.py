@@ -18,6 +18,7 @@ from octorules.cli import (
     _validate_phases,
     _write_output_file,
     build_parser,
+    cmd_audit,
     cmd_compare,
     cmd_dump,
     cmd_plan,
@@ -161,7 +162,7 @@ class TestGetZones:
 
     def test_filter_invalid_zone_lists_available(self, sample_config):
         """Error message should list available zone names."""
-        with pytest.raises(ConfigError, match="example.com") as exc_info:
+        with pytest.raises(ConfigError, match=r"example\.com") as exc_info:
             _get_zones(sample_config, ["nonexistent.com"])
         assert "other.com" in str(exc_info.value)
         assert "Available:" in str(exc_info.value)
@@ -1059,7 +1060,6 @@ class TestMain:
         with pytest.raises(SystemExit) as exc_info:
             main(["--config", str(tmp_config), "dump", "--output-dir", "/tmp/out"])
         assert exc_info.value.code == 0
-        _, kwargs = mock_cmd.call_args
         # output_dir is the third positional arg
         assert mock_cmd.call_args[0][2] == "/tmp/out"
 
@@ -1276,7 +1276,7 @@ class TestPhaseFiltering:
             _validate_phases(["nonexistent_phase"])
 
     def test_validate_phases_typo_suggests(self):
-        with pytest.raises(ConfigError, match="Did you mean.*redirect_rules"):
+        with pytest.raises(ConfigError, match=r"Did you mean.*redirect_rules"):
             _validate_phases(["redirect_rule"])
 
     def test_validate_phases_no_match_lists_valid(self):
@@ -1284,7 +1284,7 @@ class TestPhaseFiltering:
             _validate_phases(["zzz_totally_wrong"])
 
     def test_validate_phases_provider_id_suggests_friendly(self):
-        with pytest.raises(ConfigError, match="Did you mean.*redirect_rules"):
+        with pytest.raises(ConfigError, match=r"Did you mean.*redirect_rules"):
             _validate_phases(["http_request_dynamic_redirect"])
 
     def test_validate_phases_none_returns_none(self):
@@ -2984,3 +2984,201 @@ class TestAuditLog:
             _write_audit_log(audit_path, results)
 
         assert "Failed to write audit log" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# cmd_audit CLI integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestCmdAuditCLI:
+    """Tests for audit subcommand through the CLI argument parser."""
+
+    def test_audit_parser_accepts_checks(self):
+        parser = build_parser()
+        ns = parser.parse_args(["audit", "--check", "ip-overlap", "--check", "cdn-ranges"])
+        assert ns.command == "audit"
+        assert ns.audit_checks == ["ip-overlap", "cdn-ranges"]
+
+    def test_audit_parser_defaults(self):
+        parser = build_parser()
+        ns = parser.parse_args(["audit"])
+        assert ns.command == "audit"
+        assert ns.audit_checks is None
+        assert ns.cdn_timeout == 15
+        assert ns.cdn_stale_days == 60
+
+    def test_audit_parser_cdn_options(self):
+        parser = build_parser()
+        ns = parser.parse_args(["audit", "--cdn-timeout", "30", "--cdn-stale-days", "90"])
+        assert ns.cdn_timeout == 30
+        assert ns.cdn_stale_days == 90
+
+    def test_audit_no_rules_returns_0(self, sample_config):
+        """Audit with no rules files returns 0 (nothing to audit)."""
+        with patch("octorules.cli._discover_provider_modules"):
+            result = cmd_audit(sample_config, None)
+        assert result == 0
+
+    def test_audit_invalid_check_returns_1(self, sample_config, caplog):
+        """Unknown check name returns exit code 1."""
+        with (
+            patch("octorules.cli._discover_provider_modules"),
+            caplog.at_level(logging.ERROR),
+        ):
+            result = cmd_audit(sample_config, None, checks=["nonexistent-check"])
+        assert result == 1
+        assert "Unknown audit check" in caplog.text
+
+    def test_audit_no_findings_returns_0(self, sample_config):
+        """Audit with rules but no findings returns 0."""
+        # Create a minimal rules file with no IP-bearing rules.
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
+        with patch("octorules.cli._discover_provider_modules"):
+            result = cmd_audit(sample_config, ["example.com"])
+        assert result == 0
+
+    def test_audit_via_main(self, sample_config, tmp_path, monkeypatch):
+        """Audit runs through main() without error."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: test\nzones: {}\nrules_dir: rules\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rules").mkdir(exist_ok=True)
+        with (
+            patch("octorules.cli._discover_provider_modules"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["--config", str(config_file), "audit"])
+        assert exc_info.value.code == 0
+
+
+# ---------------------------------------------------------------------------
+# P0 fix tests: audit extension error handling
+# ---------------------------------------------------------------------------
+
+
+class TestAuditExtensionErrorHandling:
+    """Tests for best-effort audit extension error handling (P0-1)."""
+
+    def test_failed_extension_returns_partial_results(self):
+        """A failing extension returns partial results and failed names."""
+        from octorules.audit import RuleIPInfo
+        from octorules.extensions import (
+            call_audit_extensions,
+            register_audit_extension,
+            unregister_audit_extension,
+        )
+
+        def good_ext(rules_data, phase_name):
+            return [
+                RuleIPInfo(
+                    zone_name="",
+                    phase_name=phase_name,
+                    ref="good-rule",
+                    action="block",
+                    ip_ranges=["10.0.0.0/8"],
+                )
+            ]
+
+        def bad_ext(rules_data, phase_name):
+            raise ValueError("simulated extension crash")
+
+        register_audit_extension("good", good_ext)
+        register_audit_extension("bad", bad_ext)
+        try:
+            results, failed = call_audit_extensions({"redirect_rules": []}, "redirect_rules")
+            assert len(results) == 1
+            assert results[0].ref == "good-rule"
+            assert failed == ["bad"]
+        finally:
+            unregister_audit_extension("good")
+            unregister_audit_extension("bad")
+
+    def test_all_extensions_succeed_returns_empty_failed(self):
+        from octorules.extensions import call_audit_extensions
+
+        results, failed = call_audit_extensions({}, "test_phase")
+        assert results == []
+        assert failed == []
+
+    def test_audit_zone_rules_no_extensions_returns_list_pseudorules(self):
+        """With no audit extensions registered, list IPs still appear as pseudo-rules."""
+        from octorules.audit import audit_zone_rules
+
+        rules_data = {
+            "lists": [
+                {
+                    "kind": "ip",
+                    "name": "blocked_ips",
+                    "items": [{"ip": "10.0.0.0/8"}, {"ip": "192.168.0.0/16"}],
+                },
+            ],
+        }
+        infos = audit_zone_rules(rules_data, "test-zone")
+        # No extensions → no rule-level IPs, but list pseudo-rules are still created
+        assert len(infos) == 1
+        assert infos[0].ref == "list:blocked_ips"
+        assert "10.0.0.0/8" in infos[0].ip_ranges
+        assert infos[0].zone_name == "test-zone"
+
+
+# ---------------------------------------------------------------------------
+# P0 fix tests: _fetch_json HTTP status check
+# ---------------------------------------------------------------------------
+
+
+class TestFetchJsonHttpStatus:
+    """Tests for HTTP status validation in _fetch_json (P0-2)."""
+
+    def test_non_200_returns_none(self):
+        """Non-200 success codes (e.g. 204 No Content) return None.
+
+        Note: 4xx/5xx raise HTTPError before reaching the status check,
+        so we test with 204 which urlopen returns without raising.
+        """
+        from octorules.audit import _fetch_json
+
+        mock_resp = MagicMock()
+        mock_resp.status = 204
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("octorules.audit.urlopen", return_value=mock_resp):
+            result = _fetch_json("https://example.com/test.json")
+        assert result is None
+
+    def test_http_error_returns_none(self):
+        """HTTP 4xx/5xx errors (raised by urlopen as HTTPError) return None."""
+        from urllib.error import HTTPError
+
+        from octorules.audit import _fetch_json
+
+        with patch(
+            "octorules.audit.urlopen",
+            side_effect=HTTPError("https://example.com", 404, "Not Found", {}, None),
+        ):
+            result = _fetch_json("https://example.com/test.json")
+        assert result is None
+
+    def test_200_parses_json(self):
+        from octorules.audit import _fetch_json
+
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = b'{"key": "value"}'
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("octorules.audit.urlopen", return_value=mock_resp):
+            result = _fetch_json("https://example.com/test.json")
+        assert result == {"key": "value"}
+
+    def test_network_error_returns_none(self):
+        from octorules.audit import _fetch_json
+
+        with patch("octorules.audit.urlopen", side_effect=OSError("Connection refused")):
+            result = _fetch_json("https://example.com/test.json")
+        assert result is None

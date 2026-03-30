@@ -1001,7 +1001,7 @@ class TestCheckSafety:
             "http_request_cache_settings": [{"ref": f"c{i}"} for i in range(5)],
         }
         violations = check_safety(zp, current, self._zone_cfg())
-        delete_v = [v for v in violations if v.kind == "delete"][0]
+        delete_v = next(v for v in violations if v.kind == "delete")
         assert "redirect_rules" in delete_v.phases
         assert "cache_rules" in delete_v.phases
 

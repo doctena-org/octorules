@@ -108,7 +108,7 @@ def normalize_expression(expr: str) -> str:
             result.append(ch)
 
     if scanner.unmatched_quote:
-        log.warning("Unmatched quote in expression: %.80s...", expr if len(expr) > 80 else expr)
+        log.warning("Unmatched quote in expression: %.80s...", expr)
 
     return "".join(result).strip()
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-03-30
+
+### Changed
+- `call_audit_extensions()` now returns `(results, failed_names)` tuple for
+  best-effort error handling — partial results are returned and failed
+  extension names are logged as warnings instead of being silently swallowed.
+- `_fetch_json()` now validates HTTP status before parsing; non-200 responses
+  return `None` with a warning instead of attempting JSON parse on error pages.
+- Add `strict=True` to `zip()` calls in plan/sync pipelines (B905).
+- Path-escape `ConfigError` raises now use `from None` (B904).
+- Extract `_FUTURE_TIMEOUT` constant for `future.result()` calls (was
+  hardcoded `120` in four places).
+
+### Added
+- Ruff `B` (bugbear) and `RUF` lint rule categories to `pyproject.toml`.
+- Per-file ruff ignores for test files (intentional unicode, regex patterns).
+- CLI integration tests for `octorules audit` subcommand.
+- Tests for audit extension error handling, `_fetch_json` HTTP status,
+  and `audit_zone_rules` with no registered extensions.
+
 ## [0.19.0] - 2026-03-25
 
 ### Added

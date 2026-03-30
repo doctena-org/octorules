@@ -151,7 +151,7 @@ def _format_modify_details(change: RuleChange, use_color: bool) -> list[str]:
     """Format field-level diffs for a MODIFY change."""
     details = []
     for key, old_val, new_val in _compute_field_diffs(change):
-        details.extend(_format_diff_value(key, old_val, "−", RED, use_color))
+        details.extend(_format_diff_value(key, old_val, "−", RED, use_color))  # noqa: RUF001
         details.extend(_format_diff_value(key, new_val, "+", GREEN, use_color))
     return details
 
@@ -212,7 +212,7 @@ def format_list_plan(lp: ListPlan, use_color: bool = True) -> list[str]:
     if lp.description_change is not None:
         old_desc, new_desc = lp.description_change
         lines.append(_color("  ~ description:", YELLOW, use_color))
-        lines.append(_color("    − ", DIM, use_color) + _color(repr(old_desc), RED, use_color))
+        lines.append(_color("    − ", DIM, use_color) + _color(repr(old_desc), RED, use_color))  # noqa: RUF001
         lines.append(_color("    + ", DIM, use_color) + _color(repr(new_desc), GREEN, use_color))
     for change in lp.changes:
         lines.extend(format_change(change, use_color))

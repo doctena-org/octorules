@@ -19,13 +19,13 @@ from octorules.provider.base import (
 )
 
 __all__ = [
-    "BaseProvider",
-    "CloudflareProvider",
-    "PhaseRulesResult",
     "SUPPORTS_CUSTOM_RULESETS",
     "SUPPORTS_LISTS",
     "SUPPORTS_PAGE_SHIELD",
     "SUPPORTS_ZONE_DISCOVERY",
+    "BaseProvider",
+    "CloudflareProvider",
+    "PhaseRulesResult",
     "Scope",
     "provider_supports",
 ]

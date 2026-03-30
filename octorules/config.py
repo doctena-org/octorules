@@ -70,7 +70,7 @@ def _make_include_loader(base_path: Path, visited: set[Path]) -> type:
             raise ConfigError(
                 f"Include path escapes base directory: {rel_path!r} "
                 f"(resolves to {include_path}, base is {base_path.resolve()})"
-            )
+            ) from None
         if include_path in visited:
             raise ConfigError(f"Circular include detected: {include_path}")
         if not include_path.exists():
@@ -602,7 +602,7 @@ class Config:
                 raise ConfigError(
                     f"'providers.lists.directory' must be within the rules directory "
                     f"({rules_dir}), got {lists_dir}"
-                )
+                ) from None
         else:
             lists_dir = rules_dir / "custom_lists"
 
@@ -708,7 +708,7 @@ class Config:
         try:
             rules_file.relative_to(self.rules_dir.resolve())
         except ValueError:
-            raise ConfigError(f"{label} resolves outside rules directory")
+            raise ConfigError(f"{label} resolves outside rules directory") from None
         if not rules_file.exists():
             log.debug("No rules file for %s (expected %s)", label, rules_file)
             self._rules_cache[cache_key] = {}

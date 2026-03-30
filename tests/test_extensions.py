@@ -102,6 +102,6 @@ class TestPlanZoneHookPrefetch:
         # If previous tests leaked hooks, this would fail.
         # We can't assert it's completely empty since other test modules might
         # have loaded, but we verify no hooks with our specific test markers.
-        for prefetch, finalize in _plan_zone_hooks:
+        for prefetch, _finalize in _plan_zone_hooks:
             # None of the hooks from our tests above should remain
             assert "prefetch failed" not in str(prefetch)
