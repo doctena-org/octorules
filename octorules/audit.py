@@ -71,12 +71,13 @@ class AuditFinding:
 
 def _fetch_json(url: str, timeout: int = 15) -> Any:
     """Fetch JSON from a URL. Returns parsed data or None on failure."""
-    import json
-
     req = Request(url, headers={"User-Agent": "octorules-audit/1.0"})
     try:
-        with urlopen(req, timeout=timeout) as resp:  # noqa: S310
-            return json.loads(resp.read())
+        with urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                log.warning("HTTP %d from %s", resp.status, url)
+                return None
+            return _json.loads(resp.read())
     except Exception as e:
         log.warning("Failed to fetch %s: %s", url, e)
         return None
@@ -254,7 +255,7 @@ def check_ip_overlap(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
                 entries.append((info.ref, info.phase_name, info.zone_name, cidr, net))
 
     for i, (ref_a, phase_a, zone_a, cidr_a, net_a) in enumerate(entries):
-        for ref_b, phase_b, zone_b, cidr_b, net_b in entries[i + 1 :]:
+        for ref_b, phase_b, _zone_b, cidr_b, net_b in entries[i + 1 :]:
             if ref_a == ref_b and phase_a == phase_b:
                 continue  # Skip intra-rule comparison
             if net_a.version != net_b.version:
@@ -451,9 +452,10 @@ def check_zone_drift(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
         if len(zones) <= 1:
             continue
 
-        # Check if actions differ
+        # Check if actions differ (case-insensitive comparison; display uses
+        # original casing from each provider for clarity).
         actions_by_zone: dict[str, set[str]] = {}
-        for zone, phase, ref, action in usages:
+        for zone, _phase, _ref, action in usages:
             actions_by_zone.setdefault(zone, set()).add(action.lower())
 
         unique_action_sets = {frozenset(a) for a in actions_by_zone.values()}
@@ -461,7 +463,7 @@ def check_zone_drift(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
             continue  # Same actions everywhere
 
         zone_details = []
-        for zone, phase, ref, action in usages:
+        for zone, _phase, ref, action in usages:
             zone_details.append(f"{zone}/{ref}={action or '(none)'}")
 
         findings.append(
@@ -577,8 +579,15 @@ def audit_zone_rules(
 
     all_infos: list[RuleIPInfo] = []
     for phase_name in rules_data:
-        infos = call_audit_extensions(rules_data, phase_name)
+        infos, failed = call_audit_extensions(rules_data, phase_name)
         all_infos.extend(infos)
+        for ext_name in failed:
+            log.warning(
+                "Audit extension %r failed for phase %r in zone %r — results may be incomplete",
+                ext_name,
+                phase_name,
+                zone_name,
+            )
 
     # Resolve list_refs → IPs from the lists section
     ip_map = _build_list_ip_map(rules_data)

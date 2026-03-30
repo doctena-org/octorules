@@ -283,18 +283,23 @@ def call_dump_extensions(
     return result
 
 
-def call_audit_extensions(rules_data: dict, phase_name: str) -> list[RuleIPInfo]:
+def call_audit_extensions(rules_data: dict, phase_name: str) -> tuple[list[RuleIPInfo], list[str]]:
     """Call all registered audit extractors for a phase.
 
-    Returns a flat list of :class:`RuleIPInfo` from all providers.
+    Returns ``(results, failed)`` where *results* is a flat list of
+    :class:`RuleIPInfo` from all providers and *failed* is a list of
+    extension names that raised an exception (best-effort: partial
+    results are still returned).
     """
     results: list = []
+    failed: list[str] = []
     for name, fn in _audit_extensions.items():
         try:
             results.extend(fn(rules_data, phase_name))
         except Exception:
             log.exception("Error in audit extension %s for phase %s", name, phase_name)
-    return results
+            failed.append(name)
+    return results, failed
 
 
 def get_format_extensions() -> dict[str, FormatExtension]:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.19.0"
+version = "0.19.1"
 description = "WAF rules as code — manage rules across providers declaratively"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -67,7 +67,12 @@ target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "W", "UP"]
+select = ["E", "F", "I", "W", "UP", "B", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use intentional unicode chars (minus sign, en-dash) to verify formatter output,
+# and regex metacharacters in pytest.raises(match=...) are intentional patterns.
+"tests/*" = ["RUF001", "RUF002", "RUF003", "RUF012", "RUF043"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

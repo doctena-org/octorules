@@ -77,6 +77,9 @@ _FEATURE_KEYS: dict[str, str] = {
 
 log = logging.getLogger(__name__)
 
+# Timeouts for future.result() calls when joining background fetches.
+_FUTURE_TIMEOUT = 120
+
 
 def _get_cloudflare_provider() -> type | None:
     """Lazy import of CloudflareProvider from octorules-cloudflare.
@@ -644,7 +647,7 @@ def _plan_zones(
             config, provider, zn, phase_filter, processors, target_name=tname
         )
         if result is not None:
-            name, zp, desired, current = result
+            _name, zp, _desired, _current = result
             zp.target = target
         return result
 
@@ -655,13 +658,13 @@ def _plan_zones(
         executor=executor,
     )
 
-    for item, result in zip(work_items, results):
+    for item, result in zip(work_items, results, strict=True):
         zn = item[0]
         if result is None:
             if zn not in failed_zones:
                 failed_zones.append(zn)
         else:
-            name, zp, desired, current = result
+            _name, zp, desired, current = result
             zone_plans.append(zp)
             desired_by_zone[zp.plan_key] = desired
             current_by_zone[zp.plan_key] = current
@@ -755,7 +758,7 @@ def _plan_account(
         # Plan custom rulesets
         if cr_future is not None:
             try:
-                custom_rulesets_current = cr_future.result(timeout=120)
+                custom_rulesets_current = cr_future.result(timeout=_FUTURE_TIMEOUT)
             except ProviderAuthError:
                 raise
             except ProviderError as e:
@@ -778,7 +781,7 @@ def _plan_account(
         # Plan lists
         if lists_future is not None:
             try:
-                current_lists = lists_future.result(timeout=120)
+                current_lists = lists_future.result(timeout=_FUTURE_TIMEOUT)
             except ProviderAuthError:
                 raise
             except ProviderError as e:
@@ -804,13 +807,13 @@ class _PlanAllResult:
     """Aggregated result from planning zones and/or account."""
 
     __slots__ = (
-        "zone_plans",
-        "desired_by_zone",
-        "current_by_zone",
-        "failed",
-        "scope_map",
         "account_labels",
+        "current_by_zone",
+        "desired_by_zone",
+        "failed",
         "provider_map",
+        "scope_map",
+        "zone_plans",
     )
 
     def __init__(self) -> None:
@@ -905,7 +908,7 @@ def _plan_all_scopes(
             result._add_zones(
                 *_plan_zones(config, prov_dict, zone_names, phase_filter, executor, processors)
             )
-            for prov, future in zip(acct_providers, acct_futures):
+            for prov, future in zip(acct_providers, acct_futures, strict=True):
                 result._add_account(*future.result(), prov)
     else:
         if do_zones:
@@ -1384,7 +1387,9 @@ def _apply_zone_changes(
             log.error("Successfully synced before failure: %s", ", ".join(all_synced))
         return 1, sync_results
 
-    for (zp, _desired, _scope, _prov), (zone_name, synced, error) in zip(to_apply, results):
+    for (zp, _desired, _scope, _prov), (zone_name, synced, error) in zip(
+        to_apply, results, strict=True
+    ):
         all_synced.extend(synced)
         sync_results.append(
             SyncResult(
@@ -1816,7 +1821,7 @@ def cmd_dump(
             custom_rulesets: dict[str, dict] | None = None
             if cr_future is not None:
                 try:
-                    custom_rulesets = cr_future.result(timeout=120) or None
+                    custom_rulesets = cr_future.result(timeout=_FUTURE_TIMEOUT) or None
                 except ProviderAuthError:
                     raise
                 except ProviderError as e:
@@ -1830,7 +1835,7 @@ def cmd_dump(
             lists: dict[str, dict] | None = None
             if lists_future is not None:
                 try:
-                    lists = lists_future.result(timeout=120) or None
+                    lists = lists_future.result(timeout=_FUTURE_TIMEOUT) or None
                 except ProviderAuthError:
                     raise
                 except ProviderError as e:

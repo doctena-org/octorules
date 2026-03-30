@@ -49,9 +49,9 @@ log = logging.getLogger(__name__)
 __all__ = [
     "_CHECKSUM_RE",
     "_apply_custom_rulesets",
-    "_discover_provider_modules",
     "_apply_lists",
     "_apply_parallel",
+    "_discover_provider_modules",
     "_emit_plan_outputs",
     "_filter_current_by_phase",
     "_filter_desired_by_phase",

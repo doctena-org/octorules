@@ -156,7 +156,7 @@ class TestCustomRulesetsPlanAccount:
             }
         }
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 1
         crp = zp.custom_ruleset_plans[0]
@@ -187,7 +187,7 @@ class TestCustomRulesetsPlanAccount:
         provider.get_all_phase_rules.return_value = {}
         provider.get_all_custom_rulesets.return_value = {}  # empty = all rules are new
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 1
         crp = zp.custom_ruleset_plans[0]
@@ -215,7 +215,7 @@ class TestCustomRulesetsPlanAccount:
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 0
         provider.get_all_custom_rulesets.assert_not_called()
@@ -248,7 +248,7 @@ class TestCustomRulesetsPlanAccount:
             }
         }
 
-        zp, desired, current = _plan_account(config, provider, None)
+        zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert len(zp.custom_ruleset_plans) == 0  # no changes = not added
 
@@ -275,7 +275,7 @@ class TestCustomRulesetsPlanAccount:
         provider.get_all_custom_rulesets.side_effect = ProviderError("Server error")
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            zp, desired, current = _plan_account(config, provider, None)
+            zp, _desired, _current = _plan_account(config, provider, None)
         assert zp is not None
         assert "Failed to fetch custom rulesets" in caplog.text
         # Changes still detected because current is empty fallback
@@ -645,7 +645,7 @@ class TestApplyCustomRulesets:
         # put fails after create
         provider.put_custom_ruleset.side_effect = ProviderError("rate limited")
 
-        synced, error = _apply_custom_rulesets(zp, scope, provider)
+        _synced, error = _apply_custom_rulesets(zp, scope, provider)
         assert error is not None
         assert "rate limited" in error
         # create was called (the ruleset was created)

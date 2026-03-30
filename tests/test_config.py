@@ -567,7 +567,7 @@ class TestYamlLoaderEquivalence:
 
         loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
         with open(yaml_file, encoding="utf-8") as f:
-            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+            expected = yaml.load(f, Loader=loader_cls)
         actual = _yaml_load(yaml_file)
         assert actual == expected
 
@@ -583,7 +583,7 @@ class TestYamlLoaderEquivalence:
 
         loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
         with open(yaml_file, encoding="utf-8") as f:
-            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+            expected = yaml.load(f, Loader=loader_cls)
         actual = _yaml_load(yaml_file)
         assert actual == expected
         assert actual["data"] == ["item1", "item2"]
@@ -599,7 +599,7 @@ class TestYamlLoaderEquivalence:
 
         loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
         with open(yaml_file, encoding="utf-8") as f:
-            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+            expected = yaml.load(f, Loader=loader_cls)
         actual = _yaml_load(yaml_file)
         assert actual == expected
         assert actual is None
@@ -628,7 +628,7 @@ class TestYamlLoaderEquivalence:
 
         loader_cls = _make_include_loader(tmp_path, {yaml_file.resolve()})
         with open(yaml_file, encoding="utf-8") as f:
-            expected = yaml.load(f, Loader=loader_cls)  # noqa: S506
+            expected = yaml.load(f, Loader=loader_cls)
         actual = _yaml_load(yaml_file)
         assert actual == expected
 
