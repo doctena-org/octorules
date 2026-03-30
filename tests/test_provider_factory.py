@@ -41,8 +41,8 @@ def _mock_config(**overrides):
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 class TestInitProviderDefault:
-    @patch("octorules.commands._resolve_provider_class")
-    @patch("octorules.commands.resolve_zone_ids")
+    @patch("octorules.commands._providers._resolve_provider_class")
+    @patch("octorules.commands._providers.resolve_zone_ids")
     def test_default_creates_cloudflare(self, mock_resolve, mock_resolve_cls):
         """Default _init_provider creates CloudflareProvider via _init_providers."""
         mock_cls = MagicMock()
@@ -55,7 +55,7 @@ class TestInitProviderDefault:
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 class TestInitProviderCustomClass:
-    @patch("octorules.commands.resolve_zone_ids")
+    @patch("octorules.commands._providers.resolve_zone_ids")
     def test_provider_cls_parameter(self, mock_resolve):
         """Explicit provider_cls parameter is used."""
         mock_cls = MagicMock()
@@ -68,8 +68,8 @@ class TestInitProviderCustomClass:
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
 class TestInitProviderDynamicImport:
-    @patch("octorules.commands.resolve_zone_ids")
-    @patch("octorules.commands._resolve_provider_class")
+    @patch("octorules.commands._providers.resolve_zone_ids")
+    @patch("octorules.commands._providers._resolve_provider_class")
     def test_dynamic_import_from_config(self, mock_resolve_cls, mock_resolve):
         """Config class_path triggers dynamic import via _init_providers."""
         mock_cls = MagicMock()
@@ -90,7 +90,7 @@ class TestInitProviderDynamicImport:
         mock_cls.assert_called_once_with(token="test-token", max_workers=1)
         assert provider is mock_cls.return_value
 
-    @patch("octorules.commands.resolve_zone_ids")
+    @patch("octorules.commands._providers.resolve_zone_ids")
     def test_provider_cls_overrides_config(self, mock_resolve):
         """Explicit provider_cls takes precedence over config class_path."""
         mock_cls = MagicMock()
@@ -247,8 +247,8 @@ providers:
 
 
 class TestInitProviders:
-    @patch("octorules.commands.resolve_zone_ids")
-    @patch("octorules.commands._resolve_provider_class")
+    @patch("octorules.commands._providers.resolve_zone_ids")
+    @patch("octorules.commands._providers._resolve_provider_class")
     def test_single_provider(self, mock_resolve_cls, mock_resolve_zones):
         """_init_providers creates one provider from config.providers."""
         mock_cls = MagicMock()
@@ -264,8 +264,8 @@ class TestInitProviders:
         assert "cloudflare" in providers
         assert providers["cloudflare"] is mock_cls.return_value
 
-    @patch("octorules.commands.resolve_zone_ids")
-    @patch("octorules.commands._resolve_provider_class")
+    @patch("octorules.commands._providers.resolve_zone_ids")
+    @patch("octorules.commands._providers._resolve_provider_class")
     def test_resolve_zone_ids_called(self, mock_resolve_cls, mock_resolve_zones):
         """_init_providers calls resolve_zone_ids with per-provider fns."""
         mock_cls = MagicMock()
@@ -320,7 +320,7 @@ class TestResolveProviderClass:
         assert cls is sentinel_cls
         mock_eps.assert_called_once_with(group="octorules.providers")
 
-    @patch("octorules.commands._get_cloudflare_provider")
+    @patch("octorules.commands._providers._get_cloudflare_provider")
     @patch("importlib.metadata.entry_points")
     def test_fallback_to_cloudflare(self, mock_eps, mock_get_cf):
         """No class, no entry point -> CloudflareProvider with deprecation warning."""
@@ -330,7 +330,7 @@ class TestResolveProviderClass:
         cls = _resolve_provider_class("cloudflare", None)
         assert cls is sentinel_cls
 
-    @patch("octorules.commands._get_cloudflare_provider", return_value=None)
+    @patch("octorules.commands._providers._get_cloudflare_provider", return_value=None)
     @patch("importlib.metadata.entry_points")
     def test_no_class_no_fallback(self, mock_eps, mock_get_cf):
         """No class, no entry point, no CloudflareProvider -> ConfigError."""

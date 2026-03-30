@@ -311,7 +311,7 @@ class TestListsPlanAccount:
 class TestListsDump:
     """Tests for lists in cmd_dump."""
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_account_includes_lists(self, mock_init_provs, tmp_path, caplog):
         """Account dump should include lists section."""
         from octorules.config import _yaml_load
@@ -352,7 +352,7 @@ class TestListsDump:
         assert data["lists"][0]["kind"] == "ip"
         assert data["lists"][0]["items"][0]["ip"] == "1.2.3.4"
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_account_lists_api_error(self, mock_init_provs, tmp_path, caplog):
         """API error fetching lists should warn but still dump phases."""
         from octorules.provider.exceptions import ProviderError
@@ -385,7 +385,7 @@ class TestListsDump:
         dumped = rules_dir / "test-account.yaml"
         assert dumped.exists()
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_account_no_lists_returns_none(self, mock_init_provs, tmp_path, caplog):
         """When get_all_lists returns empty dict, lists section is omitted."""
         import yaml
@@ -414,7 +414,7 @@ class TestListsDump:
         data = yaml.safe_load(dumped.read_text())
         assert "lists" not in (data or {})
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_account_uses_config_lists_dir(self, mock_init_provs, tmp_path, caplog):
         """Account dump should write list items to config.lists_dir."""
         rules_dir = tmp_path / "rules"
@@ -450,7 +450,7 @@ class TestListsDump:
         assert (custom_dir / "blocked_ips.yaml").exists()
         assert not (rules_dir / "custom_lists").exists()
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_output_dir_override_ignores_config_lists_dir(
         self, mock_init_provs, tmp_path, caplog
     ):
@@ -505,7 +505,7 @@ class TestListsSync:
             zones={},
         )
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_creates_new_list(self, mock_init_provs, tmp_path, caplog):
         """Sync should call create_list + put_list_items for new lists."""
         config = self._make_account_config(
@@ -539,7 +539,7 @@ class TestListsSync:
         mock_prov.put_list_items.assert_called_once()
         mock_prov.poll_bulk_operation.assert_called_once()
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_deletes_removed_list(self, mock_init_provs, tmp_path, caplog):
         """Sync should call delete_list for lists in CF but not in YAML."""
         config = self._make_account_config(
@@ -569,7 +569,7 @@ class TestListsSync:
             "list-999",
         )
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_no_list_changes_skips_apply(self, mock_init_provs, tmp_path):
         """When list items match, no API calls for lists should be made."""
         config = self._make_account_config(
@@ -604,7 +604,7 @@ class TestListsSync:
         mock_prov.delete_list.assert_not_called()
         mock_prov.update_list_description.assert_not_called()
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_lists_api_error_returns_1(self, mock_init_provs, tmp_path, caplog):
         """API error during list create should return 1."""
         from octorules.provider.exceptions import ProviderError

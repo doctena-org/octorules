@@ -200,7 +200,7 @@ class TestManagerDelegation:
 
     def test_no_double_provider_init(self, _cfg_path):
         """Manager does not call _init_providers — cmd_* functions handle it."""
-        with patch("octorules.commands._init_providers") as mock_init:
+        with patch("octorules.commands._providers._init_providers") as mock_init:
             Manager(_cfg_path)
             # Manager.__init__ should NOT call _init_providers
             mock_init.assert_not_called()

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-03-30
+
+### Added
+- `octorules audit --severity`: minimum severity to report (error/warning/info).
+- `octorules audit --exit-code`: granular exit codes (1 = errors, 2 = warnings).
+- `octorules audit --format`: output format (text or json).
+- `octorules audit --output`: write results to a file.
+- `# octorules:accept=<check>` directives to suppress known audit findings per zone file.
+
+### Changed
+- **Breaking (internal):** `commands.py` split into `commands/` package (10 submodules). All public imports from `octorules.commands` are unchanged; `mock.patch` targets in downstream tests must use submodule paths (e.g. `octorules.commands._providers._init_providers`).
+- Audit severity prefix in output changed from `[WARNING]` to `warning:` to prevent GitHub Actions log annotation mangling.
+- Audit warnings no longer cause exit code 1 by default. Use `--exit-code` for granular exit codes (1 = errors, 2 = warnings).
+
 ## [0.19.1] - 2026-03-30
 
 ### Changed

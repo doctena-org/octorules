@@ -279,6 +279,31 @@ def build_parser() -> argparse.ArgumentParser:
         dest="cdn_stale_days",
         help="Warn if baked-in CDN ranges are older than this many days (default: 60)",
     )
+    audit_parser.add_argument(
+        "--severity",
+        dest="audit_severity",
+        choices=["error", "warning", "info"],
+        default="info",
+        help="Minimum severity to report (default: info)",
+    )
+    audit_parser.add_argument(
+        "--format",
+        dest="audit_format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text)",
+    )
+    audit_parser.add_argument(
+        "--output",
+        dest="audit_output",
+        help="Write audit results to a file",
+    )
+    audit_parser.add_argument(
+        "--exit-code",
+        action="store_true",
+        dest="audit_exit_code",
+        help="Exit with 1 when errors are found, 2 when warnings are found (useful for CI)",
+    )
 
     sub.add_parser("versions", parents=[shared], help="Show versions of octorules and dependencies")
 
@@ -299,6 +324,10 @@ def build_parser() -> argparse.ArgumentParser:
         audit_checks=None,
         cdn_timeout=15,
         cdn_stale_days=60,
+        audit_severity="info",
+        audit_format="text",
+        audit_output=None,
+        audit_exit_code=False,
     )
 
     return parser
@@ -429,6 +458,10 @@ def main(argv: list[str] | None = None) -> None:
                     checks=args.audit_checks,
                     cdn_timeout=args.cdn_timeout,
                     cdn_stale_days=args.cdn_stale_days,
+                    severity=args.audit_severity,
+                    exit_code=args.audit_exit_code,
+                    audit_format=args.audit_format,
+                    output_file=args.audit_output,
                 )
             )
         elif args.command == "validate":

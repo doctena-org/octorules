@@ -285,7 +285,7 @@ class TestCustomRulesetsPlanAccount:
 class TestCustomRulesetsDump:
     """Tests for custom rulesets in cmd_dump."""
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_account_includes_custom_rulesets(self, mock_init_provs, tmp_path, caplog):
         """Account dump should include custom_rulesets section."""
         import yaml
@@ -324,7 +324,7 @@ class TestCustomRulesetsDump:
         assert data["custom_rulesets"][0]["name"] == "Block attackers"
         assert len(data["custom_rulesets"][0]["rules"]) == 1
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_account_custom_rulesets_api_error(self, mock_init_provs, tmp_path, caplog):
         """API error fetching custom rulesets should warn but still dump phases."""
         from octorules.provider.exceptions import ProviderError
@@ -373,7 +373,7 @@ class TestCustomRulesetsSync:
             zones={},
         )
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_applies_custom_rulesets_update(self, mock_init_provs, tmp_path, caplog):
         """Sync should call put_custom_ruleset for existing custom ruleset changes."""
         config = self._make_account_config(
@@ -410,7 +410,7 @@ class TestCustomRulesetsSync:
         assert call_args[0][1] == "rs1"  # ruleset_id
         assert "custom_ruleset:Block attackers" in caplog.text
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_creates_new_custom_ruleset(self, mock_init_provs, tmp_path, caplog):
         """Sync should call create_custom_ruleset for new rulesets."""
         config = self._make_account_config(
@@ -446,7 +446,7 @@ class TestCustomRulesetsSync:
         assert call_args[0][1] == "new-rs-id"  # ruleset_id from create
         assert "custom_ruleset:Block attackers" in caplog.text
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_custom_rulesets_api_error(self, mock_init_provs, tmp_path, caplog):
         """API error applying custom ruleset should return 1."""
         from octorules.provider.exceptions import ProviderError
@@ -482,7 +482,7 @@ class TestCustomRulesetsSync:
             result = cmd_sync(config, None, scope_filter="account")
         assert result == 1
 
-    @patch("octorules.commands._init_providers")
+    @patch("octorules.commands._providers._init_providers")
     def test_sync_no_changes_skips_apply(self, mock_init_provs, tmp_path):
         """When custom ruleset rules match, no PUT calls should be made."""
         config = self._make_account_config(

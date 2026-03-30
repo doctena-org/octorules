@@ -121,7 +121,7 @@ class TestCoreWithoutCloudflare:
     def test_plan_error_without_cloudflare(self):
         """_resolve_provider_class should raise ConfigError when no provider class is found."""
         with (
-            patch("octorules.commands._get_cloudflare_provider", return_value=None),
+            patch("octorules.commands._providers._get_cloudflare_provider", return_value=None),
             patch("importlib.metadata.entry_points", return_value=[]),
         ):
             from octorules.commands import _resolve_provider_class
