@@ -36,6 +36,7 @@ _SEVERITY_RANK: dict[FindingSeverity, int] = {}  # populated after enum definiti
 
 # Matches: # octorules:accept=zone-drift
 # Also:    # octorules: accept = ip-overlap, cdn-ranges
+# Case-sensitive: check names must be lowercase (ip-overlap, not IP-Overlap).
 _AUDIT_ACCEPT_RE = re.compile(
     r"#\s*octorules:\s*accept\s*=\s*([a-z][a-z0-9-]*(?:\s*,\s*[a-z][a-z0-9-]*)*)"
 )

@@ -429,13 +429,15 @@ octorules lint --format sarif --output results.sarif
 octorules lint --exit-code
 ```
 
-Suppression comments work like shellcheck:
+Suppression comments work like shellcheck. Both lint and audit directives use the `octorules:` prefix and are case-sensitive:
 
 ```yaml
   # octorules:disable=CF015
   - ref: add-security-headers
     expression: (true)
 ```
+
+Multiple rule IDs can be comma-separated: `# octorules:disable=CF018, CF423`
 
 ## CLI reference
 
@@ -529,7 +531,7 @@ octorules audit [--check ...] [--severity error|warning|info] [--format text|jso
 - **cdn-ranges** -- Rules that match known CDN provider IP ranges (Cloudflare, AWS CloudFront, Google Cloud). Fetches fresh ranges from public APIs; falls back to baked-in data when offline.
 - **zone-drift** -- Same CIDR treated differently across zones (e.g. blocked in zone A, allowed in zone B).
 
-Acceptance comments suppress known findings:
+Acceptance comments suppress known findings (check names must be lowercase):
 
 ```yaml
   # octorules:accept=zone-drift
@@ -697,6 +699,12 @@ cd octorules
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev,wirefilter]"
+```
+
+### Pre-commit hook
+
+```bash
+ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 ```
 
 ### Running tests and linting
