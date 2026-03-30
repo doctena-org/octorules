@@ -543,6 +543,7 @@ def cmd_sync(
         raise ConfigError(
             f"Invalid checksum format: {checksum!r} (expected 64-character hex string)"
         )
+    config.resolve_secrets()
     providers = _providers_mod._init_providers(config)
     processors = _providers_mod._init_processors(config)
     # Shared executor reused across plan + apply phases

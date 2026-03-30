@@ -21,6 +21,7 @@ from octorules.cli import (
     cmd_audit,
     cmd_compare,
     cmd_dump,
+    cmd_lint,
     cmd_plan,
     cmd_report,
     cmd_sync,
@@ -2341,47 +2342,80 @@ class TestApiErrorStatusCodes:
 class TestWriteOutputFile:
     """Tests for _write_output_file() path traversal guard."""
 
-    def test_rejects_tilde_in_path(self, caplog):
-        """Paths containing '~' in the resolved form are rejected."""
-        # Path.resolve() does not expand ~, so it stays in the resolved string
-        with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = _write_output_file("~/secret.txt", lambda f: f.write("data"))
-        assert result is False
-        assert "unsafe output path" in caplog.text.lower()
-
-    def test_rejects_tilde_in_component(self, tmp_path, caplog):
-        """Paths with '~' anywhere in the resolved path are rejected."""
-        # Create a directory with tilde in its name
-        tilde_dir = tmp_path / "~sneaky"
-        tilde_dir.mkdir()
-        with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = _write_output_file(str(tilde_dir / "out.txt"), lambda f: f.write("data"))
-        assert result is False
-        assert "unsafe output path" in caplog.text.lower()
-
-    def test_dotdot_blocked_before_resolve(self, tmp_path, caplog):
-        """Paths with '..' are blocked before resolve() can normalize them."""
-        unsafe_path = str(tmp_path / ".." / "escaped.txt")
-        with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = _write_output_file(unsafe_path, lambda f: f.write("data"))
-        assert result is False
-        assert "unsafe output path" in caplog.text.lower()
-
     def test_accepts_safe_path(self, tmp_path):
-        """Normal paths are accepted and file is written."""
+        """Normal paths within base_dir are accepted and file is written."""
         safe_path = str(tmp_path / "output.txt")
-        result = _write_output_file(safe_path, lambda f: f.write("hello"))
+        result = _write_output_file(safe_path, lambda f: f.write("hello"), base_dir=tmp_path)
         assert result is True
         assert (tmp_path / "output.txt").read_text() == "hello"
 
     def test_returns_false_on_os_error(self, tmp_path, caplog):
         """OSError during write returns False."""
-        # Use a non-existent directory to trigger OSError
         bad_path = str(tmp_path / "no_such_dir" / "output.txt")
         with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = _write_output_file(bad_path, lambda f: f.write("data"))
+            result = _write_output_file(bad_path, lambda f: f.write("data"), base_dir=tmp_path)
         assert result is False
         assert "Failed to write output file" in caplog.text
+
+    def test_rejects_dotdot_escape(self, tmp_path, caplog):
+        """Paths with '..' that resolve outside base_dir are rejected."""
+        unsafe_path = str(tmp_path / ".." / "escaped.txt")
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(unsafe_path, lambda f: f.write("data"), base_dir=tmp_path)
+        assert result is False
+        assert "escapes base directory" in caplog.text.lower()
+
+    def test_rejects_absolute_path_outside_base(self, tmp_path, caplog):
+        """Absolute paths outside base_dir are rejected."""
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(
+                "/tmp/escape.txt", lambda f: f.write("data"), base_dir=tmp_path
+            )
+        assert result is False
+        assert "escapes base directory" in caplog.text.lower()
+
+    def test_rejects_symlink_outside_base(self, tmp_path, caplog):
+        """Symlinks resolving outside base_dir are rejected."""
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = outside / "secret.txt"
+        target.write_text("secret")
+        base = tmp_path / "workspace"
+        base.mkdir()
+        link = base / "link.txt"
+        link.symlink_to(target)
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(str(link), lambda f: f.write("data"), base_dir=base)
+        assert result is False
+        assert "escapes base directory" in caplog.text.lower()
+
+    def test_accepts_dotdot_within_base(self, tmp_path):
+        """Paths with '..' that still resolve within base_dir are accepted."""
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        safe_path = str(sub / ".." / "output.txt")
+        result = _write_output_file(safe_path, lambda f: f.write("ok"), base_dir=tmp_path)
+        assert result is True
+        assert (tmp_path / "output.txt").read_text() == "ok"
+
+    def test_tilde_dir_within_base_accepted(self, tmp_path):
+        """A literal ~ in a directory name within base_dir is accepted."""
+        tilde_dir = tmp_path / "~oddname"
+        tilde_dir.mkdir()
+        result = _write_output_file(
+            str(tilde_dir / "out.txt"),
+            lambda f: f.write("ok"),
+            base_dir=tmp_path,
+        )
+        assert result is True
+
+    def test_tilde_home_expansion_rejected(self, tmp_path, caplog):
+        """~/path resolves outside base_dir and is rejected."""
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = _write_output_file(
+                "~/secret.txt", lambda f: f.write("data"), base_dir=tmp_path
+            )
+        assert result is False
 
 
 class TestEmitPlanOutputs:
@@ -3182,3 +3216,167 @@ class TestFetchJsonHttpStatus:
         with patch("octorules.audit.urlopen", side_effect=OSError("Connection refused")):
             result = _fetch_json("https://example.com/test.json")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Quiet flag (--quiet) output suppression tests
+# ---------------------------------------------------------------------------
+
+
+class TestQuietFlag:
+    """Tests for --quiet stdout suppression via ContextVar."""
+
+    def test_is_quiet_default_false(self):
+        """is_quiet() returns False by default."""
+        from octorules._context import is_quiet
+
+        assert is_quiet() is False
+
+    def test_set_quiet_round_trip(self):
+        """set_quiet(True) then is_quiet() returns True."""
+        from octorules._context import is_quiet, set_quiet
+
+        set_quiet(True)
+        try:
+            assert is_quiet() is True
+        finally:
+            set_quiet(False)
+
+    def test_quiet_suppresses_plan_text_stdout(self, capsys, sample_config):
+        """--quiet suppresses plan table output to stdout."""
+        from octorules._context import set_quiet
+        from octorules.planner import ZonePlan
+
+        set_quiet(True)
+        try:
+            result = _emit_plan_outputs(sample_config, [ZonePlan(zone_name="z", phase_plans=[])])
+            assert result is True
+            assert capsys.readouterr().out == ""
+        finally:
+            set_quiet(False)
+
+    def test_quiet_does_not_suppress_file_output(self, tmp_path, sample_config):
+        """--quiet does not suppress plan output written to a file."""
+        from octorules._context import set_quiet
+        from octorules.phases import get_phase
+        from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
+
+        out_file = tmp_path / "plan.txt"
+        sample_config.plan_outputs = {"text": PlanText("text", path=str(out_file))}
+        phase = get_phase("redirect_rules")
+        pp = PhasePlan(phase=phase, changes=[RuleChange(ChangeType.ADD, "r1", phase)])
+        zp = ZonePlan(zone_name="example.com", phase_plans=[pp])
+
+        set_quiet(True)
+        try:
+            result = _emit_plan_outputs(sample_config, [zp])
+            assert result is True
+            assert out_file.exists()
+            assert "example.com" in out_file.read_text()
+        finally:
+            set_quiet(False)
+
+    def test_quiet_suppresses_versions_output(self, capsys):
+        """--quiet suppresses versions command output."""
+        from octorules._context import set_quiet
+
+        set_quiet(True)
+        try:
+            result = cmd_versions()
+            assert result == 0
+            assert capsys.readouterr().out == ""
+        finally:
+            set_quiet(False)
+
+    def test_quiet_suppresses_lint_stdout(self, capsys, sample_config):
+        """--quiet suppresses lint result output to stdout (stderr summary still visible)."""
+        from octorules._context import set_quiet
+
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
+
+        set_quiet(True)
+        try:
+            with patch("octorules.cli._discover_provider_modules"):
+                cmd_lint(sample_config, ["example.com"])
+            # stdout should be empty; stderr summary is still allowed
+            assert capsys.readouterr().out == ""
+        finally:
+            set_quiet(False)
+
+    def test_quiet_suppresses_audit_stdout(self, sample_config, capsys):
+        """--quiet suppresses audit findings output to stdout."""
+        from octorules._context import set_quiet
+
+        # Create a rules file with no IP-bearing rules (no findings)
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
+
+        set_quiet(True)
+        try:
+            with patch("octorules.cli._discover_provider_modules"):
+                result = cmd_audit(sample_config, ["example.com"])
+            assert result == 0
+            assert capsys.readouterr().out == ""
+        finally:
+            set_quiet(False)
+
+    def test_quiet_preserves_report_file_output(self, tmp_path, sample_config):
+        """--quiet does not suppress print_report when writing to a file handle."""
+        from octorules._context import set_quiet
+        from octorules.formatter import print_report
+
+        report_data = {
+            "zones": [],
+            "summary": {"total_zones": 0, "in_sync": 0, "drifted": 0},
+        }
+        out_file = tmp_path / "report.csv"
+
+        set_quiet(True)
+        try:
+            with open(out_file, "w") as fh:
+                print_report(report_data, file=fh, fmt="csv")
+            assert out_file.exists()
+            content = out_file.read_text()
+            assert "Zone" in content  # CSV header present
+        finally:
+            set_quiet(False)
+
+    def test_quiet_suppresses_report_stdout(self, capsys):
+        """--quiet suppresses print_report to stdout."""
+        from octorules._context import set_quiet
+        from octorules.formatter import print_report
+
+        report_data = {
+            "zones": [],
+            "summary": {"total_zones": 0, "in_sync": 0, "drifted": 0},
+        }
+
+        set_quiet(True)
+        try:
+            print_report(report_data, fmt="csv")
+            assert capsys.readouterr().out == ""
+        finally:
+            set_quiet(False)
+
+    def test_quiet_flag_set_via_main(self, tmp_path, monkeypatch, capsys):
+        """main() sets the quiet flag from --quiet argv."""
+        from octorules._context import set_quiet
+
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: test\nzones: {}\nrules_dir: rules\n"
+        )
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "rules").mkdir(exist_ok=True)
+
+        try:
+            with (
+                patch("octorules.cli._discover_provider_modules"),
+                pytest.raises(SystemExit) as exc_info,
+            ):
+                main(["--quiet", "--config", str(config_file), "versions"])
+            assert exc_info.value.code == 0
+            assert capsys.readouterr().out == ""
+        finally:
+            set_quiet(False)

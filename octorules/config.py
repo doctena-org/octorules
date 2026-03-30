@@ -399,6 +399,9 @@ class Config:
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
     zone_templates: dict[str, ZoneConfig] = field(default_factory=dict)
     _rules_cache: dict[str, dict] = field(default_factory=dict, repr=False, compare=False)
+    _secret_handlers_raw: dict = field(default_factory=dict, repr=False, compare=False)
+    _config_path: Path | None = field(default=None, repr=False, compare=False)
+    _secrets_resolved: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.lists_dir is None:
@@ -431,6 +434,60 @@ class Config:
                         min_existing=template.min_existing,
                     )
 
+    def resolve_secrets(self) -> None:
+        """Resolve secret references in provider and processor kwargs.
+
+        Must be called before instantiating providers (e.g. before
+        ``_init_providers()``).  Commands that only read rules files
+        (lint, validate, audit) can skip this call entirely.
+
+        Safe to call multiple times — subsequent calls are no-ops.
+        """
+        if self._secrets_resolved:
+            return
+
+        # Build secret handlers
+        from octorules.secret.environ import EnvironSecrets
+
+        handlers: dict[str, object] = {"env": EnvironSecrets("env")}
+
+        from importlib.metadata import entry_points
+
+        for ep in entry_points(group="octorules.secret_handlers"):
+            if ep.name not in handlers:
+                handlers[ep.name] = ep.load()(ep.name)
+
+        # Config-declared handlers
+        for sh_name, sh_data in self._secret_handlers_raw.items():
+            sh_prefix = f"secret_handlers.{sh_name}"
+            sh_class_path = sh_data["class"]
+            sh_class = _load_class(sh_class_path, "secret handler")
+            sh_kwargs: dict = {
+                k: _resolve_deep(v, handlers, f"{sh_prefix}.{k}")
+                for k, v in sh_data.items()
+                if k != "class"
+            }
+            handlers[sh_name] = sh_class(sh_name, **sh_kwargs)
+
+        # Resolve provider kwargs
+        _FRAMEWORK_KEYS = {"class", "safety"}
+        for pc in self.providers.values():
+            pc.kwargs = {
+                k: _resolve_deep(v, handlers, f"providers.{pc.name}.{k}")
+                if k not in _FRAMEWORK_KEYS
+                else v
+                for k, v in pc.kwargs.items()
+            }
+
+        # Resolve processor kwargs
+        for proc in self.processors.values():
+            proc.kwargs = {
+                k: _resolve_deep(v, handlers, f"processors.{proc.name}.{k}")
+                for k, v in proc.kwargs.items()
+            }
+
+        self._secrets_resolved = True
+
     @classmethod
     def from_file(cls, path: str | Path) -> Config:
         """Load config from a YAML file.
@@ -459,19 +516,7 @@ class Config:
 
         raw_ctx = _ctx(raw)
 
-        # --- secret handlers ---
-        from octorules.secret.environ import EnvironSecrets
-
-        handlers: dict[str, object] = {"env": EnvironSecrets("env")}
-
-        # Entry-point discovery
-        from importlib.metadata import entry_points
-
-        for ep in entry_points(group="octorules.secret_handlers"):
-            if ep.name not in handlers:
-                handlers[ep.name] = ep.load()(ep.name)
-
-        # Config-declared handlers (optional)
+        # --- secret handlers (schema validation only; resolution deferred) ---
         raw_sh = raw.get("secret_handlers", {}) or {}
         if not isinstance(raw_sh, dict):
             raise ConfigError(f"'secret_handlers' must be a mapping{_ctx(raw_sh)}")
@@ -484,13 +529,6 @@ class Config:
             sh_class_path = sh_data["class"]
             if not isinstance(sh_class_path, str):
                 raise ConfigError(f"'{sh_prefix}.class' must be a string{_ctx(sh_data)}")
-            sh_class = _load_class(sh_class_path, "secret handler")
-            sh_kwargs: dict = {
-                k: _resolve_deep(v, handlers, f"{sh_prefix}.{k}")
-                for k, v in sh_data.items()
-                if k != "class"
-            }
-            handlers[sh_name] = sh_class(sh_name, **sh_kwargs)
 
         # --- providers section ---
         providers_section = raw.get("providers", {})
@@ -560,12 +598,12 @@ class Config:
                 ) from exc
             _validate_safety(delete_threshold, update_threshold, min_existing, safety_ctx)
 
-            # Build provider kwargs: resolve secret references recursively
+            # Build provider kwargs (raw; secrets resolved later via resolve_secrets())
             provider_kwargs: dict = {}
             for k, v in prov_section.items():
                 if k in _FRAMEWORK_KEYS:
                     continue
-                provider_kwargs[k] = _resolve_deep(v, handlers, f"providers.{prov_name}.{k}")
+                provider_kwargs[k] = v
 
             providers[prov_name] = ProviderConfig(
                 name=prov_name,
@@ -629,7 +667,7 @@ class Config:
             for k, v in proc_data.items():
                 if k in _PROC_FRAMEWORK_KEYS:
                     continue
-                proc_kwargs[k] = _resolve_deep(v, handlers, f"processors.{proc_name}.{k}")
+                proc_kwargs[k] = v
             processors[proc_name] = ProcessorConfig(
                 name=proc_name,
                 class_path=proc_class,
@@ -692,6 +730,8 @@ class Config:
             processors=processors,
             plan_outputs=plan_outputs,
             zone_templates=zone_templates,
+            _secret_handlers_raw=dict(raw_sh),
+            _config_path=path,
         )
 
     def _load_rules_file(self, cache_key: str, file_stem: str, label: str) -> dict:
@@ -710,7 +750,7 @@ class Config:
         except ValueError:
             raise ConfigError(f"{label} resolves outside rules directory") from None
         if not rules_file.exists():
-            log.debug("No rules file for %s (expected %s)", label, rules_file)
+            log.info("No rules file for %s (expected %s)", label, rules_file)
             self._rules_cache[cache_key] = {}
             return self._rules_cache[cache_key]
         data = _yaml_load(rules_file)

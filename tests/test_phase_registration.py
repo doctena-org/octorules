@@ -20,6 +20,7 @@ from octorules.phases import (
     register_phase,
     register_phase_alias,
     register_phases,
+    strip_api_fields,
     unregister_api_fields,
     unregister_phase,
     unregister_phase_alias,
@@ -211,6 +212,30 @@ class TestRegisterApiFields:
         assert "id" in get_api_fields("rule")
         assert "created_on" in get_api_fields("list_item")
         assert "last_updated" in get_api_fields("page_shield_policy")
+
+
+class TestStripApiFields:
+    def test_strips_registered_fields(self):
+        register_api_fields("rule", {"id", "version"})
+        obj = {"id": "abc", "version": "1", "expression": "true", "action": "block"}
+        result = strip_api_fields(obj, "rule")
+        assert result == {"expression": "true", "action": "block"}
+
+    def test_returns_copy(self):
+        register_api_fields("rule", {"id"})
+        obj = {"id": "abc", "expression": "true"}
+        result = strip_api_fields(obj, "rule")
+        assert result is not obj
+
+    def test_empty_api_fields(self):
+        """When no API fields are registered, all keys are preserved."""
+        obj = {"expression": "true", "action": "block"}
+        result = strip_api_fields(obj, "rule")
+        assert result == obj
+
+    def test_unknown_category_raises(self):
+        with pytest.raises(ValueError, match="Unknown API field category"):
+            strip_api_fields({"a": 1}, "nonexistent")
 
 
 class TestRegisterPhaseAlias:

@@ -682,8 +682,15 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
     """Print the full plan for all zones.
 
     Only zones with changes are shown; unchanged zones are omitted.
+    When the global quiet flag is set and *file* was not explicitly
+    provided (i.e. output would go to stdout), the function returns
+    immediately so that ``--quiet`` suppresses plan tables.
     """
+    from octorules._context import is_quiet
+
     if file is None:
+        if is_quiet():
+            return
         file = sys.stdout
 
     renderer = _FORMAT_RENDERERS.get(fmt)
@@ -912,7 +919,11 @@ def format_report_json(report_data: dict) -> str:
 
 def print_report(report_data: dict, file: IO[str] | None = None, fmt: str = "csv") -> None:
     """Print the drift report in the requested format."""
+    from octorules._context import is_quiet
+
     if file is None:
+        if is_quiet():
+            return
         file = sys.stdout
 
     if fmt == "json":

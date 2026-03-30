@@ -70,6 +70,9 @@ class TestConfig:
             "zones:\n  example.com:\n    sources:\n      - rules\n"
         )
         config = Config.from_file(config_file)
+        # Before resolve_secrets(), kwargs contain raw values
+        assert config.providers["cloudflare"].kwargs["token"] == "env/CF_TOKEN"
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["token"] == "env-token-value"
 
     def test_missing_file(self, tmp_path):
@@ -1573,6 +1576,7 @@ class TestResolveDeep:
             "zones: {}\n"
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["nested"]["inner"] == "resolved-secret"
 
 
@@ -1659,6 +1663,7 @@ class TestProcessorConfig:
             "      - rules\n"
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.processors["my_proc"].kwargs["api_key"] == "secret"
 
     def test_processors_section_optional(self, tmp_path):
@@ -1780,6 +1785,57 @@ class TestZoneTemplates:
 class TestSecretHandlers:
     """Tests for pluggable secret handler resolution."""
 
+    def test_from_file_stores_raw_values(self, tmp_path):
+        """from_file() stores raw unresolved secret references."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: env/SOME_VAR\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        # Before resolve_secrets(), raw value is stored
+        assert config.providers["cloudflare"].kwargs["token"] == "env/SOME_VAR"
+
+    def test_from_file_succeeds_without_env_var(self, tmp_path):
+        """from_file() succeeds even when referenced env var is missing."""
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: env/MISSING_VAR\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        # Should NOT raise — secrets are not resolved yet
+        config = Config.from_file(config_file)
+        assert config.providers["cloudflare"].kwargs["token"] == "env/MISSING_VAR"
+
+    def test_resolve_secrets_idempotent(self, tmp_path, monkeypatch):
+        """Calling resolve_secrets() twice is a no-op."""
+        monkeypatch.setenv("CF_TOKEN", "my-tok")
+        (tmp_path / "rules").mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: env/CF_TOKEN\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones: {}\n"
+        )
+        config = Config.from_file(config_file)
+        config.resolve_secrets()
+        assert config.providers["cloudflare"].kwargs["token"] == "my-tok"
+        config.resolve_secrets()  # second call is no-op
+        assert config.providers["cloudflare"].kwargs["token"] == "my-tok"
+
     def test_no_section_env_works(self, tmp_path, monkeypatch):
         """Backward compat: env/ works without a secret_handlers section."""
         monkeypatch.setenv("CF_TOKEN", "my-tok")
@@ -1794,6 +1850,7 @@ class TestSecretHandlers:
             "zones: {}\n"
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["token"] == "my-tok"
 
     def test_custom_handler_from_config(self, tmp_path, monkeypatch):
@@ -1813,6 +1870,7 @@ class TestSecretHandlers:
             "zones: {}\n"
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["token"] == "stub:ref123"
 
     def test_handler_kwargs_resolved_via_env(self, tmp_path, monkeypatch):
@@ -1834,10 +1892,11 @@ class TestSecretHandlers:
             "zones: {}\n"
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["token"] == "stub:ref:https://vault.internal"
 
     def test_unknown_handler_passthrough(self, tmp_path):
-        """Unknown prefix returns the string unchanged."""
+        """Unknown prefix returns the string unchanged (after resolve_secrets)."""
         (tmp_path / "rules").mkdir()
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -1851,6 +1910,7 @@ class TestSecretHandlers:
             "zones: {}\n"
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["path"] == "./rules/sub"
         assert config.providers["cloudflare"].kwargs["url"] == "https://example.com/api"
 
@@ -1960,6 +2020,7 @@ class TestSecretHandlers:
             lambda group: [FakeEP()] if group == "octorules.secret_handlers" else [],
         )
         config = Config.from_file(config_file)
+        config.resolve_secrets()
         assert config.providers["cloudflare"].kwargs["token"] == "stub:ref42"
 
     def test_resolve_secret_no_slash(self):

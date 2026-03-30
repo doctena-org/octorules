@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--quiet",
         action="store_true",
-        help="Only show errors",
+        help="Suppress informational output. Only errors and the exit code are reported.",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -328,6 +328,7 @@ def build_parser() -> argparse.ArgumentParser:
         audit_format="text",
         audit_output=None,
         audit_exit_code=False,
+        audit_log=None,
     )
 
     return parser
@@ -374,6 +375,10 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     _setup_logging(debug=args.debug, quiet=args.quiet)
+
+    from octorules._context import set_quiet
+
+    set_quiet(args.quiet)
 
     # When --zone is specified without explicit --scope, skip account processing.
     if args.zones and args.scope == "all":

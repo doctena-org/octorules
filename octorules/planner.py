@@ -164,7 +164,12 @@ class ListPlan:
 
 @dataclass
 class PageShieldPolicyPlan:
-    """Backward-compat stub — the canonical version lives in octorules_cloudflare.page_shield."""
+    """Backward-compat stub (since v0.17.0, removal planned for v1.0.0).
+
+    The canonical version lives in ``octorules_cloudflare.page_shield``.
+    Code that directly imports this class should migrate to the Cloudflare
+    package before v1.0.0.
+    """
 
     description: str
     policy_id: str | None = None
@@ -197,11 +202,13 @@ class ZonePlan:
 
     @property
     def page_shield_policy_plans(self) -> list[PageShieldPolicyPlan]:
-        """Backward-compat property -- reads from extension_plans["page_shield"].
+        """Backward-compat property (since v0.17.0, removal planned for v1.0.0).
 
-        Returns the live list from extension_plans when present, so ``.append()``
-        works.  Returns a detached empty list otherwise (read-only; use the
-        setter or manipulate ``extension_plans`` directly to add plans).
+        Reads from ``extension_plans["page_shield"]``.  Returns the live list
+        when present, so ``.append()`` works.  Returns a detached empty list
+        otherwise (read-only; use the setter or manipulate ``extension_plans``
+        directly to add plans).  Migrate to ``extension_plans["page_shield"]``
+        before v1.0.0.
         """
         return self.extension_plans.get("page_shield", [])
 

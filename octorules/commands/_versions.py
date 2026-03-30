@@ -7,6 +7,11 @@ from octorules import __version__
 
 def cmd_versions() -> int:
     """Print versions of octorules and key dependencies. Returns exit code."""
+    from octorules._context import is_quiet
+
+    if is_quiet():
+        return 0
+
     import platform
     from importlib.metadata import PackageNotFoundError, packages_distributions, version
 

@@ -464,6 +464,7 @@ def _cmd_plan_or_compare(
     scope_filter: str = "all",
 ) -> int:
     """Shared implementation for plan and compare commands."""
+    config.resolve_secrets()
     providers = _providers_mod._init_providers(config)
     processors = _providers_mod._init_processors(config)
     r = _plan_all_scopes(
@@ -527,6 +528,7 @@ def cmd_report(
     scope_filter: str = "all",
 ) -> int:
     """Run the report command. Returns 0 normally, 1 if any zone failed."""
+    config.resolve_secrets()
     providers = _providers_mod._init_providers(config)
     processors = _providers_mod._init_processors(config)
     r = _plan_all_scopes(

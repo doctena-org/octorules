@@ -88,6 +88,49 @@ class FormatExtension(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Hook signature validation
+# ---------------------------------------------------------------------------
+
+# Expected parameter names for each hook type, derived from the actual
+# provider implementations.  Validated at registration time so signature
+# mismatches surface immediately instead of at runtime.
+_PREFETCH_PARAMS = ("all_desired", "scope", "provider")
+_FINALIZE_PARAMS = ("zp", "all_desired", "scope", "provider", "ctx")
+_APPLY_PARAMS = ("zp", "plans", "scope", "provider")
+_VALIDATE_PARAMS = ("desired", "zone_name", "errors", "lines")
+_DUMP_PARAMS = ("scope", "provider", "out_dir")
+_AUDIT_PARAMS = ("rules_data", "phase_name")
+
+
+def _validate_hook_signature(
+    hook_type: str,
+    fn: Callable,
+    expected_params: tuple[str, ...],
+) -> None:
+    """Validate a hook callable has the expected parameter names.
+
+    Raises :class:`TypeError` at registration time if the signature doesn't
+    match, giving a clear message instead of an opaque runtime failure.
+
+    Allows extra ``**kwargs`` on the hook (forward-compatible) and ignores
+    ``*args`` so only named parameters are checked.
+    """
+    import inspect
+
+    sig = inspect.signature(fn)
+    params = [
+        name
+        for name, p in sig.parameters.items()
+        if p.kind not in (inspect.Parameter.VAR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
+    ]
+    if tuple(params) != expected_params:
+        raise TypeError(
+            f"{hook_type} hook {fn.__qualname__!r} has incorrect signature. "
+            f"Expected parameters: {expected_params}, got: {tuple(params)}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Registries (module-level mutable collections)
 # ---------------------------------------------------------------------------
 
@@ -114,6 +157,8 @@ def register_plan_zone_hook(
     background work (e.g. API fetches).  *finalize* is called after
     ``plan_zone()`` with the opaque context returned by *prefetch*.
     """
+    _validate_hook_signature("plan_zone_prefetch", prefetch, _PREFETCH_PARAMS)
+    _validate_hook_signature("plan_zone_finalize", finalize, _FINALIZE_PARAMS)
     pair = (prefetch, finalize)
     if pair not in _plan_zone_hooks:
         _plan_zone_hooks.append(pair)
@@ -121,22 +166,30 @@ def register_plan_zone_hook(
 
 def register_apply_extension(name: str, fn: ApplyExtensionFn) -> None:
     """Register an apply function for extension *name*."""
+    _validate_hook_signature("apply_extension", fn, _APPLY_PARAMS)
     _apply_extensions[name] = fn
 
 
 def register_format_extension(name: str, fmt: FormatExtension) -> None:
-    """Register a formatter for extension *name*."""
+    """Register a formatter for extension *name*.
+
+    No signature validation is performed — ``FormatExtension`` is a
+    structural (duck-typed) protocol and is validated by the caller at
+    use time.
+    """
     _format_extensions[name] = fmt
 
 
 def register_validate_extension(fn: ValidateExtensionFn) -> None:
     """Register a validation hook."""
+    _validate_hook_signature("validate_extension", fn, _VALIDATE_PARAMS)
     if fn not in _validate_extensions:
         _validate_extensions.append(fn)
 
 
 def register_dump_extension(fn: DumpExtensionFn) -> None:
     """Register a dump hook."""
+    _validate_hook_signature("dump_extension", fn, _DUMP_PARAMS)
     if fn not in _dump_extensions:
         _dump_extensions.append(fn)
 
@@ -148,6 +201,7 @@ def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
     :class:`RuleIPInfo` objects describing the IPs referenced by each rule
     in that phase.
     """
+    _validate_hook_signature("audit_extension", fn, _AUDIT_PARAMS)
     _audit_extensions[name] = fn
 
 

@@ -86,6 +86,13 @@ class TestLintContext:
         ctx.add(LintResult(rule_id="M001", severity=Severity.ERROR, message="e"))
         assert ctx.has_errors
 
+    def test_has_warnings(self):
+        ctx = LintContext()
+        assert not ctx.has_warnings
+        ctx.add(LintResult(rule_id="G001", severity=Severity.WARNING, message="w"))
+        assert ctx.has_warnings
+        assert not ctx.has_errors
+
 
 class TestPluginDispatch:
     """Tests for plugin-based lint dispatch."""

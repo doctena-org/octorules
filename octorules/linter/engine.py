@@ -150,6 +150,10 @@ class LintContext:
     def has_errors(self) -> bool:
         return any(r.severity == Severity.ERROR for r in self.results)
 
+    @property
+    def has_warnings(self) -> bool:
+        return any(r.severity == Severity.WARNING for r in self.results)
+
 
 def check_catch_all(
     expr: str,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
+from octorules._context import is_quiet
 from octorules.commands._helpers import (
     _filter_desired_by_phase,
     _get_zones,
@@ -83,12 +84,12 @@ def cmd_lint(
 
         if ctx.results:
             output = formatter(ctx)
-            if output:
+            if output and not is_quiet():
                 print(output, end="")
             all_results.extend(ctx.results)
             if ctx.has_errors:
                 has_errors = True
-            if ctx.warnings:
+            if ctx.has_warnings:
                 has_warnings = True
         else:
             log.info("  %s: no issues found", zone_name)

@@ -30,7 +30,7 @@ _SOURCES: list[tuple[str, str, str]] = [
 
 def _fetch_json(url: str) -> dict:
     req = Request(url, headers={"User-Agent": "octorules-sync/1.0"})
-    with urlopen(req, timeout=30) as resp:  # noqa: S310
+    with urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
 

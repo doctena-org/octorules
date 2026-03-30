@@ -237,6 +237,13 @@ Use `|-` (strip trailing newline) rather than `|` (preserves trailing newline).
 
 ### Usage
 
+octorules uses separate commands for planning and applying — like Terraform's
+`plan`/`apply` split.  WAF rules have a high blast radius (a bad rule can
+block all traffic), so the two-step workflow forces an explicit review before
+changes reach the provider.  This also enables CI patterns where `plan` runs
+on PR open (posting results as a PR comment) and `sync` runs on merge with
+checksum verification to catch drift.
+
 ```bash
 # Preview changes (dry-run)
 octorules plan --config config.yaml
@@ -457,6 +464,13 @@ Applies changes to the provider. Requires `--doit` as a safety flag. Atomic PUT 
 octorules sync --doit [--zone example.com] [--phase redirect_rules] [--checksum HASH] [--force]
 ```
 
+| Flag | Description |
+|------|-------------|
+| `--doit` | Required safety flag to confirm changes should be applied |
+| `--checksum HASH` | Verify plan hasn't drifted since `plan --checksum` |
+| `--force` | Bypass safety threshold checks |
+| `--audit-log PATH` | Write JSON lines audit log of sync results |
+
 ### `octorules compare`
 
 Compare local rules against live provider state. Exit code 1 when differences exist.
@@ -555,7 +569,7 @@ octorules versions
 | `--phase NAME` | Limit to specific phase(s); can be repeated |
 | `--scope SCOPE` | Scope: `all` (default), `zones`, or `account` |
 | `--debug` | Enable debug logging |
-| `--quiet` | Only show errors |
+| `--quiet` | Suppress all informational stdout output (plan tables, lint results, audit findings). Only errors and the exit code are reported. File output (`--output`) is unaffected |
 
 ### Exit codes
 
@@ -668,6 +682,51 @@ Safety features:
 - **Failed phase filtering** — phases that can't be fetched are excluded from planning to prevent accidental mass deletions.
 - **Path traversal protection** — `!include` directives and file operations are confined to their expected directories.
 
+#### How safety thresholds work
+
+Safety thresholds prevent accidental mass changes. When a plan would delete
+or update more than a configurable percentage of existing rules in any phase,
+the sync is blocked.
+
+- **`delete_threshold`** (default `30.0`) — maximum percentage of rules that
+  can be deleted in a single sync.  If a phase has 10 rules and the plan
+  deletes 4, that's 40% — above the default threshold.
+- **`update_threshold`** (default `30.0`) — same, for rule updates.
+- **`min_existing`** (default `3`) — thresholds only apply once a phase has
+  at least this many rules.  With fewer rules, any number of changes is
+  allowed (avoids blocking initial setup).
+
+Thresholds can be set per-provider or per-zone:
+
+```yaml
+providers:
+  cloudflare:
+    safety:
+      delete_threshold: 50.0   # allow up to 50% deletions
+      update_threshold: 30.0
+      min_existing: 5
+
+zones:
+  example.com:
+    safety:
+      delete_threshold: 10.0   # stricter for this zone
+```
+
+When a threshold is exceeded, octorules exits with an error explaining which
+phase exceeded the limit and by how much.  To override, either raise the
+threshold or use `--force`.
+
+### Troubleshooting
+
+| Error | Cause | Recovery |
+|-------|-------|----------|
+| `ProviderAuthError` | Invalid or expired API token | Check token permissions and expiry |
+| `delete_threshold exceeded` | Plan would delete too many rules | Review the plan; raise `delete_threshold` or use `--force` |
+| `HTTP 429 Too Many Requests` | Provider API rate limit hit | Wait and retry; reduce `max_workers` |
+| Partial zone failure | One zone failed, others succeeded | Re-run for the failed zone only (`--zone <name>`) |
+| `Checksum mismatch` | State changed between plan and sync | Re-run `plan` to get a fresh checksum |
+| `No rules file for zone` | Zone configured but YAML file missing | Create `rules/<zone>.yaml` or remove zone from config |
+
 ## Writing a provider
 
 A provider is a Python package that:
@@ -684,6 +743,8 @@ my_provider = "my_package:MyProvider"
 ```
 
 Unsupported optional methods must still exist to satisfy the Protocol. The convention: read methods (`list_*`, `get_*`, `get_all_*`) return empty collections; mutation methods (`create_*`, `update_*`, `put_*`, `delete_*`) raise `ProviderError`.
+
+Extension hooks (plan, apply, format, validate, dump, audit) registered via `octorules.extensions` are validated at registration time — the framework checks the callable's signature against the expected parameters and raises `TypeError` immediately if they don't match, so provider authors get clear errors during development rather than at runtime.
 
 ## CI/CD integration
 

@@ -201,6 +201,12 @@ def get_api_fields(category: str) -> frozenset[str]:
     return frozenset(_api_fields[category])
 
 
+def strip_api_fields(obj: dict, category: str) -> dict:
+    """Return a copy of *obj* without keys registered as API-only for *category*."""
+    excluded = get_api_fields(category)
+    return {k: v for k, v in obj.items() if k not in excluded}
+
+
 # ---------------------------------------------------------------------------
 # Lookup helpers
 # ---------------------------------------------------------------------------
