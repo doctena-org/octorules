@@ -243,6 +243,7 @@ providers:
 """
         )
         config = Config.from_file(config_yaml)
+        config.resolve_secrets()
         assert config.providers["aws"].kwargs["region"] == "eu-central-1"
 
 

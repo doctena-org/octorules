@@ -5,11 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.21.0] - 2026-03-30
+
+### Added
+- `has_warnings` property on `LintContext` for consistent API with `has_errors`.
+- `strip_api_fields()` utility in `octorules.phases` for provider field
+  filtering.
+- Extension hook signature validation at registration time — `TypeError` is
+  raised immediately if a hook callable doesn't match the expected parameters.
+- Safety threshold documentation with examples in README.
+- Troubleshooting table in README.
 
 ### Changed
+- `--quiet` now suppresses all informational stdout output (plan tables, lint
+  results, audit findings), not just log messages. File output (`--output`) is
+  unaffected.
+- Secret resolution deferred to `Config.resolve_secrets()`; `lint`, `validate`,
+  and `audit` commands no longer require provider credentials.
+- Missing rules file logged at INFO instead of DEBUG.
+- Provider entry-point load failures logged at WARNING instead of DEBUG.
+- Deprecated `CloudflareProvider` fallback annotated with removal timeline
+  (v1.0.0).
+- `PageShieldPolicyPlan` backward-compat stub annotated with removal timeline
+  (v1.0.0).
 - Document that `# octorules:accept=` and `# octorules:disable=` directives
   are case-sensitive (check names lowercase, rule IDs uppercase).
+
+### Fixed
+- Path traversal protection in `_write_output_file()` uses `Path.resolve()` +
+  `relative_to()` instead of substring check.
 
 ## [0.20.0] - 2026-03-30
 

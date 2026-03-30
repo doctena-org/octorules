@@ -827,7 +827,7 @@ class TestAuditZoneRules:
 
 class TestAuditExtensionRegistry:
     def test_register_unregister(self):
-        fn = lambda data, phase: []  # noqa: E731
+        fn = lambda rules_data, phase_name: []  # noqa: E731
         register_audit_extension("test", fn)
         assert "test" in _audit_extensions
         unregister_audit_extension("test")
@@ -1743,3 +1743,44 @@ class TestCmdAudit:
         data = json.loads(out_file.read_text())
         assert isinstance(data, list)
         assert data[0]["check"] == "ip-overlap"
+
+
+class TestFetchJsonErrors:
+    """Tests for _fetch_json error handling."""
+
+    def test_network_timeout(self):
+        """_fetch_json returns None on timeout."""
+        from octorules.audit import _fetch_json
+
+        with patch("octorules.audit.urlopen", side_effect=TimeoutError("timed out")):
+            result = _fetch_json("https://example.com/data.json")
+        assert result is None
+
+    def test_http_non_200(self):
+        """_fetch_json returns None on non-200 status."""
+        from unittest.mock import MagicMock
+
+        from octorules.audit import _fetch_json
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 500
+        with patch("octorules.audit.urlopen", return_value=mock_resp):
+            result = _fetch_json("https://example.com/data.json")
+        assert result is None
+
+    def test_malformed_json(self):
+        """_fetch_json returns None on invalid JSON."""
+        from unittest.mock import MagicMock
+
+        from octorules.audit import _fetch_json
+
+        mock_resp = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_resp.status = 200
+        mock_resp.read.return_value = b"not-json{{"
+        with patch("octorules.audit.urlopen", return_value=mock_resp):
+            result = _fetch_json("https://example.com/data.json")
+        assert result is None

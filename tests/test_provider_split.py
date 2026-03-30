@@ -293,6 +293,35 @@ class TestEntryPointDiscovery:
         assert "OK" in result.stdout
 
 
+class TestDiscoverProviderFailure:
+    """Verify _discover_provider_modules logs WARNING on broken entry-points."""
+
+    def test_logs_warning_on_load_failure(self):
+        """Failed entry-point loads are logged at WARNING level."""
+        code = (
+            "import logging, sys\n"
+            "from unittest.mock import MagicMock, patch\n"
+            "logging.basicConfig(level=logging.WARNING, stream=sys.stderr)\n"
+            "bad_ep = MagicMock()\n"
+            "bad_ep.name = 'broken_provider'\n"
+            "bad_ep.load.side_effect = ImportError('no_such_module')\n"
+            "with patch('importlib.metadata.entry_points', return_value=[bad_ep]):\n"
+            "    from octorules.commands._providers import _discover_provider_modules\n"
+            "    _discover_provider_modules()\n"
+            "print('OK')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "OK" in result.stdout
+        assert "broken_provider" in result.stderr
+        assert "no_such_module" in result.stderr
+
+
 class TestExceptionHierarchy:
     def test_provider_auth_error_is_provider_error(self):
         assert issubclass(ProviderAuthError, ProviderError)

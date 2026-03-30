@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 
+from octorules._context import is_quiet
 from octorules.commands._helpers import _filter_desired_by_phase
 from octorules.commands._providers import _discover_provider_modules
 from octorules.config import Config
@@ -144,7 +145,7 @@ def cmd_audit(
 
         if not _write_output_file(output_file, lambda f: f.write(output)):
             return 1
-    elif output:
+    elif output and not is_quiet():
         print(output)
 
     # Summary

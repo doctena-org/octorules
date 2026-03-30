@@ -40,6 +40,7 @@ def cmd_dump(
     phase_filter: list[str] | None = None,
 ) -> int:
     """Run the dump command. Returns exit code."""
+    config.resolve_secrets()
     providers = _providers_mod._init_providers(config)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
     lists_dir = out_dir / "custom_lists" if output_dir else config.lists_dir

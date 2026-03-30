@@ -58,7 +58,7 @@ def _discover_provider_modules() -> None:
         try:
             ep.load()
         except Exception as e:
-            log.debug("Failed to load provider entry-point %s: %s", ep.name, e)
+            log.warning("Failed to load provider entry-point %s: %s", ep.name, e)
 
 
 def _resolve_provider_class(name: str, class_path: str | None) -> type:
@@ -80,8 +80,9 @@ def _resolve_provider_class(name: str, class_path: str | None) -> type:
         if ep.name == name:
             return ep.load()
 
-    # Deprecated fallback: when no entry point matched, fall back to the
-    # lazily-imported CloudflareProvider (from octorules-cloudflare).
+    # Deprecated fallback (since v0.16.0, removal planned for v1.0.0):
+    # When no entry point matched, fall back to the lazily-imported
+    # CloudflareProvider from octorules-cloudflare.
     cf_cls = _get_cloudflare_provider()
     if cf_cls is not None:
         log.warning(

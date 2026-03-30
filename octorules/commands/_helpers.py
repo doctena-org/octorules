@@ -79,14 +79,30 @@ def _phase_filter_to_provider_ids(phase_filter: list[str] | None) -> list[str] |
     return [PHASE_BY_NAME[p].provider_id for p in phase_filter if p in PHASE_BY_NAME]
 
 
-def _write_output_file(path: str, write_fn: Callable[[IO[str]], None]) -> bool:
-    """Write output to a file. Returns True on success, False on error."""
-    raw = str(Path(path))
-    if ".." in raw or "~" in raw:
-        log.error("Potentially unsafe output path: %s", path)
-        return False
+def _write_output_file(
+    path: str, write_fn: Callable[[IO[str]], None], *, base_dir: Path | None = None
+) -> bool:
+    """Write output to a file. Returns True on success, False on error.
+
+    When *base_dir* is given, the resolved path must remain within it
+    (protects config-specified paths like ``plan_outputs``).  When
+    *base_dir* is ``None``, any writable path is accepted (appropriate
+    for user-specified ``--output`` CLI arguments).
+    """
+    resolved = Path(path).resolve()
+    if base_dir is not None:
+        try:
+            resolved.relative_to(base_dir.resolve())
+        except ValueError:
+            log.error(
+                "Output path escapes base directory: %s (resolves to %s, base is %s)",
+                path,
+                resolved,
+                base_dir.resolve(),
+            )
+            return False
     try:
-        with open(Path(path).resolve(), "w", encoding="utf-8") as f:
+        with open(resolved, "w", encoding="utf-8") as f:
             write_fn(f)
         return True
     except OSError as e:
@@ -106,7 +122,11 @@ def _emit_plan_outputs(config: Config, zone_plans: list) -> bool:
     ok = True
     for output in outputs.values():
         if output.path:
-            if not _write_output_file(output.path, lambda f, out=output: out.run(zone_plans, fh=f)):
+            if not _write_output_file(
+                output.path,
+                lambda f, out=output: out.run(zone_plans, fh=f),
+                base_dir=config.rules_dir.parent,
+            ):
                 ok = False
         else:
             output.run(zone_plans)
