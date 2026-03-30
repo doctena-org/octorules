@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Document that `# octorules:accept=` and `# octorules:disable=` directives
+  are case-sensitive (check names lowercase, rule IDs uppercase).
+
 ## [0.20.0] - 2026-03-30
 
 ### Added
