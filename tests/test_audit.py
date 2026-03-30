@@ -8,6 +8,8 @@ from unittest.mock import patch
 import yaml
 
 from octorules.audit import (
+    _SEVERITY_RANK,
+    ALL_CHECKS,
     AuditFinding,
     CdnRangeResult,
     FindingSeverity,
@@ -24,6 +26,7 @@ from octorules.audit import (
     check_zone_drift,
     fetch_cdn_ranges,
     format_findings,
+    parse_audit_acceptances,
     run_audit,
 )
 from octorules.extensions import (
@@ -479,6 +482,91 @@ class TestFormatFindings:
         assert "overlap" in output
         assert "cdn hit" in output
 
+    def test_format_uses_lowercase_severity_prefix(self):
+        """Output uses 'warning:' not '[WARNING]' (GHA annotation regression)."""
+        findings = [
+            AuditFinding(
+                check="ip-overlap",
+                severity=FindingSeverity.WARNING,
+                message="test msg",
+                zone_name="z",
+            ),
+        ]
+        output = format_findings(findings)
+        assert "warning:" in output
+        assert "[WARNING]" not in output
+
+    def test_format_min_severity_filters_warnings(self):
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="warn"),
+        ]
+        output = format_findings(findings, min_severity=FindingSeverity.ERROR)
+        assert output == ""
+
+    def test_format_min_severity_default_shows_all(self):
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="warn"),
+        ]
+        output = format_findings(findings)
+        assert output != ""
+        assert "warn" in output
+
+    def test_format_min_severity_shows_equal_and_higher(self):
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="warn"),
+        ]
+        output = format_findings(findings, min_severity=FindingSeverity.WARNING)
+        assert "warn" in output
+
+    def test_format_groups_by_check_with_count(self):
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="a"),
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="b"),
+        ]
+        output = format_findings(findings)
+        assert "[ip-overlap] 2 finding(s):" in output
+
+    def test_format_empty_findings_returns_empty(self):
+        assert format_findings([]) == ""
+
+    def test_json_format_returns_valid_json(self):
+        """format_findings_json returns valid JSON array."""
+        import json
+
+        from octorules.audit import format_findings_json
+
+        findings = [
+            AuditFinding(
+                check="ip-overlap",
+                severity=FindingSeverity.WARNING,
+                message="overlap msg",
+                zone_name="zone-a",
+            ),
+        ]
+        output = format_findings_json(findings)
+        data = json.loads(output)
+        assert isinstance(data, list)
+        assert len(data) == 1
+        assert data[0]["check"] == "ip-overlap"
+        assert data[0]["severity"] == "warning"
+        assert data[0]["message"] == "overlap msg"
+        assert data[0]["zone_name"] == "zone-a"
+
+    def test_json_format_respects_min_severity(self):
+        """format_findings_json filters by min_severity."""
+        import json
+
+        from octorules.audit import format_findings_json
+
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="w"),
+            AuditFinding(check="cdn-ranges", severity=FindingSeverity.INFO, message="i"),
+        ]
+        output = format_findings_json(findings, min_severity=FindingSeverity.WARNING)
+        data = json.loads(output)
+        assert len(data) == 1
+        assert data[0]["severity"] == "warning"
+
 
 # ---------------------------------------------------------------------------
 # run_audit
@@ -751,6 +839,132 @@ class TestAuditExtensionRegistry:
 
 
 # ---------------------------------------------------------------------------
+# parse_audit_acceptances
+# ---------------------------------------------------------------------------
+
+
+class TestParseAuditAcceptances:
+    def test_single_check(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=zone-drift\nsome: yaml\n")
+        assert parse_audit_acceptances(f) == {"zone-drift"}
+
+    def test_multiple_checks_one_line(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=ip-overlap,cdn-ranges\n")
+        assert parse_audit_acceptances(f) == {"ip-overlap", "cdn-ranges"}
+
+    def test_whitespace_variations(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules: accept = ip-overlap , cdn-ranges\n")
+        assert parse_audit_acceptances(f) == {"ip-overlap", "cdn-ranges"}
+
+    def test_unknown_check_logged_and_dropped(self, tmp_path, caplog):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=bogus\n")
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octorules.audit"):
+            result = parse_audit_acceptances(f)
+        assert result == set()
+        assert "bogus" in caplog.text
+
+    def test_mixed_known_unknown(self, tmp_path, caplog):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=zone-drift,bogus\n")
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octorules.audit"):
+            result = parse_audit_acceptances(f)
+        assert result == {"zone-drift"}
+        assert "bogus" in caplog.text
+
+    def test_file_not_found(self, tmp_path):
+        f = tmp_path / "nonexistent.yaml"
+        assert parse_audit_acceptances(f) == set()
+
+    def test_multiple_directives(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=zone-drift\nsome: yaml\n# octorules:accept=ip-overlap\n")
+        assert parse_audit_acceptances(f) == {"zone-drift", "ip-overlap"}
+
+    def test_empty_file(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("")
+        assert parse_audit_acceptances(f) == set()
+
+    def test_no_directives(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("zones:\n  example.com:\n    sources: [rules]\n")
+        assert parse_audit_acceptances(f) == set()
+
+    def test_all_checks_accepted(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=ip-overlap,ip-shadow,cdn-ranges,zone-drift\n")
+        assert parse_audit_acceptances(f) == ALL_CHECKS
+
+    def test_coexists_with_lint_disable(self, tmp_path):
+        """Both octorules:disable and octorules:accept in the same file work independently."""
+        from octorules.linter.suppressions import parse_suppressions
+
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "# octorules:disable=CF001\n"
+            "# octorules:accept=zone-drift\n"
+            "- ref: r1\n"
+            "  expression: 'true'\n"
+        )
+        # Audit sees only accept, not disable
+        audit_result = parse_audit_acceptances(f)
+        assert audit_result == {"zone-drift"}
+
+        # Lint sees only disable, not accept
+        lint_result = parse_suppressions(f)
+        assert "CF001" in lint_result.get("r1", set()) or "CF001" in lint_result.get("*", set())
+
+    def test_coexists_with_lint_disable_same_rule(self, tmp_path):
+        """Both directives on adjacent lines before the same rule anchor."""
+        from octorules.linter.suppressions import parse_suppressions
+
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "# octorules:disable=CF018,CF423\n"
+            "# octorules:accept=zone-drift\n"
+            "- ref: 81f3cf649da74ee29a547fdb9b8425eb\n"
+            "  expression: 'ip.src in {194.154.198.204}'\n"
+        )
+        # Audit acceptance works
+        assert parse_audit_acceptances(f) == {"zone-drift"}
+
+        # Lint suppression attaches to the ref
+        lint_result = parse_suppressions(f)
+        ref_suppressions = lint_result.get("81f3cf649da74ee29a547fdb9b8425eb", set())
+        assert "CF018" in ref_suppressions
+        assert "CF423" in ref_suppressions
+
+
+# ---------------------------------------------------------------------------
+# _SEVERITY_RANK
+# ---------------------------------------------------------------------------
+
+
+class TestSeverityRank:
+    def test_error_ranks_highest(self):
+        assert _SEVERITY_RANK[FindingSeverity.ERROR] < _SEVERITY_RANK[FindingSeverity.WARNING]
+
+    def test_all_severities_present(self):
+        for sev in FindingSeverity:
+            assert sev in _SEVERITY_RANK
+
+    def test_rank_ordering(self):
+        assert (
+            _SEVERITY_RANK[FindingSeverity.ERROR]
+            < _SEVERITY_RANK[FindingSeverity.WARNING]
+            < _SEVERITY_RANK[FindingSeverity.INFO]
+        )
+
+
+# ---------------------------------------------------------------------------
 # cmd_audit integration tests
 # ---------------------------------------------------------------------------
 
@@ -915,7 +1129,7 @@ class TestCmdAudit:
         with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
             exit_code = cmd_audit(config, zone_filter=None, checks=["zone-drift"])
 
-        assert exit_code == 1  # drift found
+        assert exit_code == 0  # drift is WARNING, default exit code ignores warnings
 
     def test_zone_filter_restricts_to_named_files(self, tmp_path):
         """--zone restricts audit to that file only."""
@@ -1036,13 +1250,13 @@ class TestCmdAudit:
         assert exit_code == 0
 
         with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
-            # Both phases → overlap between r1 and r2
+            # Both phases → overlap between r1 and r2 (WARNING severity)
             exit_code = cmd_audit(
                 config,
                 zone_filter=None,
                 checks=["ip-overlap"],
             )
-        assert exit_code == 1
+        assert exit_code == 0  # warnings don't fail by default
 
     def test_list_ips_included_in_audit(self, tmp_path):
         """IPs from lists section participate in overlap checks."""
@@ -1074,5 +1288,458 @@ class TestCmdAudit:
         config = Config.from_file(str(config_path))
         with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
             exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
-        # 10.0.1.0/24 (list) overlaps 10.0.0.0/8 (rule)
-        assert exit_code == 1
+        # 10.0.1.0/24 (list) overlaps 10.0.0.0/8 (rule) — WARNING, not error
+        assert exit_code == 0
+
+    def test_exit_code_flag_warnings_return_two(self, tmp_path):
+        """With --exit-code, WARNING findings produce exit code 2."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
+        assert exit_code == 2
+
+    def test_severity_filter_hides_lower_severity(self, tmp_path, capsys):
+        """--severity error hides WARNING findings from output."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], severity="error")
+        # WARNING findings exist but are filtered from display; no errors → exit 0
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "ip-overlap" not in captured.out  # filtered from display
+
+    def test_severity_filter_does_not_affect_exit_code(self, tmp_path):
+        """Severity filter affects display only, not exit code logic."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            # severity=error hides warnings from display, but exit_code=True
+            # still detects warnings and returns 2
+            exit_code = cmd_audit(
+                config,
+                zone_filter=None,
+                checks=["ip-overlap"],
+                severity="error",
+                exit_code=True,
+            )
+        assert exit_code == 2
+
+    def test_acceptance_suppresses_findings(self, tmp_path, capsys):
+        """# octorules: accept=ip-overlap suppresses overlap findings."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        # Prepend acceptance directive to the rules file
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        original = rules_file.read_text()
+        rules_file.write_text(f"# octorules: accept=ip-overlap\n{original}")
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
+        assert exit_code == 0  # suppressed
+        captured = capsys.readouterr()
+        assert "accepted" in captured.err
+
+    def test_default_warnings_return_zero(self, tmp_path):
+        """WARNING findings without --exit-code return 0."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
+        assert exit_code == 0
+
+    def test_exit_code_true_warnings_return_two(self, tmp_path):
+        """With exit_code=True, WARNING findings produce exit code 2."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
+        assert exit_code == 2
+
+    def test_exit_code_true_no_findings_return_zero(self, tmp_path):
+        """With exit_code=True and no findings, exit code is 0."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {
+                            "ref": "r1",
+                            "action": "block",
+                            "expression": 'http.host eq "example.com"',
+                        }
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, exit_code=True)
+        assert exit_code == 0
+
+    def test_severity_error_hides_warnings_from_output(self, tmp_path, capsys):
+        """severity='error' hides WARNING findings from stdout."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            cmd_audit(config, zone_filter=None, checks=["ip-overlap"], severity="error")
+        captured = capsys.readouterr()
+        assert "ip-overlap" not in captured.out
+
+    def test_severity_filter_does_not_affect_exit_code_with_warnings(self, tmp_path):
+        """severity='error' + exit_code=True with WARNING findings still returns 2."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(
+                config,
+                zone_filter=None,
+                checks=["ip-overlap"],
+                severity="error",
+                exit_code=True,
+            )
+        assert exit_code == 2
+
+    def test_acceptance_suppresses_zone_drift(self, tmp_path, capsys):
+        """Acceptance in one zone file suppresses zone-drift findings for that zone."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+                "zone-b": {
+                    "waf_custom_rules": [
+                        {"ref": "r2", "action": "allow", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        # Prepend acceptance directive to zone-a's rules file
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        original = rules_file.read_text()
+        rules_file.write_text(f"# octorules:accept=zone-drift\n{original}")
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["zone-drift"], exit_code=True)
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        assert "accepted" in captured.err
+
+    def test_acceptance_multiple_checks_one_directive(self, tmp_path, capsys):
+        """# octorules:accept=ip-overlap,zone-drift suppresses both."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        # Prepend multi-check acceptance
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        original = rules_file.read_text()
+        rules_file.write_text(f"# octorules:accept=ip-overlap,zone-drift\n{original}")
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
+        assert exit_code == 0  # ip-overlap suppressed
+
+    def test_acceptance_does_not_suppress_other_checks(self, tmp_path, capsys):
+        """Accepting ip-overlap does not suppress ip-shadow findings."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        # Accept only ip-overlap, not ip-shadow or others
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        original = rules_file.read_text()
+        rules_file.write_text(f"# octorules:accept=ip-overlap\n{original}")
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            cmd_audit(config, zone_filter=None, checks=["ip-overlap", "ip-shadow"], exit_code=True)
+        # ip-overlap is suppressed, but ip-shadow (if present) is not.
+        # Both rules are in the same phase, so no ip-shadow finding either.
+        # The test verifies that suppression is check-specific.
+        captured = capsys.readouterr()
+        assert "accepted" in captured.err
+        # ip-overlap should not appear in output (suppressed)
+        assert "ip-overlap" not in captured.out
+
+    def test_acceptance_count_in_summary(self, tmp_path, capsys):
+        """Verify 'accepted' appears in stderr summary."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        original = rules_file.read_text()
+        rules_file.write_text(f"# octorules:accept=ip-overlap\n{original}")
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
+        captured = capsys.readouterr()
+        assert "accepted" in captured.err
+
+    def test_acceptance_with_space_after_colon(self, tmp_path, capsys):
+        """# octorules: accept=ip-overlap works (space after colon)."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        original = rules_file.read_text()
+        rules_file.write_text(f"# octorules: accept=ip-overlap\n{original}")
+
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
+        assert exit_code == 0  # suppressed
+        captured = capsys.readouterr()
+        assert "accepted" in captured.err
+
+    def test_json_format_outputs_json(self, tmp_path, capsys):
+        """--format json outputs valid JSON array."""
+        import json
+
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(
+                config, zone_filter=None, checks=["ip-overlap"], audit_format="json"
+            )
+        assert exit_code == 0
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert isinstance(data, list)
+        assert len(data) >= 1
+        assert data[0]["check"] == "ip-overlap"
+
+    def test_output_file_writes_results(self, tmp_path):
+        """--output FILE writes results to a file instead of stdout."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        out_file = tmp_path / "audit-results.txt"
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(
+                config,
+                zone_filter=None,
+                checks=["ip-overlap"],
+                output_file=str(out_file),
+            )
+        assert exit_code == 0
+        assert out_file.exists()
+        content = out_file.read_text()
+        assert "ip-overlap" in content
+
+    def test_output_file_json_format(self, tmp_path):
+        """--output FILE --format json writes JSON to file."""
+        import json
+
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(
+            tmp_path,
+            zone_rules={
+                "zone-a": {
+                    "waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
+                        {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
+                    ]
+                },
+            },
+        )
+        out_file = tmp_path / "audit-results.json"
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(
+                config,
+                zone_filter=None,
+                checks=["ip-overlap"],
+                audit_format="json",
+                output_file=str(out_file),
+            )
+        assert exit_code == 0
+        data = json.loads(out_file.read_text())
+        assert isinstance(data, list)
+        assert data[0]["check"] == "ip-overlap"

@@ -13,6 +13,7 @@ from __future__ import annotations
 import ipaddress
 import json as _json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -24,6 +25,42 @@ log = logging.getLogger(__name__)
 
 # All available audit check names.
 ALL_CHECKS: frozenset[str] = frozenset({"ip-overlap", "ip-shadow", "cdn-ranges", "zone-drift"})
+
+# Severity ordering (lower rank = higher severity).
+_SEVERITY_RANK: dict[FindingSeverity, int] = {}  # populated after enum definition
+
+
+# ---------------------------------------------------------------------------
+# Suppression parser
+# ---------------------------------------------------------------------------
+
+# Matches: # octorules:accept=zone-drift
+# Also:    # octorules: accept = ip-overlap, cdn-ranges
+_AUDIT_ACCEPT_RE = re.compile(
+    r"#\s*octorules:\s*accept\s*=\s*([a-z][a-z0-9-]*(?:\s*,\s*[a-z][a-z0-9-]*)*)"
+)
+
+
+def parse_audit_acceptances(file_path: str | Path) -> set[str]:
+    """Parse ``# octorules:accept=<check>`` directives from a YAML file.
+
+    Returns a set of accepted check names (e.g. ``{"zone-drift"}``).
+    Unknown check names are logged as warnings and silently dropped.
+    """
+    accepted: set[str] = set()
+    try:
+        text = Path(file_path).read_text()
+    except OSError:
+        return accepted
+
+    for m in _AUDIT_ACCEPT_RE.finditer(text):
+        names = {n.strip() for n in m.group(1).split(",")}
+        unknown = names - ALL_CHECKS
+        for u in sorted(unknown):
+            log.warning("Unknown audit check %r in acceptance directive (%s)", u, file_path)
+        accepted.update(names - unknown)
+
+    return accepted
 
 
 # ---------------------------------------------------------------------------
@@ -50,6 +87,16 @@ class FindingSeverity(Enum):
     INFO = "info"
     WARNING = "warning"
     ERROR = "error"
+
+
+# Populate after enum definition (lower rank = higher severity).
+_SEVERITY_RANK.update(
+    {
+        FindingSeverity.ERROR: 1,
+        FindingSeverity.WARNING: 2,
+        FindingSeverity.INFO: 3,
+    }
+)
 
 
 @dataclass
@@ -485,14 +532,25 @@ def check_zone_drift(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
 # ---------------------------------------------------------------------------
 
 
-def format_findings(findings: list[AuditFinding]) -> str:
-    """Format findings as human-readable text."""
-    if not findings:
+def format_findings(
+    findings: list[AuditFinding],
+    *,
+    min_severity: FindingSeverity = FindingSeverity.INFO,
+) -> str:
+    """Format findings as human-readable text.
+
+    *min_severity* filters which findings are displayed (lower severity
+    findings are omitted).  The caller is responsible for using the
+    unfiltered list for exit-code decisions.
+    """
+    max_rank = _SEVERITY_RANK[min_severity]
+    filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+    if not filtered:
         return ""
 
     lines: list[str] = []
     by_check: dict[str, list[AuditFinding]] = {}
-    for f in findings:
+    for f in filtered:
         by_check.setdefault(f.check, []).append(f)
 
     for check in ("ip-overlap", "ip-shadow", "cdn-ranges", "zone-drift"):
@@ -501,12 +559,43 @@ def format_findings(findings: list[AuditFinding]) -> str:
             continue
         lines.append(f"\n[{check}] {len(check_findings)} finding(s):")
         for f in check_findings:
-            prefix = f"  [{f.severity.value.upper()}]"
+            # Use lowercase "warning:" instead of "[WARNING]" to avoid
+            # GitHub Actions interpreting bracketed severity as annotations
+            # (which mangles the output into "Warning: G]").
+            prefix = f"  {f.severity.value}:"
             if f.zone_name:
                 prefix += f" {f.zone_name}"
             lines.append(f"{prefix} {f.message}")
 
     return "\n".join(lines)
+
+
+def format_findings_json(
+    findings: list[AuditFinding],
+    *,
+    min_severity: FindingSeverity = FindingSeverity.INFO,
+) -> str:
+    """Format findings as JSON."""
+    max_rank = _SEVERITY_RANK[min_severity]
+    filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+    data = [
+        {
+            "check": f.check,
+            "severity": f.severity.value,
+            "message": f.message,
+            "zone_name": f.zone_name,
+            "phase_name": f.phase_name,
+            "ref": f.ref,
+        }
+        for f in filtered
+    ]
+    return _json.dumps(data, indent=2) + "\n"
+
+
+AUDIT_FORMATTERS: dict[str, Any] = {
+    "text": format_findings,
+    "json": format_findings_json,
+}
 
 
 def _build_list_ip_map(rules_data: dict) -> dict[str, list[str]]:

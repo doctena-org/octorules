@@ -188,6 +188,10 @@ class Manager:
         checks: list[str] | None = None,
         cdn_timeout: int = 15,
         cdn_stale_days: int = 60,
+        severity: str = "info",
+        exit_code: bool = False,
+        audit_format: str = "text",
+        output_file: str | None = None,
     ) -> int:
         """Run the audit command. Returns exit code."""
         _validate_phases(phases)
@@ -198,6 +202,10 @@ class Manager:
             checks=checks,
             cdn_timeout=cdn_timeout,
             cdn_stale_days=cdn_stale_days,
+            severity=severity,
+            exit_code=exit_code,
+            audit_format=audit_format,
+            output_file=output_file,
         )
 
     def close(self) -> None:

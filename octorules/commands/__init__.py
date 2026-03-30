@@ -1,0 +1,117 @@
+"""Command implementations for the octorules CLI.
+
+All public and internal symbols are re-exported here so that existing
+``from octorules.commands import X`` imports continue to work unchanged.
+"""
+
+from octorules.commands._audit import cmd_audit
+from octorules.commands._dump import cmd_dump
+from octorules.commands._helpers import (
+    _apply_parallel,
+    _emit_plan_outputs,
+    _filter_current_by_phase,
+    _filter_desired_by_phase,
+    _format_api_error,
+    _get_zones,
+    _map_ordered,
+    _phase_filter_to_provider_ids,
+    _run_staged_tasks,
+    _TaskList,
+    _validate_phases,
+    _write_output_file,
+)
+from octorules.commands._lint import cmd_lint
+from octorules.commands._plan import (
+    _cmd_plan_or_compare,
+    _plan_account,
+    _plan_all_scopes,
+    _plan_single_zone,
+    _plan_single_zone_safe,
+    _plan_zones,
+    _PlanAllResult,
+    cmd_compare,
+    cmd_plan,
+    cmd_report,
+)
+from octorules.commands._providers import (
+    _discover_provider_modules,
+    _discover_zones,
+    _get_cloudflare_provider,
+    _get_zone_provider,
+    _get_zone_providers,
+    _init_processors,
+    _init_provider,
+    _init_providers,
+    _load_provider_class,
+    _resolve_provider_class,
+    _validate_multi_target,
+)
+from octorules.commands._sync import (
+    _CHECKSUM_RE,
+    SyncResult,
+    _apply_custom_rulesets,
+    _apply_lists,
+    _apply_single_zone,
+    _apply_zone_changes,
+    _check_safety_violations,
+    _cmd_sync_inner,
+    _log_safety_violations,
+    _make_account_zone_config,
+    _write_audit_log,
+    cmd_sync,
+)
+from octorules.commands._validate import cmd_validate
+from octorules.commands._versions import cmd_versions
+
+__all__ = [
+    "_CHECKSUM_RE",
+    "SyncResult",
+    "_PlanAllResult",
+    "_TaskList",
+    "_apply_custom_rulesets",
+    "_apply_lists",
+    "_apply_parallel",
+    "_apply_single_zone",
+    "_apply_zone_changes",
+    "_check_safety_violations",
+    "_cmd_plan_or_compare",
+    "_cmd_sync_inner",
+    "_discover_provider_modules",
+    "_discover_zones",
+    "_emit_plan_outputs",
+    "_filter_current_by_phase",
+    "_filter_desired_by_phase",
+    "_format_api_error",
+    "_get_cloudflare_provider",
+    "_get_zone_provider",
+    "_get_zone_providers",
+    "_get_zones",
+    "_init_processors",
+    "_init_provider",
+    "_init_providers",
+    "_load_provider_class",
+    "_log_safety_violations",
+    "_make_account_zone_config",
+    "_map_ordered",
+    "_phase_filter_to_provider_ids",
+    "_plan_account",
+    "_plan_all_scopes",
+    "_plan_single_zone",
+    "_plan_single_zone_safe",
+    "_plan_zones",
+    "_resolve_provider_class",
+    "_run_staged_tasks",
+    "_validate_multi_target",
+    "_validate_phases",
+    "_write_audit_log",
+    "_write_output_file",
+    "cmd_audit",
+    "cmd_compare",
+    "cmd_dump",
+    "cmd_lint",
+    "cmd_plan",
+    "cmd_report",
+    "cmd_sync",
+    "cmd_validate",
+    "cmd_versions",
+]

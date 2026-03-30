@@ -110,9 +110,9 @@ class TestPlanAllResult:
 
 
 _PATCHES = [
-    patch("octorules.commands._plan_account"),
-    patch("octorules.commands._plan_zones"),
-    patch("octorules.commands._get_zones"),
+    patch("octorules.commands._plan._plan_account"),
+    patch("octorules.commands._plan._plan_zones"),
+    patch("octorules.commands._helpers._get_zones"),
 ]
 
 
@@ -295,9 +295,9 @@ class TestGetZoneProvider:
 class TestMultiProviderRouting:
     """Integration tests verifying correct provider is called per zone during plan/sync/dump."""
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_plan_routes_zones_to_correct_provider(
         self, mock_get_zones, mock_plan_zones, mock_plan_acct, tmp_path
     ):
@@ -326,9 +326,9 @@ class TestMultiProviderRouting:
         assert r.provider_map[("other.com", None)] is cf_prov
         assert r.provider_map[("my-web-acl", None)] is aws_prov
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_plan_runs_account_for_each_provider_with_account_id(
         self, mock_get_zones, mock_plan_zones, mock_plan_acct, tmp_path
     ):
@@ -367,9 +367,9 @@ class TestMultiProviderRouting:
         assert r.provider_map[("my-cf-account", None)] is cf_prov
         assert r.provider_map[("my-aws-account", None)] is aws_prov
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_plan_skips_account_for_providers_without_account_id(
         self, mock_get_zones, mock_plan_zones, mock_plan_acct, tmp_path
     ):
@@ -391,9 +391,9 @@ class TestMultiProviderRouting:
         assert mock_plan_acct.call_args[0][1] is cf_prov
         assert r.account_labels == ["my-cf-account"]
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_plan_zones_passes_providers_dict(
         self, mock_get_zones, mock_plan_zones, mock_plan_acct, tmp_path
     ):
@@ -411,8 +411,8 @@ class TestMultiProviderRouting:
         # _plan_zones should receive the full providers dict
         assert mock_plan_zones.call_args[0][1] is providers
 
-    @patch("octorules.commands._apply_single_zone")
-    @patch("octorules.commands._map_ordered")
+    @patch("octorules.commands._sync._apply_single_zone")
+    @patch("octorules.commands._helpers._map_ordered")
     def test_apply_routes_to_correct_provider(self, mock_map, mock_apply, tmp_path):
         """_apply_zone_changes passes the correct provider per zone."""
         cfg = _multi_provider_config(tmp_path)
@@ -451,8 +451,8 @@ class TestMultiProviderRouting:
         assert second_call_args[0][2].label == "my-web-acl"  # Scope
         assert second_call_args[0][3] is aws_prov
 
-    @patch("octorules.commands._apply_single_zone")
-    @patch("octorules.commands._map_ordered")
+    @patch("octorules.commands._sync._apply_single_zone")
+    @patch("octorules.commands._helpers._map_ordered")
     def test_apply_account_scope_uses_provider_map(self, mock_map, mock_apply, tmp_path):
         """Account-scope zone plans use scope_map and provider_map."""
         cfg = _multi_provider_config(tmp_path)
@@ -534,7 +534,7 @@ class TestMultiProviderResolveZoneIds:
 class TestInitProviderDeprecation:
     """Test that _init_provider() emits a DeprecationWarning."""
 
-    @patch("octorules.commands.resolve_zone_ids")
+    @patch("octorules.commands._providers.resolve_zone_ids")
     def test_deprecation_warning(self, mock_resolve):
         from octorules.commands import _init_provider
 
@@ -571,9 +571,9 @@ class TestSupportsGuards:
         prov.get_all_phase_rules.return_value = {}
         return prov
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_plan_account_skips_unsupported_custom_rulesets(
         self, mock_get_zones, mock_plan_zones, mock_plan_acct
     ):
@@ -747,9 +747,9 @@ class TestMultiTarget:
         r = _PlanAllResult()
         assert r.provider_map == {}
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_plan_produces_plan_per_target(
         self, mock_get_zones, mock_plan_zones, mock_plan_acct, tmp_path
     ):
@@ -789,9 +789,9 @@ class TestMultiTarget:
         assert r.provider_map[("example.com", "cf-prod")] is cf1
         assert r.provider_map[("example.com", "cf-staging")] is cf2
 
-    @patch("octorules.commands._plan_account")
-    @patch("octorules.commands._plan_zones")
-    @patch("octorules.commands._get_zones")
+    @patch("octorules.commands._plan._plan_account")
+    @patch("octorules.commands._plan._plan_zones")
+    @patch("octorules.commands._helpers._get_zones")
     def test_single_target_backward_compat(self, mock_get_zones, mock_plan_zones, mock_plan_acct):
         """Single-target zones still use (zone_name, None) key -- target is None."""
         cfg = _mock_config()
@@ -883,7 +883,7 @@ class TestTargetNameThreading:
         added_refs = {c.ref for c in zp.phase_plans[0].changes}
         assert added_refs == {"r1", "r2"}
 
-    @patch("octorules.commands._plan_single_zone_safe")
+    @patch("octorules.commands._plan._plan_single_zone_safe")
     def test_plan_zones_threads_target_name(self, mock_safe):
         """_plan_zones passes target_name to _plan_single_zone_safe."""
         from octorules.commands import _plan_zones
@@ -913,7 +913,7 @@ class TestTargetNameThreading:
         assert calls[0].kwargs.get("target_name") == "cloudflare"
         assert calls[1].kwargs.get("target_name") == "aws"
 
-    @patch("octorules.commands._plan_single_zone_safe")
+    @patch("octorules.commands._plan._plan_single_zone_safe")
     def test_plan_zones_multi_target_threads_target_name(self, mock_safe):
         """Multi-target zones pass the real target_name for each."""
         from octorules.commands import _plan_zones

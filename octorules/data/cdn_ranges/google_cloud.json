@@ -1,10 +1,10 @@
 {
-  "_generated_at": "2026-03-25T07:23:44Z",
+  "_generated_at": "2026-03-30T10:39:25Z",
   "_generator": "scripts/sync_cdn_ranges.py",
   "provider": "Google Cloud",
   "version": {
-    "creationTime": "2026-03-24T19:05:17.803239",
-    "syncToken": "1774404317803"
+    "creationTime": "2026-03-30T01:04:32.875286",
+    "syncToken": "1774857872875"
   },
   "cidrs": [
     "104.154.113.0/24",

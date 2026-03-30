@@ -509,12 +509,16 @@ octorules lint [--format text|json|sarif] [--severity error|warning|info] [--pla
 Audit rules for cross-rule IP overlaps, shadowed rules, CDN range conflicts, and cross-zone inconsistencies. Processes every `*.yaml` file in the rules directory (not just configured zones). No API credentials needed.
 
 ```bash
-octorules audit [--check ip-overlap|ip-shadow|cdn-ranges|zone-drift] [--cdn-timeout N] [--cdn-stale-days N]
+octorules audit [--check ...] [--severity error|warning|info] [--format text|json] [--output FILE] [--exit-code] [--cdn-timeout N] [--cdn-stale-days N]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--check` | Only run specific check(s); can be repeated (default: all) |
+| `--severity` | Minimum severity to report (default: `info`) |
+| `--format` | Output format: `text` (default), `json` |
+| `--output` | Write results to a file instead of stdout |
+| `--exit-code` | Exit with 1 on errors, 2 on warnings (for CI) |
 | `--cdn-timeout` | Timeout in seconds for CDN range API fetches (default: 15) |
 | `--cdn-stale-days` | Warn if baked-in CDN ranges are older than N days (default: 60) |
 
@@ -524,6 +528,13 @@ octorules audit [--check ip-overlap|ip-shadow|cdn-ranges|zone-drift] [--cdn-time
 - **ip-shadow** -- Rules shadowed by broader rules in earlier phases (e.g. a rate-limit rule whose IPs are already blocked by a WAF rule).
 - **cdn-ranges** -- Rules that match known CDN provider IP ranges (Cloudflare, AWS CloudFront, Google Cloud). Fetches fresh ranges from public APIs; falls back to baked-in data when offline.
 - **zone-drift** -- Same CIDR treated differently across zones (e.g. blocked in zone A, allowed in zone B).
+
+Acceptance comments suppress known findings:
+
+```yaml
+  # octorules:accept=zone-drift
+  # octorules:accept=ip-overlap,cdn-ranges
+```
 
 ### `octorules versions`
 
