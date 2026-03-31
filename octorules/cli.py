@@ -80,6 +80,17 @@ __all__ = [
 ]
 
 
+def _positive_int(value: str) -> int:
+    """Argparse type that rejects non-positive integers."""
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+    if n <= 0:
+        raise argparse.ArgumentTypeError(f"value must be a positive integer (got {n})")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Shared parent parser: allows global flags both before and after the subcommand.
     # Uses SUPPRESS defaults so subparser values don't overwrite the main parser's.
@@ -267,14 +278,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_parser.add_argument(
         "--cdn-timeout",
-        type=int,
+        type=_positive_int,
         default=15,
         dest="cdn_timeout",
         help="Timeout in seconds for CDN range API fetches (default: 15)",
     )
     audit_parser.add_argument(
         "--cdn-stale-days",
-        type=int,
+        type=_positive_int,
         default=60,
         dest="cdn_stale_days",
         help="Warn if baked-in CDN ranges are older than this many days (default: 60)",

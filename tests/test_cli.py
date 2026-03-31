@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,6 +16,7 @@ from octorules.cli import (
     _filter_desired_by_phase,
     _format_api_error,
     _get_zones,
+    _positive_int,
     _setup_logging,
     _validate_phases,
     _write_output_file,
@@ -65,6 +68,27 @@ def sample_config(tmp_path):
             ),
         },
     )
+
+
+class TestPositiveInt:
+    """Tests for the _positive_int argparse type function."""
+
+    def test_valid_positive_integer(self):
+        assert _positive_int("1") == 1
+        assert _positive_int("15") == 15
+        assert _positive_int("100") == 100
+
+    def test_zero_raises(self):
+        with pytest.raises(argparse.ArgumentTypeError, match="positive integer"):
+            _positive_int("0")
+
+    def test_negative_raises(self):
+        with pytest.raises(argparse.ArgumentTypeError, match="positive integer"):
+            _positive_int("-5")
+
+    def test_non_numeric_raises(self):
+        with pytest.raises(argparse.ArgumentTypeError, match="invalid int value"):
+            _positive_int("abc")
 
 
 class TestBuildParser:
@@ -601,6 +625,237 @@ class TestCmdDump:
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_dump(sample_config, None, None)
         assert result == 0
+
+
+class TestDumpAccount:
+    """Comprehensive tests for _dump_account logic via cmd_dump."""
+
+    def _make_config(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        return Config(
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
+            rules_dir=rules_dir,
+            zones={},
+        )
+
+    def _make_provider(self, **overrides):
+        prov = MagicMock()
+        prov.account_id = overrides.get("account_id", "acct-123")
+        prov.account_name = overrides.get("account_name", "Test Account")
+        prov.get_all_phase_rules.return_value = overrides.get("phase_rules", {})
+        prov.get_all_custom_rulesets.return_value = overrides.get("custom_rulesets", {})
+        prov.get_all_lists.return_value = overrides.get("lists", {})
+        return prov
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_happy_path_with_all_data(self, mock_init_provs, tmp_path, caplog):
+        """Account dump with phase rules, custom rulesets, and lists."""
+        from octorules.config import _yaml_load
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(
+            phase_rules={
+                "http_request_dynamic_redirect": [
+                    {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+                ],
+            },
+            custom_rulesets={
+                "rs1": {
+                    "name": "Block attackers",
+                    "phase": "http_request_firewall_custom",
+                    "rules": [
+                        {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
+                    ],
+                }
+            },
+            lists={
+                "blocked_ips": {
+                    "id": "list-123",
+                    "kind": "ip",
+                    "description": "Bad actors",
+                    "items": [{"ip": "1.2.3.4"}],
+                }
+            },
+        )
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 0
+        assert "Dumped account" in caplog.text
+        dumped = config.rules_dir / "test-account.yaml"
+        assert dumped.exists()
+        data = _yaml_load(dumped)
+        assert "redirect_rules" in data
+        assert "custom_rulesets" in data
+        assert "lists" in data
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_no_custom_rulesets(self, mock_init_provs, tmp_path, caplog):
+        """Account dump with no custom rulesets returns empty/no section."""
+        from octorules.config import _yaml_load
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(
+            phase_rules={"http_request_dynamic_redirect": []},
+            custom_rulesets={},
+        )
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 0
+        dumped = config.rules_dir / "test-account.yaml"
+        data = _yaml_load(dumped)
+        assert "custom_rulesets" not in (data or {})
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_no_lists(self, mock_init_provs, tmp_path, caplog):
+        """Account dump with no lists returns empty/no lists section."""
+        from octorules.config import _yaml_load
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(
+            phase_rules={},
+            lists={},
+        )
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 0
+        dumped = config.rules_dir / "test-account.yaml"
+        data = _yaml_load(dumped)
+        assert "lists" not in (data or {})
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_phase_rules_api_error(self, mock_init_provs, tmp_path, caplog):
+        """ProviderError on get_all_phase_rules logs error and returns had_error=True."""
+        from octorules.provider.exceptions import ProviderError
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider()
+        mock_prov.get_all_phase_rules.side_effect = ProviderError("API 500")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 1
+        assert "Failed to dump account" in caplog.text
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_phase_rules_auth_error_propagates(self, mock_init_provs, tmp_path):
+        """ProviderAuthError on get_all_phase_rules propagates (not caught)."""
+        from octorules.provider.exceptions import ProviderAuthError
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider()
+        mock_prov.get_all_phase_rules.side_effect = ProviderAuthError("Forbidden")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with pytest.raises(ProviderAuthError):
+            cmd_dump(config, None, None, scope_filter="account")
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_custom_rulesets_auth_error_propagates(self, mock_init_provs, tmp_path):
+        """ProviderAuthError on custom rulesets fetch propagates."""
+        from octorules.provider.exceptions import ProviderAuthError
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(phase_rules={})
+        mock_prov.get_all_custom_rulesets.side_effect = ProviderAuthError("Forbidden")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with pytest.raises(ProviderAuthError):
+            cmd_dump(config, None, None, scope_filter="account")
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_lists_auth_error_propagates(self, mock_init_provs, tmp_path):
+        """ProviderAuthError on lists fetch propagates."""
+        from octorules.provider.exceptions import ProviderAuthError
+
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(phase_rules={})
+        mock_prov.get_all_lists.side_effect = ProviderAuthError("Forbidden")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with pytest.raises(ProviderAuthError):
+            cmd_dump(config, None, None, scope_filter="account")
+
+    @patch("octorules.commands._dump.call_dump_extensions", return_value={})
+    @patch("octorules.commands._providers._init_providers")
+    def test_extension_hooks_called(self, mock_init_provs, mock_ext, tmp_path, caplog):
+        """Extension dump hooks are invoked during account dump."""
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(phase_rules={})
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 0
+        # call_dump_extensions should have been called for the account scope
+        assert mock_ext.called
+        call_args = mock_ext.call_args
+        scope_arg = call_args[0][0]
+        assert scope_arg.account_id == "acct-123"
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_empty_phase_rules_still_produces_file(self, mock_init_provs, tmp_path, caplog):
+        """Account dump with no phase rules still creates the output file."""
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(phase_rules={})
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 0
+        dumped = config.rules_dir / "test-account.yaml"
+        assert dumped.exists()
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_account_label_slugified(self, mock_init_provs, tmp_path, caplog):
+        """Account name with spaces/special chars is slugified for filename."""
+        config = self._make_config(tmp_path)
+        mock_prov = self._make_provider(account_name="My Test Account!")
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="account")
+        assert result == 0
+        dumped = config.rules_dir / "my-test-account.yaml"
+        assert dumped.exists()
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_concurrent_with_zone_dumps(self, mock_init_provs, tmp_path, caplog):
+        """When scope_filter='all', account and zone dumps both run."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
+            },
+            rules_dir=rules_dir,
+            zones={
+                "example.com": ZoneConfig(
+                    name="example.com",
+                    zone_id="zone-abc",
+                    sources=["rules"],
+                    targets=["cloudflare"],
+                ),
+            },
+        )
+        mock_prov = self._make_provider(phase_rules={})
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            result = cmd_dump(config, None, None, scope_filter="all")
+        assert result == 0
+        # Both account and zone files should exist
+        assert (rules_dir / "test-account.yaml").exists()
+        assert (rules_dir / "example.com.yaml").exists()
 
 
 class TestCmdValidate:
@@ -1678,6 +1933,72 @@ class TestSafetyForce:
         assert "example.com" in caplog.text
         assert "100.0%" in caplog.text
         assert "30.0%" in caplog.text
+
+
+class TestMakeAccountZoneConfig:
+    """Tests for _make_account_zone_config using provider-level safety settings."""
+
+    def test_uses_provider_safety_defaults(self):
+        from octorules.commands import _make_account_zone_config
+
+        config = Config(
+            rules_dir=Path("/tmp/rules"),
+            providers={
+                "cloudflare": ProviderConfig(
+                    name="cloudflare",
+                    kwargs={},
+                    delete_threshold=10.0,
+                    update_threshold=20.0,
+                    min_existing=5,
+                ),
+            },
+        )
+        zone_cfg = _make_account_zone_config(config)
+        assert zone_cfg.name == "__account__"
+        assert zone_cfg.delete_threshold == 10.0
+        assert zone_cfg.update_threshold == 20.0
+        assert zone_cfg.min_existing == 5
+
+    def test_falls_back_to_defaults_when_no_providers(self):
+        from octorules.commands import _make_account_zone_config
+
+        config = Config(
+            rules_dir=Path("/tmp/rules"),
+            providers={},
+        )
+        zone_cfg = _make_account_zone_config(config)
+        assert zone_cfg.name == "__account__"
+        # ZoneConfig defaults
+        assert zone_cfg.delete_threshold == 30.0
+        assert zone_cfg.update_threshold == 30.0
+        assert zone_cfg.min_existing == 3
+
+    def test_uses_first_provider_when_multiple(self):
+        from octorules.commands import _make_account_zone_config
+
+        config = Config(
+            rules_dir=Path("/tmp/rules"),
+            providers={
+                "cloudflare": ProviderConfig(
+                    name="cloudflare",
+                    kwargs={},
+                    delete_threshold=15.0,
+                    update_threshold=25.0,
+                    min_existing=7,
+                ),
+                "aws": ProviderConfig(
+                    name="aws",
+                    kwargs={},
+                    delete_threshold=50.0,
+                    update_threshold=50.0,
+                    min_existing=10,
+                ),
+            },
+        )
+        zone_cfg = _make_account_zone_config(config)
+        assert zone_cfg.delete_threshold == 15.0
+        assert zone_cfg.update_threshold == 25.0
+        assert zone_cfg.min_existing == 7
 
 
 class TestParallelPlanning:
@@ -3047,6 +3368,31 @@ class TestCmdAuditCLI:
         ns = parser.parse_args(["audit", "--cdn-timeout", "30", "--cdn-stale-days", "90"])
         assert ns.cdn_timeout == 30
         assert ns.cdn_stale_days == 90
+
+    def test_audit_parser_rejects_negative_cdn_timeout(self):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["audit", "--cdn-timeout", "-5"])
+
+    def test_audit_parser_rejects_zero_cdn_timeout(self):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["audit", "--cdn-timeout", "0"])
+
+    def test_audit_parser_rejects_negative_cdn_stale_days(self):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["audit", "--cdn-stale-days", "-1"])
+
+    def test_audit_parser_rejects_zero_cdn_stale_days(self):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["audit", "--cdn-stale-days", "0"])
+
+    def test_audit_parser_rejects_non_numeric_cdn_timeout(self):
+        parser = build_parser()
+        with pytest.raises(SystemExit):
+            parser.parse_args(["audit", "--cdn-timeout", "abc"])
 
     def test_audit_no_rules_returns_0(self, sample_config):
         """Audit with no rules files returns 0 (nothing to audit)."""

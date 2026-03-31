@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import sys
+from collections.abc import Callable
 from html import escape as html_escape
 from typing import IO
 
@@ -671,7 +672,7 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
     return "\n".join(lines)
 
 
-_FORMAT_RENDERERS: dict[str, callable] = {
+_FORMAT_RENDERERS: dict[str, Callable] = {
     "json": format_plan_json,
     "markdown": format_plan_markdown,
     "html": format_plan_html,

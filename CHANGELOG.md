@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.21.1] - 2026-03-31
+
+### Changed
+- `ChangeTypeFilter` now filters changes across all extension types, not only
+  Page Shield.
+- Account-scope syncs now inherit safety thresholds (`delete_threshold`,
+  `update_threshold`, `min_existing`) from the first provider's configuration
+  instead of using hardcoded defaults.
+- `--cdn-timeout` and `--cdn-stale-days` now reject zero and negative values.
+
+### Fixed
+- `_FRAMEWORK_KEYS` was defined twice in `config.py`; extracted to a single
+  module-level constant `_PROVIDER_FRAMEWORK_KEYS`.
+- `_FORMAT_RENDERERS` type annotation used lowercase `callable` instead of
+  `Callable`.
+
 ## [0.21.0] - 2026-03-30
 
 ### Added

@@ -16,6 +16,10 @@ from octorules.plan_output import PLAN_OUTPUT_CLASSES, PlanOutput
 
 log = logging.getLogger(__name__)
 
+# Keys in a provider section that are handled by the framework (not forwarded
+# to the provider constructor as kwargs, and not resolved as secrets).
+_PROVIDER_FRAMEWORK_KEYS = {"class", "safety"}
+
 
 class ConfigError(Exception):
     """Raised when configuration is invalid."""
@@ -470,11 +474,10 @@ class Config:
             handlers[sh_name] = sh_class(sh_name, **sh_kwargs)
 
         # Resolve provider kwargs
-        _FRAMEWORK_KEYS = {"class", "safety"}
         for pc in self.providers.values():
             pc.kwargs = {
                 k: _resolve_deep(v, handlers, f"providers.{pc.name}.{k}")
-                if k not in _FRAMEWORK_KEYS
+                if k not in _PROVIDER_FRAMEWORK_KEYS
                 else v
                 for k, v in pc.kwargs.items()
             }
@@ -549,7 +552,6 @@ class Config:
             )
 
         # Parse each provider
-        _FRAMEWORK_KEYS = {"class", "safety"}
         providers: dict[str, ProviderConfig] = {}
 
         for prov_name in prov_keys:
@@ -601,7 +603,7 @@ class Config:
             # Build provider kwargs (raw; secrets resolved later via resolve_secrets())
             provider_kwargs: dict = {}
             for k, v in prov_section.items():
-                if k in _FRAMEWORK_KEYS:
+                if k in _PROVIDER_FRAMEWORK_KEYS:
                     continue
                 provider_kwargs[k] = v
 

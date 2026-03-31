@@ -106,6 +106,7 @@ class ChangeTypeFilter(BaseProcessor):
             crp.changes = [c for c in crp.changes if c.change_type not in self._exclude]
         for lp in plan.list_plans:
             lp.changes = [c for c in lp.changes if c.change_type not in self._exclude]
-        for psp in plan.page_shield_policy_plans:
-            psp.changes = [c for c in psp.changes if c.change_type not in self._exclude]
+        for ext_plans in plan.extension_plans.values():
+            for ep in ext_plans:
+                ep.changes = [c for c in ep.changes if c.change_type not in self._exclude]
         return plan

@@ -41,7 +41,20 @@ _CHECKSUM_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _make_account_zone_config(config: Config) -> ZoneConfig:
-    """Build a synthetic ZoneConfig with provider-level defaults for account scope."""
+    """Build a synthetic ZoneConfig with provider-level defaults for account scope.
+
+    Uses the first provider's safety thresholds instead of ZoneConfig defaults,
+    so that provider-level ``safety`` settings are respected for account-scoped
+    syncs.
+    """
+    if config.providers:
+        prov_cfg = next(iter(config.providers.values()))
+        return ZoneConfig(
+            name="__account__",
+            delete_threshold=prov_cfg.delete_threshold,
+            update_threshold=prov_cfg.update_threshold,
+            min_existing=prov_cfg.min_existing,
+        )
     return ZoneConfig(name="__account__")
 
 
