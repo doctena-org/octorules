@@ -320,6 +320,55 @@ class TestChangeTypeFilter:
         with pytest.raises(ConfigError, match="non-empty"):
             ChangeTypeFilter(exclude=[])
 
+    def test_exclude_filters_non_page_shield_extensions(self):
+        """ChangeTypeFilter should filter changes in all extension_plans, not just page_shield."""
+        ctf = ChangeTypeFilter(exclude=["REMOVE"])
+        # Build a plan with a custom extension (not page_shield)
+        ext_plan = PageShieldPolicyPlan(
+            description="custom_ext",
+            changes=[
+                RuleChange(change_type=ChangeType.REMOVE, ref="ext-rm", phase=REDIRECT_PHASE),
+                RuleChange(change_type=ChangeType.ADD, ref="ext-add", phase=REDIRECT_PHASE),
+            ],
+        )
+        plan = ZonePlan(
+            zone_name="example.com",
+            extension_plans={"my_custom_ext": [ext_plan]},
+        )
+        result = ctf.process_changes("example.com", plan, MagicMock())
+        # REMOVE should be filtered, ADD kept
+        assert len(result.extension_plans["my_custom_ext"][0].changes) == 1
+        assert result.extension_plans["my_custom_ext"][0].changes[0].change_type == ChangeType.ADD
+
+    def test_exclude_filters_multiple_extensions(self):
+        """ChangeTypeFilter should filter changes across multiple extension types."""
+        ctf = ChangeTypeFilter(exclude=["ADD"])
+        ext_a = PageShieldPolicyPlan(
+            description="ext_a",
+            changes=[
+                RuleChange(change_type=ChangeType.ADD, ref="a1", phase=REDIRECT_PHASE),
+                RuleChange(change_type=ChangeType.MODIFY, ref="a2", phase=REDIRECT_PHASE),
+            ],
+        )
+        ext_b = PageShieldPolicyPlan(
+            description="ext_b",
+            changes=[
+                RuleChange(change_type=ChangeType.ADD, ref="b1", phase=REDIRECT_PHASE),
+                RuleChange(change_type=ChangeType.REMOVE, ref="b2", phase=REDIRECT_PHASE),
+            ],
+        )
+        plan = ZonePlan(
+            zone_name="example.com",
+            extension_plans={"page_shield": [ext_a], "other_ext": [ext_b]},
+        )
+        result = ctf.process_changes("example.com", plan, MagicMock())
+        # page_shield: only MODIFY kept
+        assert len(result.extension_plans["page_shield"][0].changes) == 1
+        assert result.extension_plans["page_shield"][0].changes[0].ref == "a2"
+        # other_ext: only REMOVE kept
+        assert len(result.extension_plans["other_ext"][0].changes) == 1
+        assert result.extension_plans["other_ext"][0].changes[0].ref == "b2"
+
     def test_invalid_change_type_raises(self):
         with pytest.raises(ConfigError, match="unknown change type"):
             ChangeTypeFilter(exclude=["BOGUS"])
