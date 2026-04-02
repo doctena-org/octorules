@@ -449,6 +449,23 @@ Suppression comments work like shellcheck. Both lint and audit directives use th
 
 Multiple rule IDs can be comma-separated: `# octorules:disable=CF018, CF423`
 
+### Core lint rules
+
+These provider-agnostic rules always run, regardless of which provider packages are installed:
+
+| Rule | Severity | Description |
+|------|----------|-------------|
+| CORE001 | ERROR | Duplicate YAML key (silent data loss — last value wins) |
+| CORE002 | WARNING | Rules file in rules directory doesn't match any configured zone |
+| CORE003 | WARNING | All rules in a phase are disabled (2+ rules, all `enabled: false`) |
+| CORE004 | WARNING | Same `ref` string used in multiple phases within a zone |
+| CORE005 | WARNING | Safety `delete_threshold` is lower than `update_threshold` (config load) |
+| CORE006 | INFO | Rules file contains no actual rules (all phases empty) |
+
+CORE001 and CORE005 fire at config load time (before lint). The rest fire during `octorules lint`.
+
+Provider-specific rules (CF, WA, GA prefixes) are documented in each provider's `docs/lint.md`.
+
 ## CLI reference
 
 ### `octorules plan`
