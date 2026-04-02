@@ -434,6 +434,9 @@ octorules lint --format sarif --output results.sarif
 
 # CI mode: exit 1 on errors, 2 on warnings
 octorules lint --exit-code
+
+# Counts only (no details, CI-friendly)
+octorules lint --format summary
 ```
 
 Suppression comments work like shellcheck. Both lint and audit directives use the `octorules:` prefix and are case-sensitive:
@@ -470,6 +473,7 @@ octorules sync --doit [--zone example.com] [--phase redirect_rules] [--checksum 
 | `--checksum HASH` | Verify plan hasn't drifted since `plan --checksum` |
 | `--force` | Bypass safety threshold checks |
 | `--audit-log PATH` | Write JSON lines audit log of sync results |
+| `--format json` | Print structured JSON results to stdout (zone, status, synced phases, errors) |
 
 ### `octorules compare`
 
@@ -493,6 +497,9 @@ Validates config and rules files offline (no API calls). Useful in CI to catch e
 
 ```bash
 octorules validate [--zone example.com] [--phase redirect_rules]
+
+# Config file only (skip rules files)
+octorules validate --config-only
 ```
 
 ### `octorules dump`
@@ -571,6 +578,15 @@ octorules versions
 | `--debug` | Enable debug logging |
 | `--quiet` | Suppress all informational stdout output (plan tables, lint results, audit findings). Only errors and the exit code are reported. File output (`--output`) is unaffected |
 
+### Environment variables
+
+| Variable | Effect |
+|----------|--------|
+| `NO_COLOR` | Disable colored terminal output (any value, including empty) |
+| `FORCE_COLOR` | Force colored output even when stdout is not a TTY |
+
+`NO_COLOR` takes precedence over `FORCE_COLOR`. See https://no-color.org/.
+
 ### Exit codes
 
 | Code | Meaning |
@@ -578,6 +594,26 @@ octorules versions
 | 0 | Success / no changes |
 | 1 | Error (or lint errors found with `--exit-code`) |
 | 2 | Changes detected (`plan --exit-code`) / lint warnings found (`lint --exit-code`) |
+
+After every command, a summary line is printed to stderr:
+```
+octorules plan: exit 0 (no changes) 0.3s
+```
+
+### Tab completion
+
+Tab completion is built in (bash, zsh, tcsh). Generate the completion
+script once and place it in the standard location:
+
+```bash
+# Bash
+octorules completion bash > ~/.local/share/bash-completion/completions/octorules
+
+# Zsh (add fpath+=~/.zfunc before compinit in .zshrc)
+octorules completion zsh > ~/.zfunc/_octorules
+```
+
+Regenerate after upgrading octorules (new subcommands/flags).
 
 ## Config reference
 

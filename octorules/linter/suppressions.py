@@ -25,10 +25,10 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-# Matches: # octorules:disable=CF015  or  # octorules:disable=CF015,CF510
-# Supports both single-letter (M013) and multi-letter (CF015) prefixes.
+# Matches: # octorules:disable=CF015  or  # octorules:disable=CF015,CORE003
+# Supports prefixes from 1 to 4 uppercase letters (CF, WA, GA, CORE) + 3 digits.
 _DIRECTIVE_RE = re.compile(
-    r"#\s*octorules:disable\s*=\s*([A-Z]{1,3}\d{3}(?:\s*,\s*[A-Z]{1,3}\d{3})*)"
+    r"#\s*octorules:disable\s*=\s*([A-Z]{1,4}\d{3}(?:\s*,\s*[A-Z]{1,4}\d{3})*)"
 )
 
 # Matches a YAML list item with a ref key

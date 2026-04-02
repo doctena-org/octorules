@@ -138,7 +138,12 @@ def cmd_audit(
 
     # Format and display (respects min_severity filter).
     formatter = AUDIT_FORMATTERS[audit_format]
-    output = formatter(findings, min_severity=min_severity)
+    fmt_kwargs: dict = {"min_severity": min_severity}
+    if audit_format == "text" and not output_file:
+        from octorules._color import supports_color
+
+        fmt_kwargs["use_color"] = supports_color()
+    output = formatter(findings, **fmt_kwargs)
 
     if output_file and output:
         from octorules.commands._helpers import _write_output_file

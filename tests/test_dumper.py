@@ -5,7 +5,16 @@ from __future__ import annotations
 import yaml
 
 from octorules.config import _yaml_load
-from octorules.dumper import _add_blank_lines, _clean_rule, _ensure_ref, dump_zone_rules
+from octorules.dumper import (
+    _add_blank_lines,
+    _clean_list_item,
+    _clean_rule,
+    _ensure_ref,
+    _literalize,
+    _LiteralStr,
+    _strip_trailing_whitespace,
+    dump_zone_rules,
+)
 
 
 class TestCleanRule:
@@ -911,3 +920,78 @@ class TestEnsureRef:
         result = _ensure_ref(rule)
         assert "ref" not in result
         assert result is rule
+
+
+# ---------------------------------------------------------------------------
+# _strip_trailing_whitespace / _literalize / _clean_list_item
+# ---------------------------------------------------------------------------
+
+
+class TestStripTrailingWhitespace:
+    def test_strips_trailing_spaces(self):
+        assert _strip_trailing_whitespace("a  \nb  \n") == "a\nb\n"
+
+    def test_no_op_on_clean_lines(self):
+        assert _strip_trailing_whitespace("a\nb\n") == "a\nb\n"
+
+    def test_empty_string(self):
+        assert _strip_trailing_whitespace("") == ""
+
+
+class TestLiteralize:
+    def test_multiline_string_becomes_literal(self):
+        result = _literalize("line1\nline2")
+        assert isinstance(result, _LiteralStr)
+
+    def test_single_line_string_unchanged(self):
+        result = _literalize("no newlines")
+        assert result == "no newlines"
+        assert not isinstance(result, _LiteralStr)
+
+    def test_non_string_passthrough(self):
+        assert _literalize(42) == 42
+        assert _literalize(True) is True
+
+    def test_recursive_dict(self):
+        result = _literalize({"expr": "a\nb", "num": 5})
+        assert isinstance(result["expr"], _LiteralStr)
+        assert result["num"] == 5
+
+    def test_recursive_list(self):
+        result = _literalize(["a\nb", "plain"])
+        assert isinstance(result[0], _LiteralStr)
+        assert result[1] == "plain"
+
+    def test_strips_trailing_whitespace_in_literal(self):
+        result = _literalize("a  \nb  ")
+        assert isinstance(result, _LiteralStr)
+        assert "  \n" not in str(result)
+
+
+class TestCleanListItem:
+    def test_removes_api_fields(self):
+        """API-only fields registered for list_item are stripped."""
+        from octorules.phases import _api_fields, register_api_fields
+
+        original = frozenset(_api_fields["list_item"])
+        register_api_fields("list_item", {"id", "created_on", "modified_on"})
+        try:
+            item = {"id": "abc", "created_on": "2024-01-01", "ip": "192.0.2.0/24"}
+            cleaned = _clean_list_item(item)
+            assert "id" not in cleaned
+            assert "created_on" not in cleaned
+            assert cleaned["ip"] == "192.0.2.0/24"
+        finally:
+            _api_fields["list_item"].clear()
+            _api_fields["list_item"].update(original)
+
+    def test_non_dict_returns_empty(self):
+        assert _clean_list_item("not a dict") == {}
+
+    def test_empty_dict_returns_empty(self):
+        assert _clean_list_item({}) == {}
+
+    def test_literalizes_multiline_values(self):
+        item = {"comment": "line1\nline2"}
+        cleaned = _clean_list_item(item)
+        assert isinstance(cleaned["comment"], _LiteralStr)

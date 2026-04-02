@@ -17,6 +17,7 @@ as ``dict[str, list]``, keyed by extension name (e.g. ``"page_shield"``).
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Protocol
 
@@ -134,6 +135,9 @@ def _validate_hook_signature(
 # Registries (module-level mutable collections)
 # ---------------------------------------------------------------------------
 
+# Lock protecting all mutable registries in this module.
+_REGISTRY_LOCK = threading.Lock()
+
 _plan_zone_hooks: list[tuple[PlanZonePrefetchHook, PlanZoneFinalizeHook]] = []
 _apply_extensions: dict[str, ApplyExtensionFn] = {}
 _format_extensions: dict[str, FormatExtension] = {}
@@ -159,15 +163,17 @@ def register_plan_zone_hook(
     """
     _validate_hook_signature("plan_zone_prefetch", prefetch, _PREFETCH_PARAMS)
     _validate_hook_signature("plan_zone_finalize", finalize, _FINALIZE_PARAMS)
-    pair = (prefetch, finalize)
-    if pair not in _plan_zone_hooks:
-        _plan_zone_hooks.append(pair)
+    with _REGISTRY_LOCK:
+        pair = (prefetch, finalize)
+        if pair not in _plan_zone_hooks:
+            _plan_zone_hooks.append(pair)
 
 
 def register_apply_extension(name: str, fn: ApplyExtensionFn) -> None:
     """Register an apply function for extension *name*."""
     _validate_hook_signature("apply_extension", fn, _APPLY_PARAMS)
-    _apply_extensions[name] = fn
+    with _REGISTRY_LOCK:
+        _apply_extensions[name] = fn
 
 
 def register_format_extension(name: str, fmt: FormatExtension) -> None:
@@ -177,21 +183,24 @@ def register_format_extension(name: str, fmt: FormatExtension) -> None:
     structural (duck-typed) protocol and is validated by the caller at
     use time.
     """
-    _format_extensions[name] = fmt
+    with _REGISTRY_LOCK:
+        _format_extensions[name] = fmt
 
 
 def register_validate_extension(fn: ValidateExtensionFn) -> None:
     """Register a validation hook."""
     _validate_hook_signature("validate_extension", fn, _VALIDATE_PARAMS)
-    if fn not in _validate_extensions:
-        _validate_extensions.append(fn)
+    with _REGISTRY_LOCK:
+        if fn not in _validate_extensions:
+            _validate_extensions.append(fn)
 
 
 def register_dump_extension(fn: DumpExtensionFn) -> None:
     """Register a dump hook."""
     _validate_hook_signature("dump_extension", fn, _DUMP_PARAMS)
-    if fn not in _dump_extensions:
-        _dump_extensions.append(fn)
+    with _REGISTRY_LOCK:
+        if fn not in _dump_extensions:
+            _dump_extensions.append(fn)
 
 
 def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
@@ -202,7 +211,8 @@ def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
     in that phase.
     """
     _validate_hook_signature("audit_extension", fn, _AUDIT_PARAMS)
-    _audit_extensions[name] = fn
+    with _REGISTRY_LOCK:
+        _audit_extensions[name] = fn
 
 
 # ---------------------------------------------------------------------------
@@ -215,41 +225,47 @@ def unregister_plan_zone_hook(
     finalize: PlanZoneFinalizeHook,
 ) -> None:
     """Remove a plan zone hook pair."""
-    try:
-        _plan_zone_hooks.remove((prefetch, finalize))
-    except ValueError:
-        pass
+    with _REGISTRY_LOCK:
+        try:
+            _plan_zone_hooks.remove((prefetch, finalize))
+        except ValueError:
+            pass
 
 
 def unregister_apply_extension(name: str) -> None:
     """Remove an apply extension."""
-    _apply_extensions.pop(name, None)
+    with _REGISTRY_LOCK:
+        _apply_extensions.pop(name, None)
 
 
 def unregister_format_extension(name: str) -> None:
     """Remove a format extension."""
-    _format_extensions.pop(name, None)
+    with _REGISTRY_LOCK:
+        _format_extensions.pop(name, None)
 
 
 def unregister_validate_extension(fn: ValidateExtensionFn) -> None:
     """Remove a validation hook."""
-    try:
-        _validate_extensions.remove(fn)
-    except ValueError:
-        pass
+    with _REGISTRY_LOCK:
+        try:
+            _validate_extensions.remove(fn)
+        except ValueError:
+            pass
 
 
 def unregister_dump_extension(fn: DumpExtensionFn) -> None:
     """Remove a dump hook."""
-    try:
-        _dump_extensions.remove(fn)
-    except ValueError:
-        pass
+    with _REGISTRY_LOCK:
+        try:
+            _dump_extensions.remove(fn)
+        except ValueError:
+            pass
 
 
 def unregister_audit_extension(name: str) -> None:
     """Remove an audit extension."""
-    _audit_extensions.pop(name, None)
+    with _REGISTRY_LOCK:
+        _audit_extensions.pop(name, None)
 
 
 # ---------------------------------------------------------------------------

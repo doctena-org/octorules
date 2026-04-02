@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from octorules.expression import format_expression_display, normalize_expression
+from octorules.expression import (
+    QuoteAwareScanner,
+    _find_closing_brace,
+    _split_set_items,
+    format_expression_display,
+    normalize_expression,
+)
 
 # ---------------------------------------------------------------------------
 # Identity / no-op cases
@@ -641,6 +647,85 @@ class TestDisplayEdgeCases:
         # With max_line=5, it should break
         result = format_expression_display(expr, max_line=5)
         assert "\n" in result
+
+
+# ---------------------------------------------------------------------------
+# QuoteAwareScanner
+# ---------------------------------------------------------------------------
+
+
+class TestQuoteAwareScanner:
+    """Direct tests for the character-level quote-tracking scanner."""
+
+    def test_no_quotes(self):
+        items = list(QuoteAwareScanner("abc"))
+        assert all(not in_q for _, _, in_q in items)
+        assert QuoteAwareScanner("abc").unmatched_quote is False
+
+    def test_simple_quoted_string(self):
+        s = QuoteAwareScanner('"hello"')
+        items = list(s)
+        # Opening quote toggles in_quote on immediately
+        assert items[0] == (0, '"', True)
+        assert items[1][2] is True  # 'h' is inside quotes
+        # Closing quote toggles in_quote off
+        assert s.unmatched_quote is False
+
+    def test_escaped_quote(self):
+        s = QuoteAwareScanner(r'"say \"hi\""')
+        list(s)
+        assert s.unmatched_quote is False
+
+    def test_unmatched_quote(self):
+        s = QuoteAwareScanner('"unclosed')
+        list(s)
+        assert s.unmatched_quote is True
+
+    def test_empty_string(self):
+        s = QuoteAwareScanner("")
+        assert list(s) == []
+        assert s.unmatched_quote is False
+
+    def test_multiple_quoted_strings(self):
+        s = QuoteAwareScanner('"a" and "b"')
+        list(s)
+        assert s.unmatched_quote is False
+
+
+# ---------------------------------------------------------------------------
+# _find_closing_brace / _split_set_items
+# ---------------------------------------------------------------------------
+
+
+class TestFindClosingBrace:
+    def test_simple(self):
+        expr = "in {1 2 3}"
+        idx = _find_closing_brace(expr, 3)
+        assert idx == 9
+        assert expr[idx] == "}"
+
+    def test_quoted_braces(self):
+        expr = 'in {"a}" "b"}'
+        idx = _find_closing_brace(expr, 3)
+        assert expr[idx] == "}"
+
+    def test_not_found(self):
+        assert _find_closing_brace("in {unclosed", 3) == -1
+
+
+class TestSplitSetItems:
+    def test_simple(self):
+        assert _split_set_items("1 2 3") == ["1", "2", "3"]
+
+    def test_quoted_strings(self):
+        items = _split_set_items('"hello world" "foo"')
+        assert items == ['"hello world"', '"foo"']
+
+    def test_empty(self):
+        assert _split_set_items("") == []
+
+    def test_single_item(self):
+        assert _split_set_items("only") == ["only"]
 
 
 # ---------------------------------------------------------------------------

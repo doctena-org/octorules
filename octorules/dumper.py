@@ -107,6 +107,11 @@ def dump_zone_rules(
 
     for provider_id, rules in rules_by_provider_id.items():
         if provider_id not in PHASE_BY_PROVIDER_ID:
+            log.warning(
+                "Skipping unknown provider phase %r during dump (%d rules)",
+                provider_id,
+                len(rules),
+            )
             continue
         phase = PHASE_BY_PROVIDER_ID[provider_id]
         cleaned_rules = [_clean_rule(rule, phase.default_action) for rule in rules]

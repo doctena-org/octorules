@@ -5,6 +5,57 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] - 2026-04-02
+
+### Added
+- Core lint rules (provider-agnostic, always active):
+  - CORE001: Duplicate YAML key detection (raises ``ConfigError``).
+  - CORE002: Orphaned rules files not matching any configured zone.
+  - CORE003: All rules in a phase have ``enabled: false``.
+  - CORE004: Same ref string used in multiple phases within a zone.
+  - CORE005: Safety threshold sanity warning when ``delete_threshold`` <
+    ``update_threshold``.
+  - CORE006: Rules file contains no actual rules.
+- Colored terminal output for lint results (severity labels, section headers),
+  audit findings (severity, check headers), and sync progress (zone headers
+  in bold, completion messages in green, errors in red, warnings in yellow).
+- Exit code summary and timing printed to stderr after every command
+  (e.g. ``octorules plan: exit 0 (no changes) 0.3s``).
+- ``--format summary`` for ``lint`` and ``audit`` commands — prints counts
+  only, useful for CI pipelines that only need pass/fail.
+- ``--format json`` for ``sync`` command — prints structured JSON results
+  (zone, status, synced phases, errors) to stdout.
+- ``--config-only`` flag for ``validate`` command — checks config file
+  structure without loading rules files.
+- ``octorules completion`` subcommand — generates shell completion scripts
+  for bash, zsh, and tcsh (powered by ``shtab``).
+- Progress counter logged at start of planning (``Planning N zone(s)...``).
+- Rule count context logged after plan (``N of M rule(s) changed, K
+  unchanged``).
+
+### Changed
+- Lint plugin summary labels unused plugins: ``Lint plugins: cloudflare,
+  aws (unused)`` — clarifies which plugins ran vs which had no matching phases.
+- Phase and extension registries are now protected by `threading.Lock` for
+  forward-compatibility with free-threaded Python builds.
+- `supports_color()` respects `NO_COLOR` and `FORCE_COLOR` environment
+  variables (https://no-color.org/) and accepts an optional ``stream``
+  parameter (defaults to ``sys.stdout``).
+- `resolve_zone_ids()` wraps non-`ConfigError` exceptions with zone context
+  instead of propagating bare tracebacks.
+- CDN IP range parsers now log warnings on unexpected API response shapes
+  instead of silently returning empty lists.
+- `dump_zone_rules()` logs a warning when skipping unknown provider phase IDs
+  instead of silently dropping rules.
+- Pre-commit hook now runs `ruff check` and `ruff format --check` in addition
+  to the CDN ranges staleness check.
+- Removed CI `concurrency` blocks from lint and test workflows.
+- ``_cmd_sync_inner()`` now returns ``(exit_code, sync_results)`` instead
+  of just ``exit_code``.  This is a private API but re-exported in
+  ``commands.__all__`` — callers that unpack the return value will need
+  to update.
+- ``shtab`` added as a core dependency (shell completion generation).
+
 ## [0.21.1] - 2026-03-31
 
 ### Changed

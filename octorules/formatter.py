@@ -10,6 +10,7 @@ from collections.abc import Callable
 from html import escape as html_escape
 from typing import IO
 
+from octorules._color import _CYAN, _GREEN, _RED, _YELLOW, Pen, supports_color
 from octorules.expression import format_expression_display
 from octorules.extensions import get_format_extensions
 from octorules.phases import PHASE_BY_NAME, PHASE_BY_PROVIDER_ID
@@ -24,27 +25,6 @@ from octorules.planner import (
     count_change_types,
 )
 
-# ANSI color codes
-GREEN = "\033[32m"
-RED = "\033[31m"
-YELLOW = "\033[33m"
-CYAN = "\033[36m"
-BOLD = "\033[1m"
-DIM = "\033[2m"
-RESET = "\033[0m"
-
-
-def _supports_color() -> bool:
-    """Check if the terminal supports color."""
-    return hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
-
-
-def _color(text: str, code: str, use_color: bool = True) -> str:
-    if not use_color:
-        return text
-    return f"{code}{text}{RESET}"
-
-
 _CHANGE_SYMBOLS: dict[ChangeType, str] = {
     ChangeType.ADD: "+",
     ChangeType.REMOVE: "-",
@@ -53,10 +33,10 @@ _CHANGE_SYMBOLS: dict[ChangeType, str] = {
 }
 
 _CHANGE_COLORS: dict[ChangeType, str] = {
-    ChangeType.ADD: GREEN,
-    ChangeType.REMOVE: RED,
-    ChangeType.MODIFY: YELLOW,
-    ChangeType.REORDER: CYAN,
+    ChangeType.ADD: _GREEN,
+    ChangeType.REMOVE: _RED,
+    ChangeType.MODIFY: _YELLOW,
+    ChangeType.REORDER: _CYAN,
 }
 
 
@@ -116,9 +96,10 @@ def _rule_detail_pairs(rule: RuleDict | None) -> list[tuple[str, object]]:
 
 def _format_add_remove_details(rule: RuleDict | None, use_color: bool) -> list[str]:
     """Format rule details for an ADD or REMOVE change."""
+    p = Pen(use_color)
     details = []
     for key, val in _rule_detail_pairs(rule):
-        details.append(_color(f"      {key}: ", DIM, use_color) + f"{val!r}")
+        details.append(p.muted(f"      {key}: ") + f"{val!r}")
     return details
 
 
@@ -130,43 +111,40 @@ def _format_diff_value(
     Returns one or more lines.  The first line includes the key; continuation
     lines are indented and prefixed with the same ``prefix`` character.
     """
+    p = Pen(use_color)
     if isinstance(val, str) and len(val) > 80:
         formatted = format_expression_display(val)
         if "\n" in formatted:
             flines = formatted.split("\n")
             pad = " " * (len(prefix) + 1)
-            result = [
-                _color(f"    {prefix} {key}: ", DIM, use_color)
-                + _color(flines[0], color_code, use_color)
-            ]
+            result = [p.muted(f"    {prefix} {key}: ") + p.raw(flines[0], color_code)]
             for fl in flines[1:]:
-                result.append(
-                    _color(f"    {pad}", DIM, use_color) + _color(fl, color_code, use_color)
-                )
+                result.append(p.muted(f"    {pad}") + p.raw(fl, color_code))
             return result
-    label = _color(f"    {prefix} {key}: ", DIM, use_color)
-    return [label + _color(f"{val!r}", color_code, use_color)]
+    label = p.muted(f"    {prefix} {key}: ")
+    return [label + p.raw(f"{val!r}", color_code)]
 
 
 def _format_modify_details(change: RuleChange, use_color: bool) -> list[str]:
     """Format field-level diffs for a MODIFY change."""
     details = []
     for key, old_val, new_val in _compute_field_diffs(change):
-        details.extend(_format_diff_value(key, old_val, "−", RED, use_color))  # noqa: RUF001
-        details.extend(_format_diff_value(key, new_val, "+", GREEN, use_color))
+        details.extend(_format_diff_value(key, old_val, "−", _RED, use_color))  # noqa: RUF001
+        details.extend(_format_diff_value(key, new_val, "+", _GREEN, use_color))
     return details
 
 
 def format_change(change: RuleChange, use_color: bool = True) -> list[str]:
     """Format a single rule change as lines of output."""
+    p = Pen(use_color)
     symbol = _change_symbol(change.change_type)
     color = _change_color(change.change_type)
     label = change.change_type.value
 
     if change.change_type == ChangeType.REORDER:
-        return [_color(f"  {symbol} reorder rules", color, use_color)]
+        return [p.raw(f"  {symbol} reorder rules", color)]
 
-    lines = [_color(f"  {symbol} {label}: {change.ref}", color, use_color)]
+    lines = [p.raw(f"  {symbol} {label}: {change.ref}", color)]
     if change.change_type == ChangeType.MODIFY:
         lines.extend(_format_modify_details(change, use_color))
     elif change.change_type == ChangeType.ADD:
@@ -178,9 +156,10 @@ def format_change(change: RuleChange, use_color: bool = True) -> list[str]:
 
 def format_phase_plan(phase_plan: PhasePlan, use_color: bool = True) -> list[str]:
     """Format a phase plan as lines of output."""
+    p = Pen(use_color)
     lines = []
     header = f"  {phase_plan.phase.friendly_name} ({phase_plan.phase.provider_id})"
-    lines.append(_color(header, BOLD, use_color))
+    lines.append(p.header(header))
     for change in phase_plan.changes:
         lines.extend(format_change(change, use_color))
     return lines
@@ -188,14 +167,15 @@ def format_phase_plan(phase_plan: PhasePlan, use_color: bool = True) -> list[str
 
 def format_custom_ruleset_plan(crp: CustomRulesetPlan, use_color: bool = True) -> list[str]:
     """Format a custom ruleset plan as lines of output."""
+    p = Pen(use_color)
     lines = []
     id_short = (crp.ruleset_id or "")[:8]
     header = f"  custom_ruleset: {crp.ruleset_name} ({id_short})"
-    lines.append(_color(header, BOLD, use_color))
+    lines.append(p.header(header))
     if crp.create:
-        lines.append(_color("  + create rule group", GREEN, use_color))
+        lines.append(p.success("  + create rule group"))
     if crp.delete:
-        lines.append(_color("  - delete rule group", RED, use_color))
+        lines.append(p.error("  - delete rule group"))
     for change in crp.changes:
         lines.extend(format_change(change, use_color))
     return lines
@@ -203,18 +183,19 @@ def format_custom_ruleset_plan(crp: CustomRulesetPlan, use_color: bool = True) -
 
 def format_list_plan(lp: ListPlan, use_color: bool = True) -> list[str]:
     """Format a list plan as lines of output."""
+    p = Pen(use_color)
     lines = []
     header = f"  list: {lp.list_name} ({lp.list_kind})"
-    lines.append(_color(header, BOLD, use_color))
+    lines.append(p.header(header))
     if lp.create:
-        lines.append(_color("  + create list", GREEN, use_color))
+        lines.append(p.success("  + create list"))
     if lp.delete:
-        lines.append(_color("  - delete list", RED, use_color))
+        lines.append(p.error("  - delete list"))
     if lp.description_change is not None:
         old_desc, new_desc = lp.description_change
-        lines.append(_color("  ~ description:", YELLOW, use_color))
-        lines.append(_color("    − ", DIM, use_color) + _color(repr(old_desc), RED, use_color))  # noqa: RUF001
-        lines.append(_color("    + ", DIM, use_color) + _color(repr(new_desc), GREEN, use_color))
+        lines.append(p.warning("  ~ description:"))
+        lines.append(p.muted("    − ") + p.error(repr(old_desc)))  # noqa: RUF001
+        lines.append(p.muted("    + ") + p.success(repr(new_desc)))
     for change in lp.changes:
         lines.extend(format_change(change, use_color))
     return lines
@@ -222,18 +203,15 @@ def format_list_plan(lp: ListPlan, use_color: bool = True) -> list[str]:
 
 def format_zone_plan(zone_plan: ZonePlan, use_color: bool = True) -> str:
     """Format a full zone plan as a string."""
+    p = Pen(use_color)
     lines: list[str] = []
 
     if not zone_plan.has_changes:
-        lines.append(
-            _color(f"Zone {zone_plan.display_name}: ", BOLD, use_color)
-            + _color("no changes", DIM, use_color)
-        )
+        lines.append(p.header(f"Zone {zone_plan.display_name}: ") + p.muted("no changes"))
         return "\n".join(lines)
 
     lines.append(
-        _color(f"Zone {zone_plan.display_name}: ", BOLD, use_color)
-        + f"{zone_plan.total_changes} change(s)"
+        p.header(f"Zone {zone_plan.display_name}: ") + f"{zone_plan.total_changes} change(s)"
     )
 
     for phase_plan in zone_plan.phase_plans:
@@ -699,7 +677,8 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
         print(renderer(zone_plans), file=file)
         return
 
-    use_color = _supports_color() and file is sys.stdout
+    use_color = supports_color() and file is sys.stdout
+    p = Pen(use_color)
     total_changes = _total_changes(zone_plans)
 
     for zp in zone_plans:
@@ -709,10 +688,10 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
         print(file=file)
 
     if total_changes == 0:
-        print(_color("No changes detected.", DIM, use_color), file=file)
+        print(p.muted("No changes detected."), file=file)
     else:
         summary = f"Total: {total_changes} change(s) across {len(zone_plans)} zone(s)."
-        print(_color(summary, BOLD, use_color), file=file)
+        print(p.header(summary), file=file)
 
 
 def build_report_data(

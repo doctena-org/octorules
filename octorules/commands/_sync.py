@@ -128,10 +128,16 @@ def _apply_custom_rulesets(
                 scope, _crp.ruleset_name, _crp.phase, _crp.capacity or 0
             )
             _crp.ruleset_id = result.get("id", "")
-            log.info("  %s/%s: created (id=%s)", zp.zone_name, _label, _crp.ruleset_id)
+            log.info(
+                "  %s/%s: created (id=%s)",
+                zp.zone_name,
+                _label,
+                _crp.ruleset_id,
+                extra={"color": "success"},
+            )
             if _crp.prepared_rules:
                 provider.put_custom_ruleset(scope, _crp.ruleset_id, _crp.prepared_rules)
-                log.info("  %s/%s: rules applied", zp.zone_name, _label)
+                log.info("  %s/%s: rules applied", zp.zone_name, _label, extra={"color": "success"})
 
         create_tasks.append((full_label, create_fn))
 
@@ -152,7 +158,7 @@ def _apply_custom_rulesets(
 
         def update_fn(rid=crp.ruleset_id, rules=crp.prepared_rules, _lbl=label) -> None:
             provider.put_custom_ruleset(scope, rid, rules)
-            log.info("  %s/%s: done", zp.zone_name, _lbl)
+            log.info("  %s/%s: done", zp.zone_name, _lbl, extra={"color": "success"})
 
         update_tasks.append((full_label, update_fn))
 
@@ -167,7 +173,7 @@ def _apply_custom_rulesets(
 
         def del_fn(_crp=crp, _label=label) -> None:
             provider.delete_custom_ruleset(scope, _crp.ruleset_id)
-            log.info("  %s/%s: deleted", zp.zone_name, _label)
+            log.info("  %s/%s: deleted", zp.zone_name, _label, extra={"color": "success"})
 
         delete_tasks.append((full_label, del_fn))
 
@@ -205,7 +211,13 @@ def _apply_lists(
             desc = _lp.description_change[1] if _lp.description_change else ""
             result = provider.create_list(scope, _lp.list_name, _lp.list_kind, desc)
             _lp.list_id = result.get("id", "")
-            log.info("  %s/%s: created (id=%s)", zp.zone_name, _label, _lp.list_id)
+            log.info(
+                "  %s/%s: created (id=%s)",
+                zp.zone_name,
+                _label,
+                _lp.list_id,
+                extra={"color": "success"},
+            )
 
         create_tasks.append((full_label, create_fn))
 
@@ -229,7 +241,7 @@ def _apply_lists(
             def item_fn(_lp=lp, _label=label) -> None:
                 op_id = provider.put_list_items(scope, _lp.list_id, _lp.prepared_items)
                 provider.poll_bulk_operation(scope, op_id)
-                log.info("  %s/%s: items updated", zp.zone_name, _label)
+                log.info("  %s/%s: items updated", zp.zone_name, _label, extra={"color": "success"})
 
             tasks.append((full_label, item_fn))
         return tasks
@@ -249,7 +261,9 @@ def _apply_lists(
 
             def desc_fn(_lp=lp, _new_desc=new_desc, _label=label) -> None:
                 provider.update_list_description(scope, _lp.list_id, _new_desc or "")
-                log.info("  %s/%s: description updated", zp.zone_name, _label)
+                log.info(
+                    "  %s/%s: description updated", zp.zone_name, _label, extra={"color": "success"}
+                )
 
             tasks.append((full_label, desc_fn))
         return tasks
@@ -266,7 +280,7 @@ def _apply_lists(
 
             def del_fn(_lp=lp, _label=label) -> None:
                 provider.delete_list(scope, _lp.list_id)
-                log.info("  %s/%s: deleted", zp.zone_name, _label)
+                log.info("  %s/%s: deleted", zp.zone_name, _label, extra={"color": "success"})
 
             tasks.append((full_label, del_fn))
         return tasks
@@ -293,7 +307,7 @@ def _apply_single_zone(
     Phases within a zone are applied in parallel when max_workers > 1.
     ProviderAuthError propagates immediately.
     """
-    log.info("Syncing %s", zp.zone_name)
+    log.info("Syncing %s", zp.zone_name, extra={"color": "header"})
 
     # Apply lists first (rules reference lists via $list_name)
     all_synced: list[str] = []
@@ -348,7 +362,7 @@ def _apply_single_zone(
                 len(_payload),
             )
             provider.put_phase_rules(scope, _phase.provider_id, _payload)
-            log.info("  %s/%s: done", zp.zone_name, _label)
+            log.info("  %s/%s: done", zp.zone_name, _label, extra={"color": "success"})
 
         tasks.append((full_label, fn))
 
@@ -379,7 +393,7 @@ def _apply_zone_changes(
 ) -> tuple[int, list[SyncResult]]:
     """Apply planned changes to provider. Returns (exit_code, sync_results)."""
     total = len(actionable)
-    log.info("Applying changes to %d zone(s)...", total)
+    log.info("Applying changes to %d zone(s)...", total, extra={"color": "header"})
 
     # Build list of (zone_plan, desired, scope, provider) to apply
     to_apply: list[tuple[ZonePlan, dict, Scope, BaseProvider]] = []
@@ -412,7 +426,7 @@ def _apply_zone_changes(
         to_apply.append((zp, desired_by_zone[zp.plan_key], scope, prov))
 
     if not to_apply:
-        log.info("Done.")
+        log.info("Done.", extra={"color": "success"})
         return 0, []
 
     # Apply zones in parallel, phases within each zone sequentially
@@ -458,7 +472,7 @@ def _apply_zone_changes(
             log.error("Successfully synced before failure: %s", ", ".join(all_synced))
         return 1, sync_results
 
-    log.info("Done.")
+    log.info("Done.", extra={"color": "success"})
     return 0, sync_results
 
 
@@ -496,28 +510,31 @@ def _cmd_sync_inner(
     executor: ThreadPoolExecutor | None,
     processors: dict[str, BaseProcessor] | None = None,
     audit_log: str | None = None,
-) -> int:
-    """Inner sync logic using an optional shared executor."""
+) -> tuple[int, list[SyncResult]]:
+    """Inner sync logic using an optional shared executor.
+
+    Returns ``(exit_code, sync_results)``.
+    """
     r = _plan_all_scopes(
         config, providers, zone_filter, phase_filter, scope_filter, executor, processors
     )
 
     if r.failed:
         log.error("Aborting sync: failed to plan %d zone(s)", len(r.failed))
-        return 1
+        return 1, []
 
     if not _emit_plan_outputs(config, r.zone_plans):
-        return 1
+        return 1, []
 
     has_changes = any(zp.has_changes for zp in r.zone_plans)
     if not has_changes:
-        return 0
+        return 0, []
 
     if checksum:
         actual = compute_checksum(r.zone_plans)
         if actual != checksum:
             log.error("Checksum mismatch: expected %s, got %s", checksum, actual)
-            return 1
+            return 1, []
 
     if not force:
         violations = _check_safety_violations(
@@ -525,7 +542,7 @@ def _cmd_sync_inner(
         )
         if violations:
             _log_safety_violations(violations)
-            return 1
+            return 1, []
 
     actionable = [zp for zp in r.zone_plans if zp.has_changes]
     exit_code, sync_results = _apply_zone_changes(
@@ -539,7 +556,25 @@ def _cmd_sync_inner(
     )
     if audit_log and sync_results:
         _write_audit_log(audit_log, sync_results)
-    return exit_code
+    return exit_code, sync_results
+
+
+def _format_sync_results_json(results: list[SyncResult]) -> str:
+    """Format sync results as JSON for ``--format json``."""
+    import json as _json
+
+    data = [
+        {
+            "zone": r.zone_name,
+            "target": r.target,
+            "synced": r.synced,
+            "total_changes": r.total_changes,
+            "status": "error" if r.error else "ok",
+            "error": r.error,
+        }
+        for r in results
+    ]
+    return _json.dumps(data, indent=2)
 
 
 def cmd_sync(
@@ -550,6 +585,7 @@ def cmd_sync(
     force: bool = False,
     scope_filter: str = "all",
     audit_log: str | None = None,
+    sync_format: str = "text",
 ) -> int:
     """Run the sync command. Returns exit code."""
     if checksum is not None and not _CHECKSUM_RE.match(checksum):
@@ -564,7 +600,7 @@ def cmd_sync(
     if config.max_workers > 1:
         shared_ex = ThreadPoolExecutor(max_workers=config.max_workers)
     try:
-        return _cmd_sync_inner(
+        exit_code, sync_results = _cmd_sync_inner(
             config,
             providers,
             zone_filter,
@@ -576,6 +612,9 @@ def cmd_sync(
             processors,
             audit_log=audit_log,
         )
+        if sync_format == "json" and sync_results:
+            print(_format_sync_results_json(sync_results))
+        return exit_code
     finally:
         if shared_ex is not None:
             shared_ex.shutdown(wait=True)

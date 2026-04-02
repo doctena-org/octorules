@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Pre-commit hook: check baked-in CDN ranges are not stale.
+# Pre-commit hook: lint + format check + CDN ranges staleness check.
 #
 # Install: from the repo root, run:
 #   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 set -euo pipefail
 
+.venv/bin/ruff check
+.venv/bin/ruff format --check
 .venv/bin/python scripts/sync_cdn_ranges.py --check

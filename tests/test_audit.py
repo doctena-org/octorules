@@ -322,6 +322,18 @@ class TestCDNParsers:
         assert _parse_cloudflare_ips({}) == []
         assert _parse_cloudflare_ips("not a dict") == []
 
+    def test_cloudflare_parser_warns_on_non_dict(self, caplog):
+        _parse_cloudflare_ips("not a dict")
+        assert "expected dict" in caplog.text
+
+    def test_cloudflare_parser_warns_on_bad_result(self, caplog):
+        _parse_cloudflare_ips({"result": "not a dict"})
+        assert "'result' is" in caplog.text
+
+    def test_cloudflare_parser_warns_on_empty_result(self, caplog):
+        _parse_cloudflare_ips({"result": {}})
+        assert "no CIDRs found" in caplog.text
+
     def test_aws_parser(self):
         data = {
             "prefixes": [
@@ -341,6 +353,14 @@ class TestCDNParsers:
         assert _parse_aws_cloudfront_ips({}) == []
         assert _parse_aws_cloudfront_ips("not a dict") == []
 
+    def test_aws_parser_warns_on_non_dict(self, caplog):
+        _parse_aws_cloudfront_ips("not a dict")
+        assert "expected dict" in caplog.text
+
+    def test_aws_parser_warns_on_no_cloudfront(self, caplog):
+        _parse_aws_cloudfront_ips({"prefixes": [{"service": "EC2", "ip_prefix": "1.2.3.0/24"}]})
+        assert "no CloudFront CIDRs" in caplog.text
+
     def test_google_parser(self):
         data = {"prefixes": [{"ipv4Prefix": "8.8.8.0/24"}, {"ipv6Prefix": "2001:4860::/32"}]}
         cidrs = _parse_google_cloud_ips(data)
@@ -350,6 +370,14 @@ class TestCDNParsers:
     def test_google_parser_bad_data(self):
         assert _parse_google_cloud_ips({}) == []
         assert _parse_google_cloud_ips("not a dict") == []
+
+    def test_google_parser_warns_on_non_dict(self, caplog):
+        _parse_google_cloud_ips("not a dict")
+        assert "expected dict" in caplog.text
+
+    def test_google_parser_warns_on_empty_prefixes(self, caplog):
+        _parse_google_cloud_ips({"prefixes": []})
+        assert "no CIDRs found" in caplog.text
 
 
 # ---------------------------------------------------------------------------
