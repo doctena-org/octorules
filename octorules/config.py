@@ -57,6 +57,16 @@ def _make_include_loader(base_path: Path, visited: set[Path]) -> type:
         def construct_yaml_map(self, node) -> Iterator[ContextDict]:
             mark = node.start_mark
             ctx = f"{Path(mark.name).name}:{mark.line + 1}" if mark and mark.name else ""
+            # CORE001: Detect duplicate YAML keys before constructing the map.
+            seen_keys: set[str] = set()
+            for key_node, _value_node in node.value:
+                key = self.construct_object(key_node, deep=False)
+                if isinstance(key, str) and key in seen_keys:
+                    key_mark = key_node.start_mark
+                    loc = f"{Path(key_mark.name).name}:{key_mark.line + 1}" if key_mark else ctx
+                    raise ConfigError(f"Duplicate YAML key {key!r} at {loc}")
+                if isinstance(key, str):
+                    seen_keys.add(key)
             data = ContextDict(context=ctx)
             yield data
             value = self.construct_mapping(node)
@@ -194,6 +204,14 @@ def _validate_safety(
         )
     if min_existing < 0:
         raise ConfigError(f"'{context}.min_existing' must be >= 0 (got {min_existing})")
+    if delete_threshold < update_threshold:
+        log.warning(
+            "%s.delete_threshold (%.1f) < update_threshold (%.1f)"
+            " — deletes are less restricted than updates, which is unusual",
+            context,
+            delete_threshold,
+            update_threshold,
+        )
 
 
 @dataclass
@@ -831,13 +849,22 @@ def resolve_zone_ids(
                 raise ConfigError(f"Zone {name!r} has no target provider; cannot resolve zone ID")
 
     workers = max_workers if max_workers is not None else config.max_workers
+
+    def _resolve_one(zone_name: str) -> str:
+        try:
+            return per_zone_fn[zone_name](zone_name)
+        except ConfigError:
+            raise
+        except Exception as e:
+            raise ConfigError(f"Failed to resolve zone {zone_name!r}: {e}") from e
+
     if workers <= 1 or len(to_resolve) <= 1:
         for zone_name, zone_cfg in to_resolve.items():
-            zone_cfg.zone_id = per_zone_fn[zone_name](zone_name)
+            zone_cfg.zone_id = _resolve_one(zone_name)
         return
 
     with ThreadPoolExecutor(max_workers=min(workers, len(to_resolve))) as executor:
-        futures = {executor.submit(per_zone_fn[name], name): name for name in to_resolve}
+        futures = {executor.submit(_resolve_one, name): name for name in to_resolve}
         for future in as_completed(futures):
             zone_name = futures[future]
             to_resolve[zone_name].zone_id = future.result()

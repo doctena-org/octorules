@@ -161,6 +161,8 @@ def _plan_zones(
     current_by_zone: dict[str, dict] = {}
     failed_zones: list[str] = []
 
+    log.info("Planning %d zone(s)...", len(zone_names), extra={"color": "header"})
+
     # Build work items: (zone_name, display_target, target_name, provider)
     work_items: list[tuple[str, str | None, str, BaseProvider]] = []
     for zn in zone_names:
@@ -473,6 +475,23 @@ def _cmd_plan_or_compare(
 
     if not _emit_plan_outputs(config, r.zone_plans):
         return 1
+
+    # Rule count context: how many total rules exist vs how many changed.
+    total_changes = sum(zp.total_changes for zp in r.zone_plans)
+    if total_changes > 0:
+        total_rules = sum(
+            len(rules)
+            for desired in r.desired_by_zone.values()
+            for rules in desired.values()
+            if isinstance(rules, list)
+        )
+        if total_rules > total_changes:
+            log.info(
+                "%d of %d rule(s) changed, %d unchanged.",
+                total_changes,
+                total_rules,
+                total_rules - total_changes,
+            )
 
     if checksum:
         log.info("checksum=%s", compute_checksum(r.zone_plans))

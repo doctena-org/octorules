@@ -205,11 +205,15 @@ def check_catch_all(
         )
 
 
+# Core rule IDs (provider-agnostic, always available).
+CORE_RULE_IDS: frozenset[str] = frozenset({"CORE002", "CORE003", "CORE004", "CORE006"})
+
+
 def get_known_rule_ids() -> frozenset[str]:
-    """Return the union of all rule IDs from registered lint plugins."""
+    """Return the union of all rule IDs from registered lint plugins + core rules."""
     from octorules.linter.plugin import get_registered_plugins
 
-    ids: set[str] = set()
+    ids: set[str] = set(CORE_RULE_IDS)
     for plugin in get_registered_plugins():
         ids |= plugin.rule_ids
     return frozenset(ids)

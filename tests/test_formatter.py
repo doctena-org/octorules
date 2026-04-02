@@ -5,13 +5,10 @@ from __future__ import annotations
 import io
 import json
 
+from octorules._color import _GREEN, _RESET, Pen, supports_color
 from octorules.formatter import (
-    GREEN,
-    RESET,
     _change_to_dict,
-    _color,
     _rule_detail_pairs,
-    _supports_color,
     build_report_data,
     format_change,
     format_phase_plan,
@@ -37,18 +34,20 @@ CACHE_PHASE = get_phase("cache_rules")
 
 
 class TestColor:
-    def test_color_enabled(self):
-        result = _color("hello", GREEN, use_color=True)
-        assert result == f"{GREEN}hello{RESET}"
+    """Basic Pen and supports_color tests (comprehensive tests in test_color.py)."""
 
-    def test_color_disabled(self):
-        result = _color("hello", GREEN, use_color=False)
+    def test_pen_color_enabled(self):
+        p = Pen(use_color=True)
+        result = p.success("hello")
+        assert result == f"{_GREEN}hello{_RESET}"
+
+    def test_pen_color_disabled(self):
+        p = Pen(use_color=False)
+        result = p.success("hello")
         assert result == "hello"
 
-    def test_supports_color_on_stringio(self):
-        # StringIO is not a tty, so _supports_color should return False
-        # when stdout is replaced
-        assert isinstance(_supports_color(), bool)
+    def test_supports_color_returns_bool(self):
+        assert isinstance(supports_color(), bool)
 
 
 class TestFormatChange:
@@ -117,8 +116,8 @@ class TestFormatChange:
         change = RuleChange(ChangeType.ADD, "my-rule", REDIRECT_PHASE)
         lines = format_change(change, use_color=True)
         combined = "\n".join(lines)
-        assert GREEN in combined
-        assert RESET in combined
+        assert _GREEN in combined
+        assert _RESET in combined
         assert "my-rule" in combined
 
 
@@ -151,6 +150,90 @@ class TestFormatPhasePlan:
         )
         lines = format_phase_plan(phase_plan, use_color=False)
         assert any("http_request_dynamic_redirect" in line for line in lines)
+
+
+class TestFormatCustomRulesetPlan:
+    def test_create(self):
+        from octorules.formatter import format_custom_ruleset_plan
+        from octorules.planner import CustomRulesetPlan
+
+        crp = CustomRulesetPlan(
+            ruleset_id="rs-1",
+            ruleset_name="BlockBots",
+            phase="redirect_rules",
+            create=True,
+        )
+        lines = format_custom_ruleset_plan(crp, use_color=False)
+        combined = "\n".join(lines)
+        assert "BlockBots" in combined
+        assert "create rule group" in combined
+
+    def test_delete(self):
+        from octorules.formatter import format_custom_ruleset_plan
+        from octorules.planner import CustomRulesetPlan
+
+        crp = CustomRulesetPlan(
+            ruleset_id="rs-1",
+            ruleset_name="OldRules",
+            phase="redirect_rules",
+            delete=True,
+        )
+        lines = format_custom_ruleset_plan(crp, use_color=False)
+        combined = "\n".join(lines)
+        assert "OldRules" in combined
+        assert "delete rule group" in combined
+
+    def test_with_changes(self):
+        from octorules.formatter import format_custom_ruleset_plan
+        from octorules.planner import CustomRulesetPlan
+
+        crp = CustomRulesetPlan(
+            ruleset_id="rs-1",
+            ruleset_name="MyRules",
+            phase="redirect_rules",
+            changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+        )
+        lines = format_custom_ruleset_plan(crp, use_color=False)
+        combined = "\n".join(lines)
+        assert "MyRules" in combined
+        assert "r1" in combined
+
+
+class TestFormatListPlan:
+    def test_create(self):
+        from octorules.formatter import format_list_plan
+        from octorules.planner import ListPlan
+
+        lp = ListPlan(list_name="blocklist", list_kind="ip", create=True)
+        lines = format_list_plan(lp, use_color=False)
+        combined = "\n".join(lines)
+        assert "blocklist" in combined
+        assert "create list" in combined
+
+    def test_delete(self):
+        from octorules.formatter import format_list_plan
+        from octorules.planner import ListPlan
+
+        lp = ListPlan(list_name="old_list", list_kind="ip", delete=True)
+        lines = format_list_plan(lp, use_color=False)
+        combined = "\n".join(lines)
+        assert "old_list" in combined
+        assert "delete list" in combined
+
+    def test_description_change(self):
+        from octorules.formatter import format_list_plan
+        from octorules.planner import ListPlan
+
+        lp = ListPlan(
+            list_name="mylist",
+            list_kind="ip",
+            description_change=("old desc", "new desc"),
+        )
+        lines = format_list_plan(lp, use_color=False)
+        combined = "\n".join(lines)
+        assert "description" in combined
+        assert "old desc" in combined
+        assert "new desc" in combined
 
 
 class TestFormatZonePlan:

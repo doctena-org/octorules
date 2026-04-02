@@ -908,6 +908,90 @@ class TestSafetyThresholds:
             Config.from_file(config_file)
 
 
+class TestDuplicateYamlKeys:
+    """CORE001: Duplicate YAML keys raise ConfigError."""
+
+    def test_duplicate_top_level_key_raises(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: env/CF_TOKEN\n"
+            "rules:\n"
+            "  directory: ./rules\n"
+            "rules:\n"
+            "  directory: ./other\n"
+        )
+        with pytest.raises(ConfigError, match="Duplicate YAML key 'rules'"):
+            Config.from_file(config_file)
+
+    def test_duplicate_key_in_zone_raises(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        rules_file = rules_dir / "example.com.yaml"
+        rules_file.write_text(
+            "redirect_rules:\n"
+            "  - ref: r1\n"
+            "    expression: 'true'\n"
+            "redirect_rules:\n"
+            "  - ref: r2\n"
+            "    expression: 'false'\n"
+        )
+        config = Config(rules_dir=rules_dir, zones={"example.com": ZoneConfig(name="example.com")})
+        with pytest.raises(ConfigError, match="Duplicate YAML key 'redirect_rules'"):
+            config.load_zone_rules("example.com")
+
+    def test_no_duplicate_keys_ok(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg())
+        Config.from_file(config_file)  # Should not raise
+
+    def test_nested_duplicate_key_raises(self, tmp_path):
+        """Duplicate keys inside a nested mapping are also caught."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: env/CF_TOKEN\n"
+            "    token: env/CF_TOKEN2\n"
+            "rules:\n"
+            "  directory: ./rules\n"
+        )
+        with pytest.raises(ConfigError, match="Duplicate YAML key 'token'"):
+            Config.from_file(config_file)
+
+
+class TestSafetyThresholdSanity:
+    """CORE005: Warn when delete_threshold < update_threshold."""
+
+    def test_inverted_thresholds_warns(self, tmp_path, caplog):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(extra_cf="    safety:\n      delete_threshold: 10\n      update_threshold: 50\n")
+        )
+        Config.from_file(config_file)
+        assert "delete_threshold" in caplog.text
+        assert "less restricted" in caplog.text
+
+    def test_zone_level_inverted_thresholds_warns(self, tmp_path, caplog):
+        """CORE005 also fires for zone-level safety thresholds."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(extra_zone="    safety:\n      delete_threshold: 5\n      update_threshold: 40\n")
+        )
+        Config.from_file(config_file)
+        assert "delete_threshold" in caplog.text
+        assert "less restricted" in caplog.text
+
+    def test_equal_thresholds_no_warning(self, tmp_path, caplog):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(extra_cf="    safety:\n      delete_threshold: 30\n      update_threshold: 30\n")
+        )
+        Config.from_file(config_file)
+        assert "less restricted" not in caplog.text
+
+
 class TestManagerSection:
     def test_manager_non_dict_raises(self, tmp_path):
         """Non-mapping manager value should raise ConfigError."""
@@ -1032,6 +1116,37 @@ class TestResolveZoneIds:
         assert config.zones["a.com"].zone_id == "id-for-a.com"
         assert config.zones["b.com"].zone_id == "id-for-b.com"
         assert config.zones["c.com"].zone_id == "id-for-c.com"
+
+    def test_non_config_error_wrapped(self):
+        """Non-ConfigError exceptions from resolve_fn are wrapped with zone context."""
+        config = Config(
+            rules_dir="/tmp/rules",
+            zones={"fail.com": ZoneConfig(name="fail.com")},
+        )
+
+        def explode(name):
+            raise RuntimeError("connection refused")
+
+        with pytest.raises(ConfigError, match="Failed to resolve zone 'fail.com'"):
+            resolve_zone_ids(config, explode)
+
+    def test_non_config_error_wrapped_parallel(self):
+        """Non-ConfigError wrapping also works in the parallel path."""
+        config = Config(
+            rules_dir="/tmp/rules",
+            zones={
+                "ok.com": ZoneConfig(name="ok.com"),
+                "fail.com": ZoneConfig(name="fail.com"),
+            },
+        )
+
+        def maybe_explode(name):
+            if name == "fail.com":
+                raise ConnectionError("timeout")
+            return f"id-for-{name}"
+
+        with pytest.raises(ConfigError, match="Failed to resolve zone 'fail.com'"):
+            resolve_zone_ids(config, maybe_explode, max_workers=2)
 
 
 class TestPlanOutputs:

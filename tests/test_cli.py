@@ -2484,6 +2484,42 @@ class TestAuthErrorPropagation:
         assert "Successfully synced before failure" not in caplog.text
 
     @patch("octorules.commands._providers._init_providers")
+    def test_sync_auth_error_multi_zone_stops_remaining(
+        self, mock_init_provs, sample_config, caplog
+    ):
+        """Auth error on second zone stops sync and returns 1.
+
+        Two zones have changes; the first syncs successfully, the second
+        raises ProviderAuthError.  The overall result must be 1 and the
+        error must be logged.
+        """
+        mock_prov = MagicMock()
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        from octorules.provider.exceptions import ProviderAuthError
+
+        # Both zones have rules so both will have changes
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        (sample_config.rules_dir / "other.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+        )
+        mock_prov.get_all_phase_rules.return_value = {}
+
+        put_calls: list[str] = []
+
+        def put_side_effect(scope, phase_id, payload):
+            put_calls.append(scope.label)
+            if scope.label == "other.com":
+                raise ProviderAuthError("Token revoked")
+
+        mock_prov.put_phase_rules.side_effect = put_side_effect
+        with caplog.at_level(logging.ERROR, logger="octorules"):
+            result = cmd_sync(sample_config, None)
+        assert result == 1
+        assert "Authentication/permission error" in caplog.text
+
+    @patch("octorules.commands._providers._init_providers")
     def test_dump_auth_error_propagates(self, mock_init_provs, sample_config):
         """ProviderAuthError during dump should propagate, not be caught per-zone."""
         mock_prov = MagicMock()
@@ -3726,3 +3762,293 @@ class TestQuietFlag:
             assert capsys.readouterr().out == ""
         finally:
             set_quiet(False)
+
+
+# ---------------------------------------------------------------------------
+# Exit code summary + timing (#1, #2)
+# ---------------------------------------------------------------------------
+
+
+class TestExitSummary:
+    """Exit code summary and timing printed to stderr."""
+
+    @patch("octorules.cli.cmd_plan", return_value=0)
+    @patch("octorules.cli.Config.from_file")
+    def test_plan_exit_0_summary(self, mock_config, mock_cmd, tmp_config, capsys):
+        mock_config.return_value = MagicMock()
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", str(tmp_config), "plan"])
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        assert "octorules plan: exit 0 (success)" in err
+
+    @patch("octorules.cli.cmd_plan", return_value=2)
+    @patch("octorules.cli.Config.from_file")
+    def test_plan_exit_2_summary(self, mock_config, mock_cmd, tmp_config, capsys):
+        mock_config.return_value = MagicMock()
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", str(tmp_config), "plan", "--exit-code"])
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "exit 2 (changes detected)" in err
+
+    @patch("octorules.cli.cmd_plan", return_value=0)
+    @patch("octorules.cli.Config.from_file")
+    def test_timing_appears_in_stderr(self, mock_config, mock_cmd, tmp_config, capsys):
+        mock_config.return_value = MagicMock()
+        with pytest.raises(SystemExit):
+            main(["--config", str(tmp_config), "plan"])
+        err = capsys.readouterr().err
+        # Timing like "0.0s" should appear
+        assert "s" in err
+
+    def test_config_error_exit_summary(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", "/nonexistent/config.yaml", "plan"])
+        assert exc_info.value.code == 1
+        err = capsys.readouterr().err
+        assert "exit 1 (error)" in err
+
+
+# ---------------------------------------------------------------------------
+# Lint summary format (#4)
+# ---------------------------------------------------------------------------
+
+
+class TestLintSummaryFormat:
+    """Tests for --format summary."""
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_summary_format_counts_only(self, mock_init_provs, sample_config, capsys):
+        mock_prov = MagicMock()
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        # Create a rules file with content so lint runs
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        cmd_lint(sample_config, ["example.com"], lint_format="summary")
+        out = capsys.readouterr().out
+        # Summary format should be concise — zone name + counts or "clean"
+        assert "example.com" in out
+
+    def test_summary_formatter_output(self):
+        from octorules.linter.engine import LintContext, LintResult, Severity
+        from octorules.linter.report import format_summary
+
+        ctx = LintContext(zone_name="test.com")
+        ctx.results = [
+            LintResult(rule_id="CF001", severity=Severity.ERROR, message="err"),
+            LintResult(rule_id="CF002", severity=Severity.WARNING, message="warn"),
+            LintResult(rule_id="CF003", severity=Severity.WARNING, message="warn2"),
+        ]
+        output = format_summary(ctx)
+        assert "1 error(s)" in output
+        assert "2 warning(s)" in output
+        assert "test.com" in output
+
+    def test_summary_formatter_clean(self):
+        from octorules.linter.engine import LintContext
+        from octorules.linter.report import format_summary
+
+        ctx = LintContext(zone_name="clean.com")
+        output = format_summary(ctx)
+        assert "clean" in output
+
+    def test_audit_summary_format(self):
+        from octorules.audit import AuditFinding, FindingSeverity, format_findings_summary
+
+        findings = [
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="a"),
+            AuditFinding(check="ip-overlap", severity=FindingSeverity.WARNING, message="b"),
+            AuditFinding(check="cdn-ranges", severity=FindingSeverity.ERROR, message="c"),
+        ]
+        output = format_findings_summary(findings)
+        assert "ip-overlap: 2" in output
+        assert "cdn-ranges: 1" in output
+
+
+# ---------------------------------------------------------------------------
+# Plugin usage tracking in lint
+# ---------------------------------------------------------------------------
+
+
+class TestLintPluginUsage:
+    """Lint plugins are labeled as 'unused' when they produce no results."""
+
+    @patch("octorules.linter.plugin.get_registered_plugins")
+    def test_plugin_with_results_not_labeled_unused(self, mock_get_plugins, sample_config, caplog):
+        """A plugin that produces results is not labeled 'unused'."""
+        from octorules.linter.engine import LintResult, Severity
+        from octorules.linter.plugin import LintPlugin
+
+        def fake_lint(rules_data, ctx):
+            ctx.add(LintResult(rule_id="FK001", severity=Severity.WARNING, message="test"))
+
+        mock_get_plugins.return_value = [
+            LintPlugin(name="fakeprovider", lint_fn=fake_lint, rule_ids=frozenset({"FK001"}))
+        ]
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            cmd_lint(sample_config, ["example.com"])
+        plugin_lines = [r for r in caplog.records if "Lint plugins:" in r.message]
+        assert len(plugin_lines) == 1
+        assert "fakeprovider" in plugin_lines[0].message
+        assert "(unused)" not in plugin_lines[0].message
+
+    @patch("octorules.linter.plugin.get_registered_plugins")
+    def test_plugin_with_no_matching_phases_labeled_unused(
+        self, mock_get_plugins, sample_config, caplog
+    ):
+        """A plugin that matches no phases is labeled (unused)."""
+        from octorules.linter.plugin import LintPlugin
+
+        # Register a fake plugin with rule IDs that won't match any rules
+        fake_plugin = LintPlugin(
+            name="fakeprovider",
+            lint_fn=lambda rules_data, ctx: None,
+            rule_ids=frozenset({"FP001"}),
+        )
+        mock_get_plugins.return_value = [fake_plugin]
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            cmd_lint(sample_config, ["example.com"])
+        plugin_lines = [r for r in caplog.records if "Lint plugins:" in r.message]
+        assert len(plugin_lines) == 1
+        assert "fakeprovider (unused)" in plugin_lines[0].message
+
+    @patch("octorules.linter.plugin.get_registered_plugins")
+    def test_no_plugins_no_plugin_line(self, mock_get_plugins, sample_config, caplog):
+        """When no plugins are registered, no plugin line is logged."""
+        mock_get_plugins.return_value = []
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            cmd_lint(sample_config, ["example.com"])
+        plugin_lines = [r for r in caplog.records if "Lint plugins:" in r.message]
+        assert len(plugin_lines) == 0
+
+
+# ---------------------------------------------------------------------------
+# --config-only validate (#8)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigOnlyValidate:
+    @patch("octorules.cli.Config.from_file")
+    def test_config_only_exits_0(self, mock_config, tmp_config, caplog):
+        mock_config.return_value = MagicMock()
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            with pytest.raises(SystemExit) as exc_info:
+                main(["--config", str(tmp_config), "validate", "--config-only"])
+        assert exc_info.value.code == 0
+        assert "Config valid" in caplog.text
+
+    def test_config_only_invalid_exits_1(self):
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", "/nonexistent/config.yaml", "validate", "--config-only"])
+        assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# --format json for sync (#9)
+# ---------------------------------------------------------------------------
+
+
+class TestSyncJsonFormat:
+    def test_format_sync_results_json(self):
+        from octorules.commands._sync import SyncResult, _format_sync_results_json
+
+        results = [
+            SyncResult(
+                zone_name="a.com",
+                target=None,
+                synced=["redirect_rules"],
+                error=None,
+                total_changes=1,
+            ),
+            SyncResult(
+                zone_name="b.com",
+                target="aws",
+                synced=[],
+                error="timeout",
+                total_changes=2,
+            ),
+        ]
+        import json
+
+        output = _format_sync_results_json(results)
+        data = json.loads(output)
+        assert len(data) == 2
+        assert data[0]["zone"] == "a.com"
+        assert data[0]["status"] == "ok"
+        assert data[1]["status"] == "error"
+        assert data[1]["error"] == "timeout"
+
+
+# ---------------------------------------------------------------------------
+# argcomplete integration (#6)
+# ---------------------------------------------------------------------------
+
+
+class TestArgcomplete:
+    def test_parser_has_all_subcommands(self):
+        from octorules.cli import build_parser
+
+        parser = build_parser()
+        subparsers_actions = [
+            a for a in parser._subparsers._actions if isinstance(a, argparse._SubParsersAction)
+        ]
+        assert len(subparsers_actions) == 1
+        choices = set(subparsers_actions[0].choices.keys())
+        expected = {
+            "plan",
+            "sync",
+            "validate",
+            "dump",
+            "compare",
+            "report",
+            "lint",
+            "audit",
+            "versions",
+            "completion",
+        }
+        assert expected <= choices
+
+    def test_completion_bash(self, capsys):
+        """octorules completion bash produces bash script."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["completion", "bash"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "octorules" in out
+        assert len(out) > 50
+
+    def test_completion_zsh(self, capsys):
+        """octorules completion zsh produces zsh script."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["completion", "zsh"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "octorules" in out
+        assert len(out) > 50
+
+    def test_completion_tcsh(self, capsys):
+        """octorules completion tcsh produces tcsh script."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["completion", "tcsh"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "octorules" in out
+
+    def test_completion_default_is_bash(self, capsys):
+        """octorules completion with no arg defaults to bash."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["completion"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "octorules" in out

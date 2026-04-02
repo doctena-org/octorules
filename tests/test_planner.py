@@ -2192,3 +2192,118 @@ class TestLargeRulesetReorderPerformance:
         assert not any(c.change_type == ChangeType.ADD for c in changes)
         assert not any(c.change_type == ChangeType.REMOVE for c in changes)
         assert not any(c.change_type == ChangeType.MODIFY for c in changes)
+
+
+# ---------------------------------------------------------------------------
+# count_change_types
+# ---------------------------------------------------------------------------
+
+
+class TestCountChangeTypes:
+    """Tests for count_change_types — tally logic for safety thresholds."""
+
+    def test_empty(self):
+        from octorules.planner import count_change_types
+
+        assert count_change_types([]) == (0, 0, 0)
+
+    def test_all_types(self):
+        from octorules.planner import count_change_types
+
+        changes = [
+            RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE),
+            RuleChange(ChangeType.REMOVE, "r2", REDIRECT_PHASE),
+            RuleChange(ChangeType.MODIFY, "r3", REDIRECT_PHASE),
+            RuleChange(ChangeType.ADD, "r4", REDIRECT_PHASE),
+        ]
+        adds, removes, modifies = count_change_types(changes)
+        assert (adds, removes, modifies) == (2, 1, 1)
+
+    def test_extra_creates_and_removes(self):
+        from octorules.planner import count_change_types
+
+        changes = [RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)]
+        adds, removes, modifies = count_change_types(changes, extra_creates=3, extra_removes=2)
+        assert (adds, removes, modifies) == (4, 2, 0)
+
+    def test_reorder_not_counted(self):
+        from octorules.planner import count_change_types
+
+        changes = [RuleChange(ChangeType.REORDER, "", REDIRECT_PHASE)]
+        assert count_change_types(changes) == (0, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# _validate_octorules_meta
+# ---------------------------------------------------------------------------
+
+
+class TestValidateOctorulesMeta:
+    """Tests for octorules: metadata validation."""
+
+    def test_included_and_excluded_raises(self):
+        from octorules.planner import _validate_octorules_meta
+
+        rule = {
+            "ref": "r1",
+            "octorules": {"included": ["a"], "excluded": ["b"]},
+        }
+        with pytest.raises(RuleValidationError, match="mutually exclusive"):
+            _validate_octorules_meta(rule, "r1")
+
+    def test_included_only_ok(self):
+        from octorules.planner import _validate_octorules_meta
+
+        _validate_octorules_meta({"ref": "r1", "octorules": {"included": ["a"]}}, "r1")
+
+    def test_excluded_only_ok(self):
+        from octorules.planner import _validate_octorules_meta
+
+        _validate_octorules_meta({"ref": "r1", "octorules": {"excluded": ["b"]}}, "r1")
+
+    def test_no_meta_ok(self):
+        from octorules.planner import _validate_octorules_meta
+
+        _validate_octorules_meta({"ref": "r1"}, "r1")
+
+    def test_non_dict_meta_ignored(self):
+        from octorules.planner import _validate_octorules_meta
+
+        _validate_octorules_meta({"ref": "r1", "octorules": "ignored"}, "r1")
+
+
+# ---------------------------------------------------------------------------
+# _require_field / _require_string_field
+# ---------------------------------------------------------------------------
+
+
+class TestRequireField:
+    """Tests for field validation helpers."""
+
+    def test_missing_field_raises(self):
+        from octorules.planner import _require_field
+
+        with pytest.raises(RuleValidationError, match="missing required"):
+            _require_field({}, "name", "context", str)
+
+    def test_wrong_type_raises(self):
+        from octorules.planner import _require_field
+
+        with pytest.raises(RuleValidationError, match="invalid"):
+            _require_field({"name": 123}, "name", "context", str)
+
+    def test_valid_returns_value(self):
+        from octorules.planner import _require_field
+
+        assert _require_field({"name": "hello"}, "name", "context", str) == "hello"
+
+    def test_string_field_empty_raises(self):
+        from octorules.planner import _require_string_field
+
+        with pytest.raises(RuleValidationError, match="non-empty"):
+            _require_string_field({"name": ""}, "name", "context")
+
+    def test_string_field_valid(self):
+        from octorules.planner import _require_string_field
+
+        assert _require_string_field({"name": "ok"}, "name", "context") == "ok"

@@ -134,21 +134,26 @@ def _fetch_json(url: str, timeout: int = 15) -> Any:
 def _parse_cloudflare_ips(data: dict) -> list[str]:
     """Extract CIDRs from Cloudflare /client/v4/ips response."""
     if not isinstance(data, dict):
+        log.warning("Cloudflare IP response: expected dict, got %s", type(data).__name__)
         return []
     result = data.get("result", {})
     if not isinstance(result, dict):
+        log.warning("Cloudflare IP response: 'result' is %s, expected dict", type(result).__name__)
         return []
     cidrs: list[str] = []
     for key in ("ipv4_cidrs", "ipv6_cidrs"):
         val = result.get(key)
         if isinstance(val, list):
             cidrs.extend(str(c) for c in val)
+    if not cidrs:
+        log.warning("Cloudflare IP response: no CIDRs found in 'result' (keys: %s)", list(result))
     return cidrs
 
 
 def _parse_aws_cloudfront_ips(data: dict) -> list[str]:
     """Extract CloudFront CIDRs from AWS ip-ranges.json."""
     if not isinstance(data, dict):
+        log.warning("AWS IP response: expected dict, got %s", type(data).__name__)
         return []
     cidrs: list[str] = []
     for prefix in data.get("prefixes", []):
@@ -161,12 +166,15 @@ def _parse_aws_cloudfront_ips(data: dict) -> list[str]:
             ip = prefix.get("ipv6_prefix")
             if ip:
                 cidrs.append(str(ip))
+    if not cidrs:
+        log.warning("AWS IP response: no CloudFront CIDRs found")
     return cidrs
 
 
 def _parse_google_cloud_ips(data: dict) -> list[str]:
     """Extract CIDRs from Google Cloud ip-ranges JSON."""
     if not isinstance(data, dict):
+        log.warning("Google Cloud IP response: expected dict, got %s", type(data).__name__)
         return []
     cidrs: list[str] = []
     for prefix in data.get("prefixes", []):
@@ -175,6 +183,8 @@ def _parse_google_cloud_ips(data: dict) -> list[str]:
                 ip = prefix.get(key)
                 if ip:
                     cidrs.append(str(ip))
+    if not cidrs:
+        log.warning("Google Cloud IP response: no CIDRs found in 'prefixes'")
     return cidrs
 
 
@@ -533,10 +543,18 @@ def check_zone_drift(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
 # ---------------------------------------------------------------------------
 
 
+_FINDING_SEVERITY_PEN_METHOD = {
+    FindingSeverity.ERROR: "error",
+    FindingSeverity.WARNING: "warning",
+    FindingSeverity.INFO: "info",
+}
+
+
 def format_findings(
     findings: list[AuditFinding],
     *,
     min_severity: FindingSeverity = FindingSeverity.INFO,
+    use_color: bool = False,
 ) -> str:
     """Format findings as human-readable text.
 
@@ -544,6 +562,9 @@ def format_findings(
     findings are omitted).  The caller is responsible for using the
     unfiltered list for exit-code decisions.
     """
+    from octorules._color import Pen
+
+    p = Pen(use_color)
     max_rank = _SEVERITY_RANK[min_severity]
     filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
     if not filtered:
@@ -558,12 +579,14 @@ def format_findings(
         check_findings = by_check.get(check, [])
         if not check_findings:
             continue
-        lines.append(f"\n[{check}] {len(check_findings)} finding(s):")
+        lines.append(p.header(f"\n[{check}] {len(check_findings)} finding(s):"))
         for f in check_findings:
             # Use lowercase "warning:" instead of "[WARNING]" to avoid
             # GitHub Actions interpreting bracketed severity as annotations
             # (which mangles the output into "Warning: G]").
-            prefix = f"  {f.severity.value}:"
+            method = _FINDING_SEVERITY_PEN_METHOD[f.severity]
+            sev_label = getattr(p, method)(f"{f.severity.value}:")
+            prefix = f"  {sev_label}"
             if f.zone_name:
                 prefix += f" {f.zone_name}"
             lines.append(f"{prefix} {f.message}")
@@ -593,9 +616,28 @@ def format_findings_json(
     return _json.dumps(data, indent=2) + "\n"
 
 
+def format_findings_summary(
+    findings: list[AuditFinding],
+    *,
+    min_severity: FindingSeverity = FindingSeverity.INFO,
+    **_kwargs,
+) -> str:
+    """Format findings as a one-line summary (counts only)."""
+    max_rank = _SEVERITY_RANK[min_severity]
+    filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+    by_check: dict[str, int] = {}
+    for f in filtered:
+        by_check[f.check] = by_check.get(f.check, 0) + 1
+    if not by_check:
+        return ""
+    parts = [f"{check}: {count}" for check, count in sorted(by_check.items())]
+    return ", ".join(parts) + "\n"
+
+
 AUDIT_FORMATTERS: dict[str, Any] = {
     "text": format_findings,
     "json": format_findings_json,
+    "summary": format_findings_summary,
 }
 
 

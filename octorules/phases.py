@@ -8,9 +8,15 @@ mutated **in-place** so existing imports see updates.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from difflib import get_close_matches
+
+# Lock protecting all mutable registries in this module.  Under CPython the
+# import lock already serializes import-time registration, but the explicit
+# lock future-proofs against free-threaded builds (Python 3.13t+).
+_REGISTRY_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -57,14 +63,16 @@ def register_phase_alias(old: str, new: str) -> None:
 
     After registration, ``PHASE_BY_NAME[old]`` resolves to the same Phase as *new*.
     """
-    RENAMED_PHASES[old] = new
-    _rebuild_derived()
+    with _REGISTRY_LOCK:
+        RENAMED_PHASES[old] = new
+        _rebuild_derived()
 
 
 def unregister_phase_alias(old: str) -> None:
     """Remove a phase alias (for test teardown)."""
-    RENAMED_PHASES.pop(old, None)
-    _rebuild_derived()
+    with _REGISTRY_LOCK:
+        RENAMED_PHASES.pop(old, None)
+        _rebuild_derived()
 
 
 def _rebuild_derived() -> None:
@@ -106,41 +114,44 @@ _rebuild_derived()
 
 def register_phase(phase: Phase) -> None:
     """Register a new phase. Raises ValueError if the name or provider_id already exists."""
-    if phase.friendly_name in PHASE_BY_NAME:
-        raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
-    if phase.provider_id in PHASE_BY_PROVIDER_ID:
-        raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
-    PHASES.append(phase)
-    _rebuild_derived()
-
-
-def register_phases(phases: list[Phase]) -> None:
-    """Register multiple phases at once. Atomic: all succeed or none are added."""
-    # Validate all first
-    for phase in phases:
+    with _REGISTRY_LOCK:
         if phase.friendly_name in PHASE_BY_NAME:
             raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
         if phase.provider_id in PHASE_BY_PROVIDER_ID:
             raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
-    # Check for duplicates within the batch
-    names = [p.friendly_name for p in phases]
-    provider_ids = [p.provider_id for p in phases]
-    if len(set(names)) != len(names):
-        raise ValueError("Duplicate friendly_name in batch")
-    if len(set(provider_ids)) != len(provider_ids):
-        raise ValueError("Duplicate provider_id in batch")
-    PHASES.extend(phases)
-    _rebuild_derived()
+        PHASES.append(phase)
+        _rebuild_derived()
+
+
+def register_phases(phases: list[Phase]) -> None:
+    """Register multiple phases at once. Atomic: all succeed or none are added."""
+    with _REGISTRY_LOCK:
+        # Validate all first
+        for phase in phases:
+            if phase.friendly_name in PHASE_BY_NAME:
+                raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
+            if phase.provider_id in PHASE_BY_PROVIDER_ID:
+                raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
+        # Check for duplicates within the batch
+        names = [p.friendly_name for p in phases]
+        provider_ids = [p.provider_id for p in phases]
+        if len(set(names)) != len(names):
+            raise ValueError("Duplicate friendly_name in batch")
+        if len(set(provider_ids)) != len(provider_ids):
+            raise ValueError("Duplicate provider_id in batch")
+        PHASES.extend(phases)
+        _rebuild_derived()
 
 
 def unregister_phase(friendly_name: str) -> None:
     """Remove a phase by friendly name. Raises KeyError if not found."""
-    if friendly_name not in PHASE_BY_NAME:
-        raise KeyError(f"Phase {friendly_name!r} is not registered")
-    if friendly_name in RENAMED_PHASES.values():
-        raise ValueError(f"Cannot unregister {friendly_name!r}: it has backward-compat aliases")
-    PHASES[:] = [p for p in PHASES if p.friendly_name != friendly_name]
-    _rebuild_derived()
+    with _REGISTRY_LOCK:
+        if friendly_name not in PHASE_BY_NAME:
+            raise KeyError(f"Phase {friendly_name!r} is not registered")
+        if friendly_name in RENAMED_PHASES.values():
+            raise ValueError(f"Cannot unregister {friendly_name!r}: it has backward-compat aliases")
+        PHASES[:] = [p for p in PHASES if p.friendly_name != friendly_name]
+        _rebuild_derived()
 
 
 # ---------------------------------------------------------------------------
@@ -155,12 +166,14 @@ KNOWN_NON_PHASE_KEYS: set[str] = set()
 
 def register_non_phase_key(key: str) -> None:
     """Register a top-level YAML key that is not a phase name."""
-    KNOWN_NON_PHASE_KEYS.add(key)
+    with _REGISTRY_LOCK:
+        KNOWN_NON_PHASE_KEYS.add(key)
 
 
 def unregister_non_phase_key(key: str) -> None:
     """Remove a non-phase key (for test teardown)."""
-    KNOWN_NON_PHASE_KEYS.discard(key)
+    with _REGISTRY_LOCK:
+        KNOWN_NON_PHASE_KEYS.discard(key)
 
 
 # ---------------------------------------------------------------------------
@@ -183,15 +196,17 @@ def register_api_fields(category: str, fields: set[str]) -> None:
 
     Categories: ``"rule"``, ``"list_item"``, ``"page_shield_policy"``.
     """
-    if category not in _api_fields:
-        raise ValueError(f"Unknown API field category {category!r}")
-    _api_fields[category].update(fields)
+    with _REGISTRY_LOCK:
+        if category not in _api_fields:
+            raise ValueError(f"Unknown API field category {category!r}")
+        _api_fields[category].update(fields)
 
 
 def unregister_api_fields(category: str) -> None:
     """Clear API fields for *category* (for test teardown)."""
-    if category in _api_fields:
-        _api_fields[category].clear()
+    with _REGISTRY_LOCK:
+        if category in _api_fields:
+            _api_fields[category].clear()
 
 
 def get_api_fields(category: str) -> frozenset[str]:

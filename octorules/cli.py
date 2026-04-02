@@ -185,6 +185,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="PATH",
         help="Write JSON lines audit log of sync results to PATH",
     )
+    sync_parser.add_argument(
+        "--format",
+        dest="sync_format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format for sync results (default: text). 'json' prints structured results.",
+    )
 
     validate_parser = sub.add_parser(
         "validate", parents=[shared], help="Validate config and rules files (offline)"
@@ -193,6 +200,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         dest="validate_output",
         help="Write validation results to a file",
+    )
+    validate_parser.add_argument(
+        "--config-only",
+        action="store_true",
+        dest="config_only",
+        help="Only validate config file structure (skip rules files)",
     )
 
     dump_parser = sub.add_parser("dump", parents=[shared], help="Export existing rules to YAML")
@@ -227,9 +240,9 @@ def build_parser() -> argparse.ArgumentParser:
     lint_parser.add_argument(
         "--format",
         dest="lint_format",
-        choices=["text", "json", "sarif"],
+        choices=["text", "json", "sarif", "summary"],
         default="text",
-        help="Output format (default: text)",
+        help="Output format (default: text). 'summary' prints counts only.",
     )
     lint_parser.add_argument(
         "--severity",
@@ -300,9 +313,9 @@ def build_parser() -> argparse.ArgumentParser:
     audit_parser.add_argument(
         "--format",
         dest="audit_format",
-        choices=["text", "json"],
+        choices=["text", "json", "summary"],
         default="text",
-        help="Output format (default: text)",
+        help="Output format (default: text). 'summary' prints counts only.",
     )
     audit_parser.add_argument(
         "--output",
@@ -317,6 +330,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("versions", parents=[shared], help="Show versions of octorules and dependencies")
+    completion_parser = sub.add_parser(
+        "completion",
+        help="Print shell completion script",
+    )
+    completion_parser.add_argument(
+        "shell",
+        nargs="?",
+        default="bash",
+        choices=["bash", "zsh", "tcsh"],
+        help="Shell type (default: bash)",
+    )
 
     # Provide defaults for subcommand-specific attributes so getattr is never needed
     parser.set_defaults(
@@ -340,6 +364,9 @@ def build_parser() -> argparse.ArgumentParser:
         audit_output=None,
         audit_exit_code=False,
         audit_log=None,
+        sync_format="text",
+        config_only=False,
+        shell="bash",
     )
 
     return parser
@@ -358,8 +385,10 @@ def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
     # Uses importlib.metadata to discover installed provider packages dynamically.
     from importlib.metadata import packages_distributions
 
+    from octorules._color import ColoredFormatter, supports_color
+
     handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler.setFormatter(ColoredFormatter(use_color=supports_color(sys.stderr)))
 
     names = {"octorules"}
     for pkg_name in packages_distributions():
@@ -376,8 +405,34 @@ def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
                 h.setLevel(level)
 
 
+_EXIT_MESSAGES: dict[str, dict[int, str]] = {
+    "plan": {0: "success", 1: "error", 2: "changes detected"},
+    "sync": {0: "success", 1: "error"},
+    "compare": {0: "identical", 1: "differences detected"},
+    "lint": {0: "clean", 1: "errors found", 2: "warnings only"},
+    "audit": {0: "clean", 1: "errors found", 2: "warnings only"},
+    "validate": {0: "valid", 1: "errors found"},
+    "dump": {0: "success", 1: "error"},
+    "report": {0: "success", 1: "error"},
+}
+
+
+def _exit(command: str, code: int, elapsed: float | None = None) -> None:
+    """Print exit summary to stderr and exit."""
+    msg = _EXIT_MESSAGES.get(command, {}).get(code, "")
+    parts = [f"octorules {command}: exit {code}"]
+    if msg:
+        parts[0] += f" ({msg})"
+    if elapsed is not None:
+        parts.append(f"{elapsed:.1f}s")
+    print(" ".join(parts), file=sys.stderr)
+    sys.exit(code)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Main entry point."""
+    import time
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -395,16 +450,25 @@ def main(argv: list[str] | None = None) -> None:
     if args.zones and args.scope == "all":
         args.scope = "zones"
 
-    # versions doesn't need config
+    # Commands that don't need config
     if args.command == "versions":
         sys.exit(cmd_versions())
+    if args.command == "completion":
+        import shtab
+
+        print(shtab.complete(build_parser(), args.shell))
+        sys.exit(0)
+
+    t0 = time.monotonic()
+    command = args.command
 
     try:
         config = Config.from_file(args.config)
         phase_filter = _validate_phases(args.phases)
 
-        if args.command == "plan":
-            sys.exit(
+        if command == "plan":
+            _exit(
+                command,
                 cmd_plan(
                     config,
                     args.zones,
@@ -412,46 +476,52 @@ def main(argv: list[str] | None = None) -> None:
                     checksum=args.checksum,
                     exit_code=args.exit_code,
                     scope_filter=args.scope,
-                )
+                ),
+                time.monotonic() - t0,
             )
-        elif args.command == "sync":
-            sys.exit(
-                cmd_sync(
-                    config,
-                    args.zones,
-                    phase_filter=phase_filter,
-                    checksum=args.checksum,
-                    force=args.force,
-                    scope_filter=args.scope,
-                    audit_log=args.audit_log,
-                )
+        elif command == "sync":
+            code = cmd_sync(
+                config,
+                args.zones,
+                phase_filter=phase_filter,
+                checksum=args.checksum,
+                force=args.force,
+                scope_filter=args.scope,
+                audit_log=args.audit_log,
+                sync_format=args.sync_format,
             )
-        elif args.command == "compare":
-            sys.exit(
+            _exit(command, code, time.monotonic() - t0)
+        elif command == "compare":
+            _exit(
+                command,
                 cmd_compare(
                     config,
                     args.zones,
                     phase_filter=phase_filter,
                     checksum=args.checksum,
                     scope_filter=args.scope,
-                )
+                ),
+                time.monotonic() - t0,
             )
-        elif args.command == "report":
-            sys.exit(
+        elif command == "report":
+            _exit(
+                command,
                 cmd_report(
                     config,
                     args.zones,
                     phase_filter=phase_filter,
                     report_format=args.report_format,
                     scope_filter=args.scope,
-                )
+                ),
+                time.monotonic() - t0,
             )
-        elif args.command == "lint":
+        elif command == "lint":
             # Import provider modules to trigger lint plugin registration,
             # without constructing provider instances (no API credentials needed).
             _discover_provider_modules()
             zone_plans: dict[str, str] = {}
-            sys.exit(
+            _exit(
+                command,
                 cmd_lint(
                     config,
                     args.zones,
@@ -463,10 +533,12 @@ def main(argv: list[str] | None = None) -> None:
                     zone_plans=zone_plans,
                     output_file=args.lint_output,
                     exit_code=args.lint_exit_code,
-                )
+                ),
+                time.monotonic() - t0,
             )
-        elif args.command == "audit":
-            sys.exit(
+        elif command == "audit":
+            _exit(
+                command,
                 cmd_audit(
                     config,
                     args.zones,
@@ -478,30 +550,38 @@ def main(argv: list[str] | None = None) -> None:
                     exit_code=args.audit_exit_code,
                     audit_format=args.audit_format,
                     output_file=args.audit_output,
-                )
+                ),
+                time.monotonic() - t0,
             )
-        elif args.command == "validate":
-            sys.exit(
+        elif command == "validate":
+            if args.config_only:
+                log.info("Config valid.")
+                _exit(command, 0, time.monotonic() - t0)
+            _exit(
+                command,
                 cmd_validate(
                     config,
                     args.zones,
                     phase_filter=phase_filter,
                     output_file=args.validate_output,
-                )
+                ),
+                time.monotonic() - t0,
             )
-        elif args.command == "dump":
-            sys.exit(
+        elif command == "dump":
+            _exit(
+                command,
                 cmd_dump(
                     config,
                     args.zones,
                     args.output_dir,
                     scope_filter=args.scope,
                     phase_filter=phase_filter,
-                )
+                ),
+                time.monotonic() - t0,
             )
     except ConfigError as e:
         log.error("Config error: %s", e)
-        sys.exit(1)
+        _exit(command, 1, time.monotonic() - t0)
     except ProviderAuthError as e:
         log.error("Authentication failed: %s", _format_api_error(e))
-        sys.exit(1)
+        _exit(command, 1, time.monotonic() - t0)

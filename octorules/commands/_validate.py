@@ -38,7 +38,9 @@ def cmd_validate(
     for zone_name in zone_names:
         desired = _filter_desired_by_phase(config.load_zone_rules(zone_name), phase_filter)
         if not desired:
-            msg = f"{zone_name}: no rules file (skipped)"
+            rules_file = config.rules_dir / f"{zone_name}.yaml"
+            label = "rules file empty" if rules_file.exists() else "rules file not found"
+            msg = f"{zone_name}: {label} (skipped)"
             log.info("%s", msg)
             lines.append(msg)
             continue
