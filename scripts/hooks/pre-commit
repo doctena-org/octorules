@@ -5,6 +5,7 @@
 #   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 set -euo pipefail
 
+.venv/bin/pip install -e ".[dev]" -q
 .venv/bin/ruff check
 .venv/bin/ruff format --check
 .venv/bin/python scripts/sync_cdn_ranges.py --check
