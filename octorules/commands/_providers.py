@@ -1,7 +1,5 @@
 """Provider and processor initialization."""
 
-from __future__ import annotations
-
 import importlib
 import logging
 
@@ -21,20 +19,6 @@ from octorules.provider.base import (
 from octorules.provider.exceptions import ProviderError
 
 log = logging.getLogger(__name__)
-
-
-def _get_cloudflare_provider() -> type | None:
-    """Lazy import of CloudflareProvider from octorules-cloudflare.
-
-    Returns the class if the package is installed, None otherwise.
-    Deferred to avoid triggering phase registration at import time.
-    """
-    try:
-        from octorules_cloudflare import CloudflareProvider
-
-        return CloudflareProvider
-    except ImportError:
-        return None
 
 
 def _load_provider_class(dotted_path: str) -> type:
@@ -57,7 +41,9 @@ def _discover_provider_modules() -> None:
     for ep in entry_points(group="octorules.providers"):
         try:
             ep.load()
-        except Exception as e:
+        except (ImportError, AttributeError, ModuleNotFoundError, ValueError) as e:
+            # ValueError covers phase registration collisions when a provider
+            # is loaded in a process that already registered the same phases.
             log.warning("Failed to load provider entry-point %s: %s", ep.name, e)
 
 
@@ -67,30 +53,16 @@ def _resolve_provider_class(name: str, class_path: str | None) -> type:
     Resolution order:
     1. Explicit ``class_path`` from config.
     2. Entry-point discovery (``octorules.providers`` group).
-    3. Deprecated fallback to module-level ``CloudflareProvider`` (with warning).
     """
     if class_path:
         return _load_provider_class(class_path)
 
-    # Entry-point discovery
     from importlib.metadata import entry_points
 
     eps = entry_points(group="octorules.providers")
     for ep in eps:
         if ep.name == name:
             return ep.load()
-
-    # Deprecated fallback (since v0.16.0, removal planned for v1.0.0):
-    # When no entry point matched, fall back to the lazily-imported
-    # CloudflareProvider from octorules-cloudflare.
-    cf_cls = _get_cloudflare_provider()
-    if cf_cls is not None:
-        log.warning(
-            "No 'class' specified for provider %r and no entry point found. "
-            "Set 'class: octorules_cloudflare.CloudflareProvider' explicitly.",
-            name,
-        )
-        return cf_cls
 
     raise ConfigError(
         f"No provider class found for {name!r}. "
@@ -158,28 +130,20 @@ def _discover_zones(config: Config, providers: dict[str, BaseProvider]) -> None:
         config.expand_templates(discovered)
 
 
-def _init_providers(
-    config: Config, *, _provider_cls: type | None = None
-) -> dict[str, BaseProvider]:
+def _init_providers(config: Config) -> dict[str, BaseProvider]:
     """Create all providers from config and resolve missing zone IDs.
 
     For each ``ProviderConfig`` in ``config.providers``:
-    1. Determine the class via entry-points, explicit ``class``, or fallback.
+    1. Determine the class via entry-points or explicit ``class``.
     2. Import the top-level package to trigger phase/linter registration.
     3. Instantiate with ``**pc.kwargs``.
 
     Then validates multi-target constraints, discovers zones, and resolves
     zone IDs using per-provider resolve functions.
-
-    ``_provider_cls`` is an internal override for backward compatibility: when
-    set, *all* providers use that class (used by ``_init_provider()``).
     """
     providers: dict[str, BaseProvider] = {}
     for name, pc in config.providers.items():
-        if _provider_cls is not None:
-            cls = _provider_cls
-        else:
-            cls = _resolve_provider_class(name, pc.class_path)
+        cls = _resolve_provider_class(name, pc.class_path)
         # Import top-level package to trigger phase/linter registration.
         # Guard with hasattr — test mocks may not have __module__.
         if hasattr(cls, "__module__"):
@@ -220,31 +184,3 @@ def _get_zone_providers(
         name = next(iter(providers))
         return [(name, providers[name])]
     raise ConfigError(f"Zone {zone_cfg.name!r} has no target and multiple providers are configured")
-
-
-def _init_provider(config: Config, *, provider_cls: type | None = None) -> BaseProvider:
-    """Create a single provider from config and resolve zone IDs.
-
-    .. deprecated::
-        Use ``_init_providers()`` instead.  This wrapper only handles configs
-        with a single provider.
-
-    When *provider_cls* is given, it overrides class resolution (used in tests).
-    """
-    import warnings
-
-    warnings.warn(
-        "_init_provider() is deprecated, use _init_providers() instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if provider_cls is not None:
-        first_pc = next(iter(config.providers.values()), None)
-        kwargs = first_pc.kwargs if first_pc else {}
-        provider = provider_cls(**kwargs)
-        resolve_zone_ids(config, provider.resolve_zone_id)
-        return provider
-    providers = _init_providers(config)
-    if len(providers) == 1:
-        return next(iter(providers.values()))
-    raise ConfigError("_init_provider() cannot handle multiple providers; use _init_providers()")

@@ -1,7 +1,5 @@
 """Provider interface and shared data types."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, runtime_checkable
 
@@ -17,7 +15,7 @@ _SUPPORTS_ALL = frozenset(
 )
 
 
-def provider_supports(provider: BaseProvider, feature: str) -> bool:
+def provider_supports(provider: "BaseProvider", feature: str) -> bool:
     """Check whether *provider* declares support for *feature*.
 
     Providers that don't define ``SUPPORTS`` (or define it as a non-set

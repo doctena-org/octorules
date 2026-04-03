@@ -1,7 +1,5 @@
 """octorules linter — extensible rules validation via lint plugins."""
 
-from __future__ import annotations
-
 from octorules.linter.engine import LintContext, LintResult, Severity, lint_zone_file
 from octorules.linter.plugin import LintPlugin, register_linter
 

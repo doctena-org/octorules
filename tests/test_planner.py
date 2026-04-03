@@ -1,7 +1,5 @@
 """Tests for the diff engine (planner)."""
 
-from __future__ import annotations
-
 import logging
 
 import pytest
@@ -1732,8 +1730,6 @@ class TestZonePlanTarget:
 # ---------------------------------------------------------------------------
 # octorules: metadata tests
 # ---------------------------------------------------------------------------
-
-
 class TestIsIgnored:
     def test_true_when_ignored(self):
         assert _is_ignored({"octorules": {"ignored": True}}) is True
@@ -2008,8 +2004,6 @@ class TestTargetsExcludedMutualExclusion:
 # ---------------------------------------------------------------------------
 # Checksum determinism (stability across calls, unicode)
 # ---------------------------------------------------------------------------
-
-
 class TestChecksumDeterminism:
     """Extended determinism tests for compute_checksum."""
 
@@ -2117,8 +2111,6 @@ class TestChecksumDeterminism:
 # ---------------------------------------------------------------------------
 # Refless current rules in diff
 # ---------------------------------------------------------------------------
-
-
 class TestDiffReflessCurrentRules:
     """Tests for _diff_rules when current rules lack a ref field."""
 
@@ -2163,8 +2155,6 @@ class TestDiffReflessCurrentRules:
 # ---------------------------------------------------------------------------
 # Large ruleset reorder performance
 # ---------------------------------------------------------------------------
-
-
 class TestLargeRulesetReorderPerformance:
     """Performance regression test for reorder detection with many rules."""
 
@@ -2197,8 +2187,6 @@ class TestLargeRulesetReorderPerformance:
 # ---------------------------------------------------------------------------
 # count_change_types
 # ---------------------------------------------------------------------------
-
-
 class TestCountChangeTypes:
     """Tests for count_change_types — tally logic for safety thresholds."""
 
@@ -2236,8 +2224,6 @@ class TestCountChangeTypes:
 # ---------------------------------------------------------------------------
 # _validate_octorules_meta
 # ---------------------------------------------------------------------------
-
-
 class TestValidateOctorulesMeta:
     """Tests for octorules: metadata validation."""
 
@@ -2275,8 +2261,6 @@ class TestValidateOctorulesMeta:
 # ---------------------------------------------------------------------------
 # _require_field / _require_string_field
 # ---------------------------------------------------------------------------
-
-
 class TestRequireField:
     """Tests for field validation helpers."""
 

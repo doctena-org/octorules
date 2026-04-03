@@ -1,7 +1,5 @@
 """Tests for expression whitespace normalization."""
 
-from __future__ import annotations
-
 import pytest
 
 from octorules.expression import (
@@ -12,11 +10,10 @@ from octorules.expression import (
     normalize_expression,
 )
 
+
 # ---------------------------------------------------------------------------
 # Identity / no-op cases
 # ---------------------------------------------------------------------------
-
-
 class TestIdentity:
     def test_single_line_already_clean(self):
         expr = '(http.host eq "example.com")'
@@ -36,8 +33,6 @@ class TestIdentity:
 # ---------------------------------------------------------------------------
 # Whitespace collapsing
 # ---------------------------------------------------------------------------
-
-
 class TestWhitespaceCollapsing:
     def test_multiple_spaces(self):
         assert normalize_expression("a   b") == "a b"
@@ -67,8 +62,6 @@ class TestWhitespaceCollapsing:
 # ---------------------------------------------------------------------------
 # Multi-line expressions (primary use case)
 # ---------------------------------------------------------------------------
-
-
 class TestMultiLineExpressions:
     def test_block_scalar_strip(self):
         expr = '(http.host eq "example.com")\n  and not (http.request.uri.path eq "/health")\n'
@@ -110,8 +103,6 @@ class TestMultiLineExpressions:
 # ---------------------------------------------------------------------------
 # Quote preservation
 # ---------------------------------------------------------------------------
-
-
 class TestQuotePreservation:
     def test_spaces_inside_quotes(self):
         expr = 'http.host eq "hello world"'
@@ -145,8 +136,6 @@ class TestQuotePreservation:
 # ---------------------------------------------------------------------------
 # Escaped quotes
 # ---------------------------------------------------------------------------
-
-
 class TestEscapedQuotes:
     def test_escaped_quote_inside_string(self):
         expr = r'http.host eq "say \"hello\""'
@@ -170,8 +159,6 @@ class TestEscapedQuotes:
 # ---------------------------------------------------------------------------
 # Real production expressions
 # ---------------------------------------------------------------------------
-
-
 class TestProductionExpressions:
     def test_asn_ip_header_multiline(self):
         expr = (
@@ -204,8 +191,6 @@ class TestProductionExpressions:
 # ---------------------------------------------------------------------------
 # Regex patterns
 # ---------------------------------------------------------------------------
-
-
 class TestRegexPatterns:
     def test_regex_match_preserved(self):
         expr = 'http.request.uri.path matches "^/(nl|fr|en|de)/booking/"'
@@ -219,8 +204,6 @@ class TestRegexPatterns:
 # ---------------------------------------------------------------------------
 # Header access
 # ---------------------------------------------------------------------------
-
-
 class TestHeaderAccess:
     def test_header_array_index(self):
         expr = 'http.request.headers["cloudgatewayprovider"][0] eq "Denturgent"'
@@ -230,8 +213,6 @@ class TestHeaderAccess:
 # ---------------------------------------------------------------------------
 # Set literals
 # ---------------------------------------------------------------------------
-
-
 class TestSetLiterals:
     def test_asn_set_with_newlines(self):
         expr = "ip.geoip.asnum in {\n45903\n14061\n51167\n}"
@@ -335,8 +316,6 @@ def test_idempotent(expr: str):
 # ---------------------------------------------------------------------------
 # Large inputs
 # ---------------------------------------------------------------------------
-
-
 class TestLargeInputs:
     def test_long_expression(self):
         # 4000+ chars
@@ -362,8 +341,6 @@ class TestLargeInputs:
 # ---------------------------------------------------------------------------
 # Display formatting (format_expression_display)
 # ---------------------------------------------------------------------------
-
-
 class TestDisplayShortExpressions:
     """Short expressions (≤ 80 chars) are returned unchanged."""
 
@@ -652,8 +629,6 @@ class TestDisplayEdgeCases:
 # ---------------------------------------------------------------------------
 # QuoteAwareScanner
 # ---------------------------------------------------------------------------
-
-
 class TestQuoteAwareScanner:
     """Direct tests for the character-level quote-tracking scanner."""
 
@@ -695,8 +670,6 @@ class TestQuoteAwareScanner:
 # ---------------------------------------------------------------------------
 # _find_closing_brace / _split_set_items
 # ---------------------------------------------------------------------------
-
-
 class TestFindClosingBrace:
     def test_simple(self):
         expr = "in {1 2 3}"

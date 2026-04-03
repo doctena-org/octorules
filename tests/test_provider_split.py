@@ -1,7 +1,11 @@
-"""Tests for the provider split (Phase 4) — backward compat and core-without-cloudflare."""
+"""Tests for the provider split (Phase 4) — backward compat and core-without-cloudflare.
 
-from __future__ import annotations
+Phase registration is idempotent (same name+id pair → no-op), so most tests
+run in-process without subprocess isolation.  Only tests that mutate
+``sys.modules`` or need a pristine registry use subprocesses.
+"""
 
+import importlib
 import importlib.util
 import subprocess
 import sys
@@ -17,10 +21,9 @@ _cf_installed = importlib.util.find_spec("octorules_cloudflare") is not None
 _aws_installed = importlib.util.find_spec("octorules_aws") is not None
 _google_installed = importlib.util.find_spec("octorules_google") is not None
 
-# (import_path, package_name) for parametrized tests
 _PROVIDER_IMPORTS = [
     pytest.param(
-        "octorules.provider",
+        "octorules_cloudflare",
         "CloudflareProvider",
         "octorules_cloudflare",
         id="cloudflare",
@@ -46,16 +49,10 @@ _PROVIDER_IMPORTS = [
 class TestBackwardCompatImportPaths:
     @pytest.mark.parametrize("module,cls_name,pkg", _PROVIDER_IMPORTS)
     def test_provider_importable(self, module, cls_name, pkg):
-        """Each installed provider class is importable (subprocess)."""
-        code = f"from {module} import {cls_name}\nassert {cls_name} is not None\nprint('OK')\n"
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        """Each installed provider class is importable in-process."""
+        mod = importlib.import_module(module)
+        cls = getattr(mod, cls_name)
+        assert cls is not None
 
     def test_scope_from_provider(self):
         from octorules.provider import Scope as S
@@ -74,56 +71,27 @@ class TestBackwardCompatImportPaths:
 
     @pytest.mark.parametrize("module,cls_name,pkg", _PROVIDER_IMPORTS)
     def test_provider_isinstance_base(self, module, cls_name, pkg):
-        """Each installed provider satisfies BaseProvider protocol (subprocess)."""
-        code = (
-            f"from {module} import {cls_name}\n"
-            f"from octorules.provider.base import BaseProvider\n"
-            f"instance = {cls_name}.__new__({cls_name})\n"
-            f"assert isinstance(instance, BaseProvider)\n"
-            f"print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        """Each installed provider satisfies BaseProvider protocol."""
+        mod = importlib.import_module(module)
+        cls = getattr(mod, cls_name)
+        instance = cls.__new__(cls)
+        assert isinstance(instance, BaseProvider)
 
 
 class TestCoreWithoutCloudflare:
-    """Subprocess tests that verify core behavior without cloudflare installed."""
+    """Subprocess tests that verify core behavior without cloudflare installed.
 
-    def test_import_octorules_without_cloudflare(self):
-        """Importing CloudflareProvider without octorules-cloudflare raises ImportError."""
-        code = (
-            "import sys\n"
-            "sys.modules['cloudflare'] = None\n"
-            "sys.modules['octorules_cloudflare'] = None\n"
-            "try:\n"
-            "    from octorules.provider import CloudflareProvider\n"
-            "except ImportError as e:\n"
-            "    assert 'octorules-cloudflare' in str(e)\n"
-            "    print('OK')\n"
-            "else:\n"
-            "    raise AssertionError('expected ImportError')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+    These genuinely need subprocess isolation because they manipulate sys.modules.
+    """
 
-    def test_plan_error_without_cloudflare(self):
+    def test_cloudflare_provider_not_in_core(self):
+        """CloudflareProvider is no longer re-exported from octorules.provider."""
+        with pytest.raises(ImportError):
+            from octorules.provider import CloudflareProvider  # noqa: F401
+
+    def test_plan_error_without_provider(self):
         """_resolve_provider_class should raise ConfigError when no provider class is found."""
-        with (
-            patch("octorules.commands._providers._get_cloudflare_provider", return_value=None),
-            patch("importlib.metadata.entry_points", return_value=[]),
-        ):
+        with patch("importlib.metadata.entry_points", return_value=[]):
             from octorules.commands import _resolve_provider_class
 
             with pytest.raises(ConfigError, match="No provider class found"):
@@ -135,85 +103,55 @@ _all_providers_installed = _cf_installed and _aws_installed and _google_installe
 
 @pytest.mark.skipif(not _all_providers_installed, reason="not all providers installed")
 class TestMultiProviderCoexistence:
-    """Verify all three providers can coexist in a single process."""
+    """Verify all three providers can coexist in a single process.
+
+    Idempotent phase registration allows importing providers even though
+    conftest already registered phases with the same names.
+    """
 
     def test_all_phases_register_without_collision(self):
         """Importing all providers registers phases with no name/ID collisions."""
-        code = (
-            "import octorules_cloudflare\n"
-            "import octorules_aws\n"
-            "import octorules_google\n"
-            "from octorules.phases import PHASES, PHASE_BY_NAME, PHASE_BY_PROVIDER_ID\n"
-            "# All three must register without raising\n"
-            "assert len(PHASES) > 0\n"
-            "# Every phase has a unique provider ID\n"
-            "assert len(PHASE_BY_PROVIDER_ID) == len(PHASES)\n"
-            "# PHASE_BY_NAME may include aliases, so >= PHASES is expected\n"
-            "assert len(PHASE_BY_NAME) >= len(PHASES)\n"
-            "# Sanity: each provider contributed phases\n"
-            "names = set(PHASE_BY_NAME)\n"
-            "assert any(n.startswith('aws_waf_') for n in names), 'no AWS phases'\n"
-            "assert any(n.startswith('gcloud_armor_') for n in names), 'no Google phases'\n"
-            "assert 'redirect_rules' in names, 'no Cloudflare phases'\n"
-            "print(f'OK {len(PHASES)} phases')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        import octorules_aws  # noqa: F401
+        import octorules_cloudflare  # noqa: F401
+        import octorules_google  # noqa: F401
+
+        from octorules.phases import PHASE_BY_NAME, PHASE_BY_PROVIDER_ID, PHASES
+
+        assert len(PHASES) > 0
+        assert len(PHASE_BY_PROVIDER_ID) == len(PHASES)
+        assert len(PHASE_BY_NAME) >= len(PHASES)
+        names = set(PHASE_BY_NAME)
+        assert any(n.startswith("aws_waf_") for n in names), "no AWS phases"
+        assert any(n.startswith("gcloud_armor_") for n in names), "no Google phases"
+        assert "redirect_rules" in names, "no Cloudflare phases"
 
     def test_api_fields_merge_across_providers(self):
         """API field registrations from multiple providers accumulate, not overwrite."""
-        code = (
-            "import octorules_cloudflare\n"
-            "import octorules_aws\n"
-            "import octorules_google\n"
-            "from octorules.phases import get_api_fields\n"
-            "rule_fields = get_api_fields('rule')\n"
-            "# CF registers id, version, last_updated, categories, logging\n"
-            "assert 'id' in rule_fields\n"
-            "assert 'version' in rule_fields\n"
-            "# AWS registers OverrideAction\n"
-            "assert 'OverrideAction' in rule_fields\n"
-            "# Google registers kind, preview\n"
-            "assert 'kind' in rule_fields\n"
-            "assert 'preview' in rule_fields\n"
-            "print(f'OK {len(rule_fields)} rule fields')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        import octorules_aws  # noqa: F401
+        import octorules_cloudflare  # noqa: F401
+        import octorules_google  # noqa: F401
+
+        from octorules.phases import get_api_fields
+
+        rule_fields = get_api_fields("rule")
+        assert "id" in rule_fields
+        assert "version" in rule_fields
+        assert "OverrideAction" in rule_fields
+        assert "kind" in rule_fields
+        assert "preview" in rule_fields
 
     def test_all_providers_have_unique_phase_prefixes(self):
         """No two providers share a phase friendly_name."""
-        code = (
-            "import octorules_cloudflare\n"
-            "import octorules_aws\n"
-            "import octorules_google\n"
-            "from octorules.phases import PHASES\n"
-            "names = [p.friendly_name for p in PHASES]\n"
-            "assert len(names) == len(set(names)), f'duplicate phase names: {names}'\n"
-            "ids = [p.provider_id for p in PHASES]\n"
-            "assert len(ids) == len(set(ids)), f'duplicate provider IDs: {ids}'\n"
-            "print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        import octorules_aws  # noqa: F401
+        import octorules_cloudflare  # noqa: F401
+        import octorules_google  # noqa: F401
+
+        from octorules.phases import PHASES
+
+        names = [p.friendly_name for p in PHASES]
+        assert len(names) == len(set(names)), f"duplicate phase names: {names}"
+        ids = [p.provider_id for p in PHASES]
+        assert len(ids) == len(set(ids)), f"duplicate provider IDs: {ids}"
 
 
 @pytest.mark.skipif(not _all_providers_installed, reason="not all providers installed")
@@ -230,71 +168,39 @@ class TestEntryPointDiscovery:
     )
     def test_resolve_provider_class_via_entry_point(self, provider_name, expected_cls):
         """_resolve_provider_class finds each provider by name via entry points."""
-        code = (
-            f"from octorules.commands import _resolve_provider_class\n"
-            f"cls = _resolve_provider_class({provider_name!r}, None)\n"
-            f"assert cls.__name__ == {expected_cls!r}\n"
-            f"print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        from octorules.commands import _resolve_provider_class
+
+        cls = _resolve_provider_class(provider_name, None)
+        assert cls.__name__ == expected_cls
 
     def test_discover_provider_modules_loads_all(self):
         """_discover_provider_modules triggers phase registration for all providers."""
-        code = (
-            "from octorules.phases import PHASES\n"
-            "before = len(PHASES)\n"
-            "from octorules.commands import _discover_provider_modules\n"
-            "_discover_provider_modules()\n"
-            "after = len(PHASES)\n"
-            "assert after > before, f'no phases registered: {before} -> {after}'\n"
-            "# Verify at least one phase from each provider\n"
-            "from octorules.phases import PHASE_BY_NAME\n"
-            "names = set(PHASE_BY_NAME)\n"
-            "assert any(n.startswith('aws_waf_') for n in names), 'AWS not loaded'\n"
-            "assert any(n.startswith('gcloud_armor_') for n in names), 'Google not loaded'\n"
-            "assert 'redirect_rules' in names, 'Cloudflare not loaded'\n"
-            "print(f'OK {after} phases')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        from octorules.commands import _discover_provider_modules
+        from octorules.phases import PHASE_BY_NAME, PHASES
+
+        _discover_provider_modules()
+        assert len(PHASES) > 0
+        names = set(PHASE_BY_NAME)
+        assert any(n.startswith("aws_waf_") for n in names), "AWS not loaded"
+        assert any(n.startswith("gcloud_armor_") for n in names), "Google not loaded"
+        assert "redirect_rules" in names, "Cloudflare not loaded"
 
     def test_discover_provider_modules_is_idempotent(self):
         """Calling _discover_provider_modules twice does not raise."""
-        code = (
-            "from octorules.commands import _discover_provider_modules\n"
-            "_discover_provider_modules()\n"
-            "from octorules.phases import PHASES\n"
-            "count = len(PHASES)\n"
-            "# Second call should not re-register (providers guard against double-reg)\n"
-            "_discover_provider_modules()\n"
-            "assert len(PHASES) == count, 'phase count changed on second call'\n"
-            "print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        from octorules.commands import _discover_provider_modules
+        from octorules.phases import PHASES
+
+        _discover_provider_modules()
+        count = len(PHASES)
+        _discover_provider_modules()
+        assert len(PHASES) == count, "phase count changed on second call"
 
 
 class TestDiscoverProviderFailure:
-    """Verify _discover_provider_modules logs WARNING on broken entry-points."""
+    """Verify _discover_provider_modules logs WARNING on broken entry-points.
+
+    Needs subprocess isolation to patch entry_points without affecting other tests.
+    """
 
     def test_logs_warning_on_load_failure(self):
         """Failed entry-point loads are logged at WARNING level."""

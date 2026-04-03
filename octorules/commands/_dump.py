@@ -1,7 +1,5 @@
 """Dump command implementation."""
 
-from __future__ import annotations
-
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path

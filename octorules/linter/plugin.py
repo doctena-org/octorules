@@ -7,8 +7,6 @@ Providers register a ``LintPlugin`` whose ``lint_fn`` is called by
 This mirrors the ``register_phase()`` pattern in ``octorules.phases``.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any

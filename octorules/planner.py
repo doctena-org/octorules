@@ -1,7 +1,5 @@
 """Diff engine — compares desired rules against current rules per phase."""
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging
@@ -163,35 +161,6 @@ class ListPlan:
 
 
 @dataclass
-class PageShieldPolicyPlan:
-    """Backward-compat stub (since v0.17.0, removal planned for v1.0.0).
-
-    The canonical version lives in ``octorules_cloudflare.page_shield``.
-    Code that directly imports this class should migrate to the Cloudflare
-    package before v1.0.0.
-    """
-
-    description: str
-    policy_id: str | None = None
-    create: bool = False
-    delete: bool = False
-    changes: list[RuleChange] = field(default_factory=list)
-
-    @property
-    def has_changes(self) -> bool:
-        return self.create or self.delete or len(self.changes) > 0
-
-    @property
-    def total_changes(self) -> int:
-        count = len(self.changes)
-        if self.create:
-            count += 1
-        if self.delete:
-            count += 1
-        return count
-
-
-@dataclass
 class ZonePlan:
     zone_name: str
     target: str | None = None
@@ -199,26 +168,6 @@ class ZonePlan:
     custom_ruleset_plans: list[CustomRulesetPlan] = field(default_factory=list)
     list_plans: list[ListPlan] = field(default_factory=list)
     extension_plans: dict[str, list] = field(default_factory=dict)
-
-    @property
-    def page_shield_policy_plans(self) -> list[PageShieldPolicyPlan]:
-        """Backward-compat property (since v0.17.0, removal planned for v1.0.0).
-
-        Reads from ``extension_plans["page_shield"]``.  Returns the live list
-        when present, so ``.append()`` works.  Returns a detached empty list
-        otherwise (read-only; use the setter or manipulate ``extension_plans``
-        directly to add plans).  Migrate to ``extension_plans["page_shield"]``
-        before v1.0.0.
-        """
-        return self.extension_plans.get("page_shield", [])
-
-    @page_shield_policy_plans.setter
-    def page_shield_policy_plans(self, value: list[PageShieldPolicyPlan]) -> None:
-        """Backward-compat setter -- writes to extension_plans["page_shield"]."""
-        if value:
-            self.extension_plans["page_shield"] = value
-        else:
-            self.extension_plans.pop("page_shield", None)
 
     @property
     def display_name(self) -> str:
@@ -234,7 +183,7 @@ class ZonePlan:
             return f"{self.zone_name}\x00{self.target}"
         return self.zone_name
 
-    @property
+    @cached_property
     def has_changes(self) -> bool:
         return (
             any(pp.has_changes for pp in self.phase_plans)
@@ -243,7 +192,7 @@ class ZonePlan:
             or any(any(p.has_changes for p in plans) for plans in self.extension_plans.values())
         )
 
-    @property
+    @cached_property
     def total_changes(self) -> int:
         ext_total = sum(
             sum(p.total_changes for p in plans) for plans in self.extension_plans.values()
@@ -254,20 +203,6 @@ class ZonePlan:
             + sum(lp.total_changes for lp in self.list_plans)
             + ext_total
         )
-
-
-# Wrap ZonePlan.__init__ to accept deprecated ``page_shield_policy_plans`` kwarg
-# and migrate it to ``extension_plans["page_shield"]``.
-_ZonePlan_orig_init = ZonePlan.__init__
-
-
-def _zone_plan_init(self, *args, page_shield_policy_plans=None, **kwargs) -> None:
-    _ZonePlan_orig_init(self, *args, **kwargs)
-    if page_shield_policy_plans:
-        self.extension_plans["page_shield"] = list(page_shield_policy_plans)
-
-
-ZonePlan.__init__ = _zone_plan_init
 
 
 class RuleValidationError(Exception):
@@ -888,7 +823,7 @@ class SafetyViolation:
 def check_safety(
     zone_plan: ZonePlan,
     current_rules_by_provider_id: dict[str, list[RuleDict]],
-    zone_config: ZoneConfig,
+    zone_config: "ZoneConfig",
 ) -> list[SafetyViolation]:
     """Check if the plan exceeds safety thresholds for a zone.
 

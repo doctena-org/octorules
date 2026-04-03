@@ -1,7 +1,5 @@
 """High-level orchestrator for octorules operations."""
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 
@@ -211,7 +209,7 @@ class Manager:
     def close(self) -> None:
         """No-op — included for context manager protocol compatibility."""
 
-    def __enter__(self) -> Manager:
+    def __enter__(self) -> "Manager":
         return self
 
     def __exit__(self, *exc: object) -> None:

@@ -1,7 +1,5 @@
 """Safety checks, apply pipeline, and sync command."""
 
-from __future__ import annotations
-
 import json as _json
 import logging
 import re

@@ -1,7 +1,5 @@
 """Lint engine — orchestrates all linter modules and produces a unified report."""
 
-from __future__ import annotations
-
 import logging
 from dataclasses import dataclass, field
 from enum import IntEnum

@@ -1,16 +1,11 @@
-"""Tests for the provider factory (_init_provider, _init_providers, etc.)."""
-
-from __future__ import annotations
+"""Tests for the provider factory (_init_providers, etc.)."""
 
 import importlib.util
-import subprocess
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from octorules.commands import (
-    _init_provider,
     _init_providers,
     _load_provider_class,
     _resolve_provider_class,
@@ -39,79 +34,9 @@ def _mock_config(**overrides):
     return cfg
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-class TestInitProviderDefault:
-    @patch("octorules.commands._providers._resolve_provider_class")
-    @patch("octorules.commands._providers.resolve_zone_ids")
-    def test_default_creates_cloudflare(self, mock_resolve, mock_resolve_cls):
-        """Default _init_provider creates CloudflareProvider via _init_providers."""
-        mock_cls = MagicMock()
-        mock_resolve_cls.return_value = mock_cls
-        config = _mock_config()
-        provider = _init_provider(config)
-        mock_cls.assert_called_once_with(token="test-token", max_workers=1)
-        assert provider is mock_cls.return_value
-
-
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-class TestInitProviderCustomClass:
-    @patch("octorules.commands._providers.resolve_zone_ids")
-    def test_provider_cls_parameter(self, mock_resolve):
-        """Explicit provider_cls parameter is used."""
-        mock_cls = MagicMock()
-        mock_cls.return_value = MagicMock()
-        config = _mock_config()
-        provider = _init_provider(config, provider_cls=mock_cls)
-        mock_cls.assert_called_once_with(token="test-token", max_workers=1)
-        assert provider is mock_cls.return_value
-
-
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-class TestInitProviderDynamicImport:
-    @patch("octorules.commands._providers.resolve_zone_ids")
-    @patch("octorules.commands._providers._resolve_provider_class")
-    def test_dynamic_import_from_config(self, mock_resolve_cls, mock_resolve):
-        """Config class_path triggers dynamic import via _init_providers."""
-        mock_cls = MagicMock()
-        mock_resolve_cls.return_value = mock_cls
-        config = _mock_config(
-            providers={
-                "cloudflare": MagicMock(
-                    name="cloudflare",
-                    class_path="octorules.provider.CloudflareProvider",
-                    kwargs={"token": "test-token", "max_workers": 1},
-                )
-            }
-        )
-        provider = _init_provider(config)
-        mock_resolve_cls.assert_called_once_with(
-            "cloudflare", "octorules.provider.CloudflareProvider"
-        )
-        mock_cls.assert_called_once_with(token="test-token", max_workers=1)
-        assert provider is mock_cls.return_value
-
-    @patch("octorules.commands._providers.resolve_zone_ids")
-    def test_provider_cls_overrides_config(self, mock_resolve):
-        """Explicit provider_cls takes precedence over config class_path."""
-        mock_cls = MagicMock()
-        mock_cls.return_value = MagicMock()
-        config = _mock_config(
-            providers={
-                "cloudflare": MagicMock(
-                    name="cloudflare",
-                    class_path="octorules.provider.CloudflareProvider",
-                    kwargs={"token": "test-token", "max_workers": 1},
-                )
-            }
-        )
-        provider = _init_provider(config, provider_cls=mock_cls)
-        mock_cls.assert_called_once()
-        assert provider is mock_cls.return_value
-
-
 _PROVIDER_CLASS_PATHS = [
     pytest.param(
-        "octorules.provider.CloudflareProvider",
+        "octorules_cloudflare.CloudflareProvider",
         id="cloudflare",
         marks=pytest.mark.skipif(not _cf_installed, reason="octorules-cloudflare not installed"),
     ),
@@ -131,21 +56,9 @@ _PROVIDER_CLASS_PATHS = [
 class TestLoadProviderClass:
     @pytest.mark.parametrize("class_path", _PROVIDER_CLASS_PATHS)
     def test_load_existing_class(self, class_path):
-        """_load_provider_class resolves a real provider class path (subprocess)."""
-        code = (
-            f"from octorules.commands import _load_provider_class\n"
-            f"cls = _load_provider_class({class_path!r})\n"
-            f"assert cls is not None\n"
-            f"print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        """_load_provider_class resolves a real provider class path."""
+        cls = _load_provider_class(class_path)
+        assert cls is not None
 
     def test_invalid_path_no_dot(self):
         with pytest.raises(ConfigError, match="Invalid provider class path"):
@@ -290,23 +203,10 @@ class TestInitProviders:
 class TestResolveProviderClass:
     @pytest.mark.parametrize("class_path", _PROVIDER_CLASS_PATHS)
     def test_explicit_class_path(self, class_path):
-        """class_path provided -> loaded via _load_provider_class (subprocess)."""
-        # Extract a provider name from the class path for _resolve_provider_class
+        """class_path provided -> loaded via _load_provider_class."""
         provider_name = class_path.rsplit(".", 1)[0].replace("octorules.", "").replace("_", "-")
-        code = (
-            f"from octorules.commands import _resolve_provider_class\n"
-            f"cls = _resolve_provider_class({provider_name!r}, {class_path!r})\n"
-            f"assert cls is not None\n"
-            f"print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        cls = _resolve_provider_class(provider_name, class_path)
+        assert cls is not None
 
     @patch("importlib.metadata.entry_points")
     def test_entry_point_discovery(self, mock_eps):
@@ -321,20 +221,9 @@ class TestResolveProviderClass:
         assert cls is sentinel_cls
         mock_eps.assert_called_once_with(group="octorules.providers")
 
-    @patch("octorules.commands._providers._get_cloudflare_provider")
     @patch("importlib.metadata.entry_points")
-    def test_fallback_to_cloudflare(self, mock_eps, mock_get_cf):
-        """No class, no entry point -> CloudflareProvider with deprecation warning."""
-        mock_eps.return_value = []
-        sentinel_cls = type("FakeCFProvider", (), {})
-        mock_get_cf.return_value = sentinel_cls
-        cls = _resolve_provider_class("cloudflare", None)
-        assert cls is sentinel_cls
-
-    @patch("octorules.commands._providers._get_cloudflare_provider", return_value=None)
-    @patch("importlib.metadata.entry_points")
-    def test_no_class_no_fallback(self, mock_eps, mock_get_cf):
-        """No class, no entry point, no CloudflareProvider -> ConfigError."""
+    def test_no_class_no_entry_point(self, mock_eps):
+        """No class, no entry point -> ConfigError."""
         mock_eps.return_value = []
         with pytest.raises(ConfigError, match="No provider class found"):
             _resolve_provider_class("unknown", None)

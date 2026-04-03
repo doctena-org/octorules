@@ -1,7 +1,5 @@
 """Shared test helpers for the linter test suite."""
 
-from __future__ import annotations
-
 from octorules.linter.engine import LintContext, LintResult
 
 

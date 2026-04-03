@@ -1,14 +1,11 @@
 """Tests for plan_output module."""
 
-from __future__ import annotations
-
 import io
-
-import pytest
 
 from octorules.phases import get_phase
 from octorules.plan_output import (
     PLAN_OUTPUT_CLASSES,
+    PLAN_OUTPUT_FORMATS,
     PlanHtml,
     PlanJson,
     PlanMarkdown,
@@ -28,11 +25,10 @@ def _zone_with_changes():
     return ZonePlan(zone_name="example.com", phase_plans=[pp])
 
 
-class TestPlanOutputBase:
-    def test_base_class_raises(self):
+class TestPlanOutput:
+    def test_default_fmt_is_text(self):
         output = PlanOutput("test")
-        with pytest.raises(NotImplementedError):
-            output.run([])
+        assert output.fmt == "text"
 
     def test_path_attribute(self):
         output = PlanOutput("test", path="/tmp/out.txt")
@@ -42,6 +38,11 @@ class TestPlanOutputBase:
     def test_path_default_none(self):
         output = PlanOutput("test")
         assert output.path is None
+
+    def test_run_calls_print_plan(self, capsys):
+        zp = ZonePlan(zone_name="example.com", phase_plans=[])
+        PlanOutput("test", fmt="text").run([zp])
+        assert "No changes detected" in capsys.readouterr().out
 
 
 class TestPlanText:
@@ -63,6 +64,10 @@ class TestPlanText:
         PlanText("text").run([zp], fh=buf)
         out = buf.getvalue()
         assert "example.com" in out
+
+    def test_returns_plan_output_instance(self):
+        assert isinstance(PlanText("t"), PlanOutput)
+        assert PlanText("t").fmt == "text"
 
 
 class TestPlanJson:
@@ -140,12 +145,16 @@ class TestPlanHtml:
         assert "<table>" in out
 
 
-class TestRegistry:
-    def test_registry_contains_all_classes(self):
-        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanText"] is PlanText
-        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanMarkdown"] is PlanMarkdown
-        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanJson"] is PlanJson
-        assert PLAN_OUTPUT_CLASSES["octorules.plan_output.PlanHtml"] is PlanHtml
+class TestFormats:
+    def test_four_formats_registered(self):
+        assert len(PLAN_OUTPUT_FORMATS) == 4
 
-    def test_registry_has_four_entries(self):
+    def test_format_values(self):
+        assert set(PLAN_OUTPUT_FORMATS.values()) == {"text", "markdown", "json", "html"}
+
+    def test_backward_compat_classes_dict(self):
+        """PLAN_OUTPUT_CLASSES still works for backward compatibility."""
         assert len(PLAN_OUTPUT_CLASSES) == 4
+        for _key, factory in PLAN_OUTPUT_CLASSES.items():
+            output = factory("test")
+            assert isinstance(output, PlanOutput)

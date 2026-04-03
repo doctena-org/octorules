@@ -1,7 +1,5 @@
 """Tests for config loading."""
 
-from __future__ import annotations
-
 import pytest
 
 from octorules.config import (
@@ -17,7 +15,7 @@ from octorules.config import (
     resolve_zone_ids,
     slugify,
 )
-from octorules.plan_output import PlanHtml, PlanJson, PlanText
+from octorules.plan_output import PlanOutput
 from octorules.secret import BaseSecrets
 
 
@@ -1169,7 +1167,8 @@ class TestPlanOutputs:
         )
         config = Config.from_file(config_file)
         assert "text" in config.plan_outputs
-        assert isinstance(config.plan_outputs["text"], PlanText)
+        assert isinstance(config.plan_outputs["text"], PlanOutput)
+        assert config.plan_outputs["text"].fmt == "text"
         assert config.plan_outputs["text"].name == "text"
         assert config.plan_outputs["text"].path is None
 
@@ -1184,7 +1183,8 @@ class TestPlanOutputs:
             + "      path: /tmp/plan.html\n"
         )
         config = Config.from_file(config_file)
-        assert isinstance(config.plan_outputs["html"], PlanHtml)
+        assert isinstance(config.plan_outputs["html"], PlanOutput)
+        assert config.plan_outputs["html"].fmt == "html"
         assert config.plan_outputs["html"].path == "/tmp/plan.html"
 
     def test_multiple_outputs(self, tmp_path):
@@ -1201,8 +1201,10 @@ class TestPlanOutputs:
         )
         config = Config.from_file(config_file)
         assert len(config.plan_outputs) == 2
-        assert isinstance(config.plan_outputs["text"], PlanText)
-        assert isinstance(config.plan_outputs["json"], PlanJson)
+        assert isinstance(config.plan_outputs["text"], PlanOutput)
+        assert config.plan_outputs["text"].fmt == "text"
+        assert isinstance(config.plan_outputs["json"], PlanOutput)
+        assert config.plan_outputs["json"].fmt == "json"
         assert config.plan_outputs["json"].path == "/tmp/plan.json"
 
     def test_missing_class_key(self, tmp_path):
@@ -2155,8 +2157,6 @@ class TestSecretHandlers:
 
 
 # --- Stub handler classes for tests ---
-
-
 class _StubSecrets(BaseSecrets):
     """Minimal stub that returns ``stub:{ref}``."""
 
@@ -2176,8 +2176,6 @@ class _StubSecretsWithKwargs(BaseSecrets):
 
 
 # --- ContextDict / YAML context tracking ---
-
-
 class TestContextDict:
     def test_context_dict_preserves_data(self):
         cd = ContextDict({"a": 1, "b": 2}, context="config.yaml:5")

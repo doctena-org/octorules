@@ -10,8 +10,6 @@ Usage:
     python scripts/sync_cdn_ranges.py --check 30   # Custom staleness in days
 """
 
-from __future__ import annotations
-
 import json
 import sys
 from datetime import datetime, timedelta, timezone

@@ -4,8 +4,6 @@ The registry starts empty.  Provider packages populate it at import time
 via ``register_rules()``, matching the ``register_phase()`` pattern.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 from octorules.linter.engine import Severity

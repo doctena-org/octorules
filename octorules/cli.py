@@ -1,7 +1,5 @@
 """CLI entry point: plan, sync, dump, validate, versions."""
 
-from __future__ import annotations
-
 import argparse
 import logging
 import sys
@@ -18,7 +16,6 @@ from octorules.commands import (
     _filter_desired_by_phase,
     _format_api_error,
     _get_zones,
-    _init_provider,
     _init_providers,
     _map_ordered,
     _plan_account,
@@ -57,7 +54,6 @@ __all__ = [
     "_filter_desired_by_phase",
     "_format_api_error",
     "_get_zones",
-    "_init_provider",
     "_init_providers",
     "_map_ordered",
     "_plan_account",
@@ -382,18 +378,18 @@ def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
         level = logging.INFO
     # Configure the core logger with a handler, then set the level on all
     # octorules_* provider loggers so __name__-based loggers propagate output.
-    # Uses importlib.metadata to discover installed provider packages dynamically.
-    from importlib.metadata import packages_distributions
-
+    # Discovers provider loggers from sys.modules (already imported by entry-
+    # point discovery) instead of scanning installed packages — avoids the
+    # ~130ms cost of importlib.metadata.packages_distributions().
     from octorules._color import ColoredFormatter, supports_color
 
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(ColoredFormatter(use_color=supports_color(sys.stderr)))
 
     names = {"octorules"}
-    for pkg_name in packages_distributions():
-        if pkg_name.startswith("octorules_"):
-            names.add(pkg_name)
+    for mod_name in sys.modules:
+        if mod_name.startswith("octorules_") and "." not in mod_name:
+            names.add(mod_name)
 
     for name in sorted(names):
         logger = logging.getLogger(name)

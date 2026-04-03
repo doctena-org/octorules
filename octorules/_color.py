@@ -7,8 +7,6 @@ Provides:
 - :func:`supports_color` — TTY / ``NO_COLOR`` / ``FORCE_COLOR`` detection.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 import sys
@@ -32,8 +30,6 @@ _RESET = "\033[0m"
 # ---------------------------------------------------------------------------
 # Detection
 # ---------------------------------------------------------------------------
-
-
 def supports_color(stream: object | None = None) -> bool:
     """Check if *stream* supports ANSI color.
 
@@ -52,8 +48,6 @@ def supports_color(stream: object | None = None) -> bool:
 # ---------------------------------------------------------------------------
 # Pen — semantic colorizer
 # ---------------------------------------------------------------------------
-
-
 class Pen:
     """Semantic text colorizer.
 
@@ -109,8 +103,6 @@ def pen(stream: object | None = None) -> Pen:
 # ---------------------------------------------------------------------------
 # ColoredFormatter — logging integration
 # ---------------------------------------------------------------------------
-
-
 class ColoredFormatter(logging.Formatter):
     """Logging formatter with ANSI color support.
 

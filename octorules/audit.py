@@ -8,8 +8,6 @@ Provides four checks:
 - **zone-drift**: Same CIDR treated differently across zones.
 """
 
-from __future__ import annotations
-
 import ipaddress
 import json as _json
 import logging
@@ -27,9 +25,7 @@ log = logging.getLogger(__name__)
 ALL_CHECKS: frozenset[str] = frozenset({"ip-overlap", "ip-shadow", "cdn-ranges", "zone-drift"})
 
 # Severity ordering (lower rank = higher severity).
-_SEVERITY_RANK: dict[FindingSeverity, int] = {}  # populated after enum definition
-
-
+_SEVERITY_RANK: dict["FindingSeverity", int] = {}  # populated after enum definition
 # ---------------------------------------------------------------------------
 # Suppression parser
 # ---------------------------------------------------------------------------
@@ -67,8 +63,6 @@ def parse_audit_acceptances(file_path: str | Path) -> set[str]:
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
-
-
 @dataclass
 class RuleIPInfo:
     """IP ranges extracted from a single rule by a provider audit extension."""
@@ -115,8 +109,6 @@ class AuditFinding:
 # ---------------------------------------------------------------------------
 # CDN range fetching
 # ---------------------------------------------------------------------------
-
-
 def _fetch_json(url: str, timeout: int = 15) -> Any:
     """Fetch JSON from a URL. Returns parsed data or None on failure."""
     req = Request(url, headers={"User-Agent": "octorules-audit/1.0"})
@@ -126,7 +118,7 @@ def _fetch_json(url: str, timeout: int = 15) -> Any:
                 log.warning("HTTP %d from %s", resp.status, url)
                 return None
             return _json.loads(resp.read())
-    except Exception as e:
+    except (_json.JSONDecodeError, OSError, TimeoutError) as e:
         log.warning("Failed to fetch %s: %s", url, e)
         return None
 
@@ -286,8 +278,6 @@ def fetch_cdn_ranges(timeout: int = 15) -> CdnRangeResult:
 # ---------------------------------------------------------------------------
 # Check implementations
 # ---------------------------------------------------------------------------
-
-
 def _to_network(cidr: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
     """Parse a CIDR string, returning None on failure."""
     try:
@@ -541,8 +531,6 @@ def check_zone_drift(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
-
-
 _FINDING_SEVERITY_PEN_METHOD = {
     FindingSeverity.ERROR: "error",
     FindingSeverity.WARNING: "warning",

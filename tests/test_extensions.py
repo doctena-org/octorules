@@ -1,7 +1,5 @@
 """Tests for the extension hook registries."""
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,6 +7,7 @@ import pytest
 from octorules.extensions import (
     _plan_zone_hooks,
     _validate_hook_signature,
+    call_audit_extensions,
     call_plan_zone_finalize,
     call_plan_zone_prefetch,
     register_apply_extension,
@@ -59,6 +58,9 @@ class TestPlanZoneHookPrefetch:
 
             return prefetch, finalize
 
+        # Account for hooks registered by real providers (e.g. Page Shield)
+        baseline = len(_plan_zone_hooks)
+
         hooks = [make_hooks(i) for i in range(3)]
         for pf, fn in hooks:
             register_plan_zone_hook(pf, fn)
@@ -67,11 +69,10 @@ class TestPlanZoneHookPrefetch:
             provider = MagicMock()
 
             pairs = call_plan_zone_prefetch({}, scope, provider)
-            assert len(pairs) == 3
+            assert len(pairs) == baseline + 3
             assert call_log == ["prefetch-0", "prefetch-1", "prefetch-2"]
 
             call_log.clear()
-            # Use a mock zone plan for finalize
             zp = MagicMock()
             call_plan_zone_finalize(zp, {}, scope, provider, pairs)
             assert call_log == ["finalize-0", "finalize-1", "finalize-2"]
@@ -297,3 +298,63 @@ class TestHookSignatureValidation:
 
         with pytest.raises(TypeError, match="^audit_extension hook"):
             _validate_hook_signature("audit_extension", bad, ("rules_data", "phase_name"))
+
+
+class TestAuditExtensionErrorHandling:
+    """Tests for audit extension error handling (strict vs best-effort)."""
+
+    def test_audit_best_effort_returns_partial(self):
+        """Default (non-strict): failing extension is recorded but doesn't abort."""
+        from octorules.audit import RuleIPInfo
+
+        def good_audit(rules_data, phase_name):
+            return [
+                RuleIPInfo(
+                    zone_name="z",
+                    phase_name=phase_name,
+                    ref="r1",
+                    action="block",
+                    ip_ranges=["10.0.0.0/8"],
+                )
+            ]
+
+        def bad_audit(rules_data, phase_name):
+            raise RuntimeError("audit exploded")
+
+        register_audit_extension("good", good_audit)
+        register_audit_extension("bad", bad_audit)
+        try:
+            results, failed = call_audit_extensions({"waf": []}, "waf")
+            assert len(results) == 1
+            assert results[0].ref == "r1"
+            assert "bad" in failed
+        finally:
+            unregister_audit_extension("good")
+            unregister_audit_extension("bad")
+
+    def test_audit_strict_raises(self):
+        """strict=True: failing extension raises immediately."""
+
+        def bad_audit(rules_data, phase_name):
+            raise RuntimeError("strict boom")
+
+        register_audit_extension("strict_bad", bad_audit)
+        try:
+            with pytest.raises(RuntimeError, match="strict boom"):
+                call_audit_extensions({"waf": []}, "waf", strict=True)
+        finally:
+            unregister_audit_extension("strict_bad")
+
+    def test_audit_strict_false_is_default(self):
+        """Explicit strict=False matches default behavior."""
+
+        def bad_audit(rules_data, phase_name):
+            raise ValueError("non-fatal")
+
+        register_audit_extension("strict_false", bad_audit)
+        try:
+            results, failed = call_audit_extensions({"waf": []}, "waf", strict=False)
+            assert results == []
+            assert "strict_false" in failed
+        finally:
+            unregister_audit_extension("strict_false")

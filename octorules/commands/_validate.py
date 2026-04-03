@@ -1,7 +1,5 @@
 """Validate command implementation."""
 
-from __future__ import annotations
-
 import logging
 
 from octorules.commands._helpers import (

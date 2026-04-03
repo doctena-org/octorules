@@ -1,7 +1,5 @@
 """Tests for custom_rulesets serialization in the dumper."""
 
-from __future__ import annotations
-
 import yaml
 
 from octorules.dumper import dump_zone_rules

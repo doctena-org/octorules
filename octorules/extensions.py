@@ -14,8 +14,6 @@ Extension plans are stored generically in ``ZonePlan.extension_plans``
 as ``dict[str, list]``, keyed by extension name (e.g. ``"page_shield"``).
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 from collections.abc import Callable
@@ -29,8 +27,6 @@ if TYPE_CHECKING:
     from octorules.provider.base import BaseProvider, Scope
 
 log = logging.getLogger(__name__)
-
-
 # ---------------------------------------------------------------------------
 # Hook type aliases
 # ---------------------------------------------------------------------------
@@ -149,8 +145,6 @@ _audit_extensions: dict[str, AuditExtensionFn] = {}
 # ---------------------------------------------------------------------------
 # Registration functions
 # ---------------------------------------------------------------------------
-
-
 def register_plan_zone_hook(
     prefetch: PlanZonePrefetchHook,
     finalize: PlanZoneFinalizeHook,
@@ -218,8 +212,6 @@ def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
 # ---------------------------------------------------------------------------
 # Unregister (for test teardown)
 # ---------------------------------------------------------------------------
-
-
 def unregister_plan_zone_hook(
     prefetch: PlanZonePrefetchHook,
     finalize: PlanZoneFinalizeHook,
@@ -271,12 +263,10 @@ def unregister_audit_extension(name: str) -> None:
 # ---------------------------------------------------------------------------
 # Invocation helpers (called by core commands)
 # ---------------------------------------------------------------------------
-
-
 def call_plan_zone_prefetch(
     all_desired: dict,
-    scope: Scope,
-    provider: BaseProvider,
+    scope: "Scope",
+    provider: "BaseProvider",
 ) -> list[tuple]:
     """Call prefetch hooks. Returns list of (finalize_fn, context) pairs.
 
@@ -295,10 +285,10 @@ def call_plan_zone_prefetch(
 
 
 def call_plan_zone_finalize(
-    zone_plan: ZonePlan,
+    zone_plan: "ZonePlan",
     all_desired: dict,
-    scope: Scope,
-    provider: BaseProvider,
+    scope: "Scope",
+    provider: "BaseProvider",
     prefetch_pairs: list[tuple],
 ) -> None:
     """Call finalize hooks with their paired prefetch contexts."""
@@ -311,9 +301,9 @@ def call_plan_zone_finalize(
 
 
 def call_apply_extensions(
-    zone_plan: ZonePlan,
-    scope: Scope,
-    provider: BaseProvider,
+    zone_plan: "ZonePlan",
+    scope: "Scope",
+    provider: "BaseProvider",
 ) -> tuple[list[str], str | None]:
     """Call apply functions for all extensions that have plans.
 
@@ -340,9 +330,9 @@ def call_validate_extensions(
 
 
 def call_dump_extensions(
-    scope: Scope,
-    provider: BaseProvider,
-    out_dir: Path,
+    scope: "Scope",
+    provider: "BaseProvider",
+    out_dir: "Path",
 ) -> dict:
     """Call all registered dump hooks. Returns merged dict of extra data."""
     result: dict = {}
@@ -353,13 +343,26 @@ def call_dump_extensions(
     return result
 
 
-def call_audit_extensions(rules_data: dict, phase_name: str) -> tuple[list[RuleIPInfo], list[str]]:
+def call_audit_extensions(
+    rules_data: dict,
+    phase_name: str,
+    *,
+    strict: bool = False,
+) -> tuple[list["RuleIPInfo"], list[str]]:
     """Call all registered audit extractors for a phase.
 
     Returns ``(results, failed)`` where *results* is a flat list of
     :class:`RuleIPInfo` from all providers and *failed* is a list of
-    extension names that raised an exception (best-effort: partial
-    results are still returned).
+    extension names that raised an exception.
+
+    Error handling policy:
+
+    - **Plan/sync hooks** (prefetch, finalize, apply): errors are always
+      **fatal** — the operation aborts immediately.  This guarantees
+      planning and syncing never proceed with incomplete data.
+    - **Audit hooks**: errors are **best-effort** by default — partial
+      results are returned and the failed extension is recorded.  Set
+      *strict=True* to make audit errors fatal (raises immediately).
     """
     results: list = []
     failed: list[str] = []
@@ -368,6 +371,8 @@ def call_audit_extensions(rules_data: dict, phase_name: str) -> tuple[list[RuleI
             results.extend(fn(rules_data, phase_name))
         except Exception:
             log.exception("Error in audit extension %s for phase %s", name, phase_name)
+            if strict:
+                raise
             failed.append(name)
     return results, failed
 

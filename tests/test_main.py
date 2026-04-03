@@ -1,7 +1,5 @@
 """Tests for __main__.py entry point."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 

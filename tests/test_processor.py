@@ -1,7 +1,6 @@
 """Tests for the processor pipeline."""
 
-from __future__ import annotations
-
+from dataclasses import dataclass, field
 from unittest.mock import MagicMock
 
 import pytest
@@ -12,28 +11,43 @@ from octorules.planner import (
     ChangeType,
     CustomRulesetPlan,
     ListPlan,
-    PageShieldPolicyPlan,
     PhasePlan,
     RuleChange,
     ZonePlan,
 )
 from octorules.processor import BaseProcessor, ChangeTypeFilter, PhaseFilter, RefFilter
 
+
+@dataclass
+class _ExtPlan:
+    """Minimal extension plan for testing — avoids importing provider packages."""
+
+    description: str = ""
+    changes: list = field(default_factory=list)
+
+
 REDIRECT_PHASE = get_phase("redirect_rules")
 
 
-class TestBaseProcessor:
-    def test_process_desired_default_noop(self):
-        proc = BaseProcessor()
-        desired = {"redirect_rules": [{"ref": "r1", "expression": "true"}]}
-        result = proc.process_desired("example.com", desired, MagicMock())
-        assert result is desired
+class TestBaseProcessorProtocol:
+    def test_protocol_is_runtime_checkable(self):
+        """A class implementing both methods satisfies the protocol."""
 
-    def test_process_changes_default_noop(self):
-        proc = BaseProcessor()
-        zp = ZonePlan(zone_name="example.com")
-        result = proc.process_changes("example.com", zp, MagicMock())
-        assert result is zp
+        class FullProc:
+            def process_desired(self, zone_name, desired, provider):
+                return desired
+
+            def process_changes(self, zone_name, plan, provider):
+                return plan
+
+        assert isinstance(FullProc(), BaseProcessor)
+
+    def test_partial_impl_uses_getattr(self):
+        """Processors need only implement the methods they use."""
+        pf = PhaseFilter(include=["redirect_rules"])
+        # PhaseFilter only has process_desired — getattr pattern handles missing methods
+        assert hasattr(pf, "process_desired")
+        assert not hasattr(pf, "process_changes")
 
 
 class TestProcessorChain:
@@ -41,14 +55,14 @@ class TestProcessorChain:
         """Processors run in declared order; output of first feeds into second."""
         order = []
 
-        class ProcA(BaseProcessor):
+        class ProcA:
             def process_desired(self, zone_name, desired, provider):
                 order.append("A")
                 desired = dict(desired)
                 desired["from_a"] = True
                 return desired
 
-        class ProcB(BaseProcessor):
+        class ProcB:
             def process_desired(self, zone_name, desired, provider):
                 order.append("B")
                 assert desired.get("from_a") is True  # A ran first
@@ -70,7 +84,7 @@ class TestProcessDesired:
     def test_processor_adds_rule(self):
         """Processor that adds a rule to desired."""
 
-        class AddRuleProcessor(BaseProcessor):
+        class AddRuleProcessor:
             def process_desired(self, zone_name, desired, provider):
                 desired = dict(desired)
                 rules = list(desired.get("redirect_rules", []))
@@ -89,7 +103,7 @@ class TestProcessChanges:
     def test_processor_removes_change(self):
         """Processor that filters out changes."""
 
-        class FilterProcessor(BaseProcessor):
+        class FilterProcessor:
             def process_changes(self, zone_name, plan, provider):
                 for pp in plan.phase_plans:
                     pp.changes = [c for c in pp.changes if c.ref != "skip-me"]
@@ -118,8 +132,6 @@ class TestNoProcessors:
 
 
 # --- PhaseFilter tests ---
-
-
 class TestPhaseFilter:
     def test_include_keeps_only_listed_phases(self):
         pf = PhaseFilter(include=["redirect_rules", "cache_rules"])
@@ -163,8 +175,6 @@ class TestPhaseFilter:
 
 
 # --- RefFilter tests ---
-
-
 class TestRefFilter:
     def test_include_keeps_matching_refs(self):
         rf = RefFilter(include=r"^prod-")
@@ -244,8 +254,6 @@ class TestRefFilter:
 
 
 # --- ChangeTypeFilter tests ---
-
-
 class TestChangeTypeFilter:
     def _make_plan(self):
         """Build a ZonePlan with changes across all plan types."""
@@ -278,16 +286,20 @@ class TestChangeTypeFilter:
                     ],
                 )
             ],
-            page_shield_policy_plans=[
-                PageShieldPolicyPlan(
-                    description="csp",
-                    changes=[
-                        RuleChange(
-                            change_type=ChangeType.REMOVE, ref="action", phase=REDIRECT_PHASE
-                        )
-                    ],
-                )
-            ],
+            extension_plans={
+                "page_shield": [
+                    _ExtPlan(
+                        description="csp",
+                        changes=[
+                            RuleChange(
+                                change_type=ChangeType.REMOVE,
+                                ref="action",
+                                phase=REDIRECT_PHASE,
+                            )
+                        ],
+                    )
+                ]
+            },
         )
 
     def test_exclude_remove(self):
@@ -300,7 +312,7 @@ class TestChangeTypeFilter:
         # All REMOVE changes filtered from other plan types
         assert result.custom_ruleset_plans[0].changes == []
         assert result.list_plans[0].changes == []
-        assert result.page_shield_policy_plans[0].changes == []
+        assert result.extension_plans["page_shield"][0].changes == []
 
     def test_exclude_multiple_types(self):
         ctf = ChangeTypeFilter(exclude=["REMOVE", "ADD"])
@@ -324,7 +336,7 @@ class TestChangeTypeFilter:
         """ChangeTypeFilter should filter changes in all extension_plans, not just page_shield."""
         ctf = ChangeTypeFilter(exclude=["REMOVE"])
         # Build a plan with a custom extension (not page_shield)
-        ext_plan = PageShieldPolicyPlan(
+        ext_plan = _ExtPlan(
             description="custom_ext",
             changes=[
                 RuleChange(change_type=ChangeType.REMOVE, ref="ext-rm", phase=REDIRECT_PHASE),
@@ -343,14 +355,14 @@ class TestChangeTypeFilter:
     def test_exclude_filters_multiple_extensions(self):
         """ChangeTypeFilter should filter changes across multiple extension types."""
         ctf = ChangeTypeFilter(exclude=["ADD"])
-        ext_a = PageShieldPolicyPlan(
+        ext_a = _ExtPlan(
             description="ext_a",
             changes=[
                 RuleChange(change_type=ChangeType.ADD, ref="a1", phase=REDIRECT_PHASE),
                 RuleChange(change_type=ChangeType.MODIFY, ref="a2", phase=REDIRECT_PHASE),
             ],
         )
-        ext_b = PageShieldPolicyPlan(
+        ext_b = _ExtPlan(
             description="ext_b",
             changes=[
                 RuleChange(change_type=ChangeType.ADD, ref="b1", phase=REDIRECT_PHASE),

@@ -1,7 +1,5 @@
 """Shared fixtures for octorules tests."""
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -131,9 +129,9 @@ def _register_test_phases():
     yield
     # Teardown: restore empty core state
     global _TEST_PHASES_REGISTERED
-    PHASES.clear()
     from octorules.phases import _rebuild_derived
 
+    PHASES.clear()
     unregister_phase_alias("waf_managed_exceptions")
     for key in _TEST_NON_PHASE_KEYS:
         unregister_non_phase_key(key)
