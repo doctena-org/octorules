@@ -1,7 +1,5 @@
 """Tests for the octorules.secret sub-package."""
 
-from __future__ import annotations
-
 import pytest
 
 from octorules.config import ConfigError

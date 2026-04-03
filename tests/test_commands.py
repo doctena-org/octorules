@@ -1,7 +1,5 @@
 """Tests for _plan_all_scopes(), _PlanAllResult, and multi-provider routing."""
 
-from __future__ import annotations
-
 from collections import defaultdict
 from unittest.mock import MagicMock, patch
 
@@ -210,8 +208,6 @@ class TestPlanAllScopes:
 # ---------------------------------------------------------------------------
 # Multi-provider routing tests
 # ---------------------------------------------------------------------------
-
-
 def _make_mock_provider(account_id=None, account_name=None):
     """Create a mock provider with configurable account info."""
     prov = MagicMock(spec=BaseProvider)
@@ -531,34 +527,18 @@ class TestMultiProviderResolveZoneIds:
         assert resolve_fn.call_count == 3
 
 
-class TestInitProviderDeprecation:
-    """Test that _init_provider() emits a DeprecationWarning."""
+class TestInitProviderRemoved:
+    """Verify _init_provider() is no longer exported."""
 
-    @patch("octorules.commands._providers.resolve_zone_ids")
-    def test_deprecation_warning(self, mock_resolve):
-        from octorules.commands import _init_provider
+    def test_init_provider_not_in_commands(self):
+        from octorules import commands
 
-        mock_cls = MagicMock()
-        mock_cls.return_value = MagicMock()
-        cfg = MagicMock()
-        cfg.providers = {
-            "cloudflare": MagicMock(
-                name="cloudflare",
-                class_path=None,
-                kwargs={"token": "tok"},
-            ),
-        }
-        cfg.zones = {}
-
-        with pytest.warns(DeprecationWarning, match="_init_provider.*deprecated"):
-            _init_provider(cfg, provider_cls=mock_cls)
+        assert not hasattr(commands, "_init_provider")
 
 
 # ---------------------------------------------------------------------------
 # Feature negotiation (SUPPORTS) tests
 # ---------------------------------------------------------------------------
-
-
 class TestSupportsGuards:
     """Verify that commands skip unsupported features and log warnings."""
 
@@ -671,8 +651,6 @@ class TestSupportsGuards:
 # ---------------------------------------------------------------------------
 # Multi-target zone tests
 # ---------------------------------------------------------------------------
-
-
 class TestMultiTarget:
     """Tests for multi-target zone support."""
 
@@ -811,8 +789,6 @@ class TestMultiTarget:
 # ---------------------------------------------------------------------------
 # Target-name threading tests
 # ---------------------------------------------------------------------------
-
-
 class TestTargetNameThreading:
     """Verify target_name is passed through to _plan_single_zone for target filtering."""
 

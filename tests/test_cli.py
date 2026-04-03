@@ -1,7 +1,5 @@
 """Tests for the CLI."""
 
-from __future__ import annotations
-
 import argparse
 import logging
 from pathlib import Path
@@ -3121,8 +3119,6 @@ class TestPreparedRulesReuse:
 # ---------------------------------------------------------------------------
 # Multi-provider CLI integration tests
 # ---------------------------------------------------------------------------
-
-
 def _multi_cli_config(tmp_path):
     """Build a Config with two providers and one zone each."""
     rules_dir = tmp_path / "rules"
@@ -3292,8 +3288,6 @@ class TestMultiProviderReport:
 # ---------------------------------------------------------------------------
 # Audit log tests
 # ---------------------------------------------------------------------------
-
-
 class TestAuditLog:
     """Tests for _write_audit_log and its integration with cmd_sync."""
 
@@ -3380,8 +3374,6 @@ class TestAuditLog:
 # ---------------------------------------------------------------------------
 # cmd_audit CLI integration tests
 # ---------------------------------------------------------------------------
-
-
 class TestCmdAuditCLI:
     """Tests for audit subcommand through the CLI argument parser."""
 
@@ -3474,8 +3466,6 @@ class TestCmdAuditCLI:
 # ---------------------------------------------------------------------------
 # P0 fix tests: audit extension error handling
 # ---------------------------------------------------------------------------
-
-
 class TestAuditExtensionErrorHandling:
     """Tests for best-effort audit extension error handling (P0-1)."""
 
@@ -3544,8 +3534,6 @@ class TestAuditExtensionErrorHandling:
 # ---------------------------------------------------------------------------
 # P0 fix tests: _fetch_json HTTP status check
 # ---------------------------------------------------------------------------
-
-
 class TestFetchJsonHttpStatus:
     """Tests for HTTP status validation in _fetch_json (P0-2)."""
 
@@ -3603,8 +3591,6 @@ class TestFetchJsonHttpStatus:
 # ---------------------------------------------------------------------------
 # Quiet flag (--quiet) output suppression tests
 # ---------------------------------------------------------------------------
-
-
 class TestQuietFlag:
     """Tests for --quiet stdout suppression via ContextVar."""
 
@@ -3767,8 +3753,6 @@ class TestQuietFlag:
 # ---------------------------------------------------------------------------
 # Exit code summary + timing (#1, #2)
 # ---------------------------------------------------------------------------
-
-
 class TestExitSummary:
     """Exit code summary and timing printed to stderr."""
 
@@ -3813,8 +3797,6 @@ class TestExitSummary:
 # ---------------------------------------------------------------------------
 # Lint summary format (#4)
 # ---------------------------------------------------------------------------
-
-
 class TestLintSummaryFormat:
     """Tests for --format summary."""
 
@@ -3870,8 +3852,6 @@ class TestLintSummaryFormat:
 # ---------------------------------------------------------------------------
 # Plugin usage tracking in lint
 # ---------------------------------------------------------------------------
-
-
 class TestLintPluginUsage:
     """Lint plugins are labeled as 'unused' when they produce no results."""
 
@@ -3936,8 +3916,6 @@ class TestLintPluginUsage:
 # ---------------------------------------------------------------------------
 # --config-only validate (#8)
 # ---------------------------------------------------------------------------
-
-
 class TestConfigOnlyValidate:
     @patch("octorules.cli.Config.from_file")
     def test_config_only_exits_0(self, mock_config, tmp_config, caplog):
@@ -3957,8 +3935,6 @@ class TestConfigOnlyValidate:
 # ---------------------------------------------------------------------------
 # --format json for sync (#9)
 # ---------------------------------------------------------------------------
-
-
 class TestSyncJsonFormat:
     def test_format_sync_results_json(self):
         from octorules.commands._sync import SyncResult, _format_sync_results_json
@@ -3993,8 +3969,6 @@ class TestSyncJsonFormat:
 # ---------------------------------------------------------------------------
 # argcomplete integration (#6)
 # ---------------------------------------------------------------------------
-
-
 class TestArgcomplete:
     def test_parser_has_all_subcommands(self):
         from octorules.cli import build_parser

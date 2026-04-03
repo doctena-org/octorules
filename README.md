@@ -797,6 +797,17 @@ my_provider = "my_package:MyProvider"
 
 Unsupported optional methods must still exist to satisfy the Protocol. The convention: read methods (`list_*`, `get_*`, `get_all_*`) return empty collections; mutation methods (`create_*`, `update_*`, `put_*`, `delete_*`) raise `ProviderError`.
 
+### Provider utilities
+
+`octorules.provider.utils` and related modules provide shared helpers so providers don't reinvent common patterns:
+
+- **`retry_with_backoff()`** (`octorules.retry`) — exponential backoff with jitter for retrying transient API errors.
+- **`fetch_parallel()`** (`octorules.provider.utils`) — concurrent fetching with error propagation and worker capping.
+- **`to_plain_dict()`** — convert provider SDK objects to plain dicts.
+- **`normalize_fields()` / `denormalize_fields()`** — bidirectional field name mapping between YAML and provider API formats.
+- **`validate_path_within()`** (`octorules.pathutil`) — path traversal protection for file operations.
+- **`make_error_wrapper()`** — decorator factory for mapping provider SDK exceptions to `ProviderError`/`ProviderAuthError`.
+
 Extension hooks (plan, apply, format, validate, dump, audit) registered via `octorules.extensions` are validated at registration time — the framework checks the callable's signature against the expected parameters and raises `TypeError` immediately if they don't match, so provider authors get clear errors during development rather than at runtime.
 
 ## CI/CD integration

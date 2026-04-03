@@ -8,8 +8,6 @@ Also provides a display formatter that reverses the collapse for
 human-readable plan output.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 
@@ -116,8 +114,6 @@ def normalize_expression(expr: str) -> str:
 # ---------------------------------------------------------------------------
 # Display formatting (reverse of normalization — for plan output readability)
 # ---------------------------------------------------------------------------
-
-
 def _find_closing_brace(expr: str, start: int) -> int:
     """Return index of ``}`` matching the ``{`` at *start*, or -1."""
     for i, ch, in_quote in QuoteAwareScanner(expr[start + 1 :]):

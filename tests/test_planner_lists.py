@@ -1,7 +1,5 @@
 """Tests for the diff engine (planner) – lists."""
 
-from __future__ import annotations
-
 import logging
 
 import pytest

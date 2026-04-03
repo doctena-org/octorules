@@ -1,7 +1,5 @@
 """Tests for the audit module — IP overlap, shadow, CDN ranges, zone drift."""
 
-from __future__ import annotations
-
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,11 +33,10 @@ from octorules.extensions import (
     unregister_audit_extension,
 )
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
 def _make_rule_ip(
     zone: str = "example.com",
     phase: str = "waf_custom_rules",
@@ -59,8 +56,6 @@ def _make_rule_ip(
 # ---------------------------------------------------------------------------
 # _to_network
 # ---------------------------------------------------------------------------
-
-
 class TestToNetwork:
     def test_valid_ipv4(self):
         net = _to_network("192.168.1.0/24")
@@ -87,8 +82,6 @@ class TestToNetwork:
 # ---------------------------------------------------------------------------
 # check_ip_overlap
 # ---------------------------------------------------------------------------
-
-
 class TestCheckIPOverlap:
     def test_no_overlap(self):
         rules = [
@@ -153,8 +146,6 @@ class TestCheckIPOverlap:
 # ---------------------------------------------------------------------------
 # check_ip_shadow
 # ---------------------------------------------------------------------------
-
-
 class TestCheckIPShadow:
     PHASE_ORDER = ["phase_a", "phase_b", "phase_c"]
 
@@ -221,8 +212,6 @@ class TestCheckIPShadow:
 # ---------------------------------------------------------------------------
 # check_cdn_ranges
 # ---------------------------------------------------------------------------
-
-
 class TestCheckCDNRanges:
     CDN = {"CloudProvider": ["198.51.100.0/24", "2001:db8:face::/48"]}
 
@@ -254,8 +243,6 @@ class TestCheckCDNRanges:
 # ---------------------------------------------------------------------------
 # check_zone_drift
 # ---------------------------------------------------------------------------
-
-
 class TestCheckZoneDrift:
     def test_no_drift(self):
         rules = [
@@ -309,8 +296,6 @@ class TestCheckZoneDrift:
 # ---------------------------------------------------------------------------
 # CDN parsers
 # ---------------------------------------------------------------------------
-
-
 class TestCDNParsers:
     def test_cloudflare_parser(self):
         data = {"result": {"ipv4_cidrs": ["1.1.1.0/24"], "ipv6_cidrs": ["2606:4700::/32"]}}
@@ -383,8 +368,6 @@ class TestCDNParsers:
 # ---------------------------------------------------------------------------
 # fetch_cdn_ranges (with a local HTTP server)
 # ---------------------------------------------------------------------------
-
-
 class TestFetchCDNRanges:
     def test_fetch_success_returns_api_source(self):
         """When APIs succeed, source is 'api'."""
@@ -427,8 +410,6 @@ class TestFetchCDNRanges:
 # ---------------------------------------------------------------------------
 # CdnRangeResult
 # ---------------------------------------------------------------------------
-
-
 class TestCdnRangeResult:
     def test_api_source_never_stale(self):
         result = CdnRangeResult(ranges={}, source="api", generated_at=None)
@@ -460,8 +441,6 @@ class TestCdnRangeResult:
 # ---------------------------------------------------------------------------
 # _load_baked_in_ranges
 # ---------------------------------------------------------------------------
-
-
 class TestLoadBakedInRanges:
     def test_loads_real_baked_in_files(self):
         """The actual baked-in JSON files load successfully."""
@@ -493,8 +472,6 @@ class TestLoadBakedInRanges:
 # ---------------------------------------------------------------------------
 # format_findings
 # ---------------------------------------------------------------------------
-
-
 class TestFormatFindings:
     def test_empty(self):
         assert format_findings([]) == ""
@@ -599,8 +576,6 @@ class TestFormatFindings:
 # ---------------------------------------------------------------------------
 # run_audit
 # ---------------------------------------------------------------------------
-
-
 class TestRunAudit:
     PHASE_ORDER = ["phase_a", "phase_b"]
 
@@ -679,8 +654,6 @@ class TestRunAudit:
 # ---------------------------------------------------------------------------
 # audit_zone_rules (extension integration)
 # ---------------------------------------------------------------------------
-
-
 class TestAuditZoneRules:
     def test_calls_registered_extensions(self):
         """audit_zone_rules calls registered audit extensions."""
@@ -851,8 +824,6 @@ class TestAuditZoneRules:
 # ---------------------------------------------------------------------------
 # Extension registry
 # ---------------------------------------------------------------------------
-
-
 class TestAuditExtensionRegistry:
     def test_register_unregister(self):
         fn = lambda rules_data, phase_name: []  # noqa: E731
@@ -869,8 +840,6 @@ class TestAuditExtensionRegistry:
 # ---------------------------------------------------------------------------
 # parse_audit_acceptances
 # ---------------------------------------------------------------------------
-
-
 class TestParseAuditAcceptances:
     def test_single_check(self, tmp_path):
         f = tmp_path / "test.yaml"
@@ -974,8 +943,6 @@ class TestParseAuditAcceptances:
 # ---------------------------------------------------------------------------
 # _SEVERITY_RANK
 # ---------------------------------------------------------------------------
-
-
 class TestSeverityRank:
     def test_error_ranks_highest(self):
         assert _SEVERITY_RANK[FindingSeverity.ERROR] < _SEVERITY_RANK[FindingSeverity.WARNING]
@@ -995,8 +962,6 @@ class TestSeverityRank:
 # ---------------------------------------------------------------------------
 # cmd_audit integration tests
 # ---------------------------------------------------------------------------
-
-
 def _write_config_and_rules(
     tmp_path: Path,
     zone_rules: dict[str, dict],

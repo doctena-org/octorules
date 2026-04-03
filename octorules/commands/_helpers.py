@@ -1,7 +1,5 @@
 """Shared utility functions for command implementations."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,6 +7,7 @@ from pathlib import Path
 from typing import IO
 
 from octorules.config import Config, ConfigError
+from octorules.pathutil import validate_path_within
 from octorules.phases import PHASE_BY_NAME, unknown_phase_message
 from octorules.plan_output import PlanText
 from octorules.planner import RuleDict
@@ -90,17 +89,14 @@ def _write_output_file(
     for user-specified ``--output`` CLI arguments).
     """
     resolved = Path(path).resolve()
-    if base_dir is not None:
-        try:
-            resolved.relative_to(base_dir.resolve())
-        except ValueError:
-            log.error(
-                "Output path escapes base directory: %s (resolves to %s, base is %s)",
-                path,
-                resolved,
-                base_dir.resolve(),
-            )
-            return False
+    if base_dir is not None and not validate_path_within(resolved, base_dir):
+        log.error(
+            "Output path escapes base directory: %s (resolves to %s, base is %s)",
+            path,
+            resolved,
+            base_dir.resolve(),
+        )
+        return False
     try:
         with open(resolved, "w", encoding="utf-8") as f:
             write_fn(f)

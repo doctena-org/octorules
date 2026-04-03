@@ -1,7 +1,5 @@
 """Tests for list plan formatting."""
 
-from __future__ import annotations
-
 import json
 
 from octorules.formatter import (

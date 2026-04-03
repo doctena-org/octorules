@@ -1,12 +1,11 @@
 """Export existing provider rules to YAML files."""
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 
 import yaml
 
+from octorules.pathutil import validate_path_within
 from octorules.phases import (
     PHASE_BY_PROVIDER_ID,
     get_api_fields,
@@ -58,9 +57,7 @@ def _write_list_file(output_dir: Path, lists_dir: Path, list_name: str, entry: d
     """
     file_path = (lists_dir / f"{list_name}.yaml").resolve()
     # Prevent path traversal outside the lists directory
-    try:
-        file_path.relative_to(lists_dir.resolve())
-    except ValueError:
+    if not validate_path_within(file_path, lists_dir):
         log.error("List name %r would write outside lists directory", list_name)
         return None
     try:

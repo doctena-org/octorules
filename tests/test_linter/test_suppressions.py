@@ -1,7 +1,5 @@
 """Unit tests for the suppression parser (parse_suppressions / is_suppressed)."""
 
-from __future__ import annotations
-
 from octorules.linter.suppressions import is_suppressed, parse_suppressions
 
 

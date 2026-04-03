@@ -1,7 +1,5 @@
 """Tests for octorules._color — Pen, ColoredFormatter, supports_color."""
 
-from __future__ import annotations
-
 import io
 import logging
 
@@ -20,11 +18,10 @@ from octorules._color import (
     supports_color,
 )
 
+
 # ---------------------------------------------------------------------------
 # supports_color
 # ---------------------------------------------------------------------------
-
-
 class TestSupportsColor:
     def test_returns_bool(self):
         assert isinstance(supports_color(), bool)
@@ -78,8 +75,6 @@ class TestSupportsColor:
 # ---------------------------------------------------------------------------
 # Pen
 # ---------------------------------------------------------------------------
-
-
 class TestPen:
     def test_color_off_returns_plain(self):
         p = Pen(use_color=False)
@@ -135,8 +130,6 @@ class TestPen:
 # ---------------------------------------------------------------------------
 # ColoredFormatter
 # ---------------------------------------------------------------------------
-
-
 class TestColoredFormatter:
     def _record(self, level=logging.INFO, msg="hello", **extra):
         record = logging.LogRecord(
@@ -252,8 +245,6 @@ class TestColoredFormatter:
 # ---------------------------------------------------------------------------
 # pen() factory function
 # ---------------------------------------------------------------------------
-
-
 class TestPenFactory:
     def test_pen_returns_pen_instance(self):
         from octorules._color import pen
@@ -281,8 +272,6 @@ class TestPenFactory:
 # ---------------------------------------------------------------------------
 # Integration: colored output in lint, audit, plan formatters
 # ---------------------------------------------------------------------------
-
-
 class TestLintFormatterColor:
     """Verify lint text output includes ANSI codes when use_color=True."""
 

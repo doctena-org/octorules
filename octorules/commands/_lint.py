@@ -1,7 +1,5 @@
 """Lint command implementation."""
 
-from __future__ import annotations
-
 import logging
 import sys
 
@@ -20,8 +18,6 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Core lint rules (provider-agnostic)
 # ---------------------------------------------------------------------------
-
-
 def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
     """Run provider-agnostic lint checks on a single zone's rules.
 

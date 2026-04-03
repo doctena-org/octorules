@@ -1,15 +1,21 @@
 """Provider utilities — shared helpers for provider implementations."""
 
-from __future__ import annotations
-
 import functools
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+from typing import Any, TypeVar
 
 from octorules.provider.exceptions import (
     ProviderAuthError,
     ProviderConnectionError,
     ProviderError,
 )
+
+log = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 def format_api_error(e: ProviderError) -> str:
@@ -81,3 +87,126 @@ def make_error_wrapper(
         return wrapper
 
     return decorator
+
+
+# ---------------------------------------------------------------------------
+# SDK model conversion
+# ---------------------------------------------------------------------------
+def to_plain_dict(obj: object) -> dict[str, Any]:
+    """Convert an SDK model object to a plain dict.
+
+    Handles Pydantic v2 (``model_dump``), proto-plus / Pydantic v1
+    (``to_dict``), and plain dicts.  Falls back to ``dict(obj)`` as a
+    last resort.
+
+    Raises:
+        ProviderError: If conversion fails.
+    """
+    if isinstance(obj, dict):
+        return obj
+    # Pydantic v2
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(exclude_none=True)
+    # proto-plus or Pydantic v1
+    if hasattr(obj, "to_dict"):
+        try:
+            return type(obj).to_dict(obj)
+        except (TypeError, AttributeError):
+            return obj.to_dict()
+    try:
+        return dict(obj)  # type: ignore[call-overload]
+    except (TypeError, ValueError) as exc:
+        raise ProviderError(f"Cannot convert {type(obj).__name__} to dict: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Field mapping helpers
+# ---------------------------------------------------------------------------
+def normalize_fields(rule: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
+    """Rename keys in *rule* per *mapping* (sdk_name -> octorules_name).
+
+    Keys not present in *mapping* are preserved unchanged.
+    Returns a new dict.
+    """
+    return {mapping.get(k, k): v for k, v in rule.items()}
+
+
+def denormalize_fields(rule: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
+    """Reverse of :func:`normalize_fields` (octorules_name -> sdk_name).
+
+    Returns a new dict.
+    """
+    reverse = {v: k for k, v in mapping.items()}
+    return {reverse.get(k, k): v for k, v in rule.items()}
+
+
+# ---------------------------------------------------------------------------
+# Parallel fetch orchestrator
+# ---------------------------------------------------------------------------
+
+_DEFAULT_FETCH_TIMEOUT = 300.0  # seconds
+
+
+def fetch_parallel(
+    items: Sequence[Any],
+    *,
+    submit_fn: Callable,
+    key_fn: Callable,
+    result_fn: Callable,
+    label: str,
+    scope_label: str = "",
+    max_workers: int = 4,
+    timeout: float = _DEFAULT_FETCH_TIMEOUT,
+    auth_errors: tuple[type[BaseException], ...] = (ProviderAuthError,),
+) -> tuple[dict[str, _T], list[str]]:
+    """Run *submit_fn* for each item in parallel, collecting results.
+
+    Args:
+        items: Items to iterate over.
+        submit_fn: ``submit_fn(executor, item)`` -> ``Future``.
+        key_fn: ``key_fn(item)`` -> hashable key for log messages and
+            the ``failed`` list.
+        result_fn: ``result_fn(item, future_result)`` -> ``(key, value)``
+            pair to insert into the result dict, or ``None`` to skip.
+        label: Human label for log messages (e.g. "phase", "custom ruleset").
+        scope_label: Pre-formatted scope string for log messages.
+        max_workers: Max concurrent workers.
+        timeout: Per-future timeout in seconds.
+        auth_errors: Exception types that cause immediate cancellation of
+            all pending futures and re-raise.
+
+    Returns:
+        ``(results_dict, failed_keys)`` -- results for successful fetches
+        and keys of items that failed with transient errors.
+    """
+    if not items:
+        return {}, []
+    workers = min(max_workers, len(items))
+    results: dict[str, _T] = {}
+    failed: list[str] = []
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        future_to_item: dict = {}
+        for item in items:
+            f = submit_fn(executor, item)
+            future_to_item[f] = item
+        for future in as_completed(future_to_item):
+            item = future_to_item[future]
+            key = key_fn(item)
+            try:
+                value = future.result(timeout=timeout)
+            except auth_errors:
+                for f in future_to_item:
+                    f.cancel()
+                raise
+            except (FuturesTimeoutError, TimeoutError):
+                log.warning("Timed out fetching %s %s for %s", label, key, scope_label)
+                failed.append(key)
+                continue
+            except ProviderError as exc:
+                log.warning("Failed to fetch %s %s for %s: %s", label, key, scope_label, exc)
+                failed.append(key)
+                continue
+            pair = result_fn(item, value)
+            if pair is not None:
+                results[pair[0]] = pair[1]
+    return results, failed

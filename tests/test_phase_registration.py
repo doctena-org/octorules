@@ -1,7 +1,5 @@
 """Tests for the phase registration API."""
 
-from __future__ import annotations
-
 import pytest
 
 from octorules.phases import (
@@ -30,31 +28,18 @@ from octorules.phases import (
 @pytest.fixture(autouse=True)
 def _restore_registry():
     """Snapshot and restore the phase registry around each test."""
-    from octorules.phases import _api_fields
+    from octorules.phases import _api_fields, _rebuild_derived
 
     orig_phases = list(PHASES)
-    orig_by_name = dict(PHASE_BY_NAME)
-    orig_by_pid = dict(PHASE_BY_PROVIDER_ID)
-    orig_friendly = list(ALL_FRIENDLY_NAMES)
-    orig_all_ids = list(ALL_PROVIDER_IDS)
-    orig_zone_ids = list(ZONE_PROVIDER_IDS)
-    orig_account_ids = list(ACCOUNT_PROVIDER_IDS)
     orig_aliases = dict(RENAMED_PHASES)
     orig_api_fields = {k: set(v) for k, v in _api_fields.items()}
     yield
     PHASES[:] = orig_phases
-    PHASE_BY_NAME.clear()
-    PHASE_BY_NAME.update(orig_by_name)
-    PHASE_BY_PROVIDER_ID.clear()
-    PHASE_BY_PROVIDER_ID.update(orig_by_pid)
-    ALL_FRIENDLY_NAMES[:] = orig_friendly
-    ALL_PROVIDER_IDS[:] = orig_all_ids
-    ZONE_PROVIDER_IDS[:] = orig_zone_ids
-    ACCOUNT_PROVIDER_IDS[:] = orig_account_ids
     RENAMED_PHASES.clear()
     RENAMED_PHASES.update(orig_aliases)
     for k in _api_fields:
         _api_fields[k] = orig_api_fields.get(k, set())
+    _rebuild_derived()
 
 
 TEST_PHASE = Phase("test_phase", "test_provider_id", "block")

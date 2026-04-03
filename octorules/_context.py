@@ -1,7 +1,5 @@
 """Process-wide context flags for output control."""
 
-from __future__ import annotations
-
 import contextvars
 
 _quiet: contextvars.ContextVar[bool] = contextvars.ContextVar("quiet", default=False)

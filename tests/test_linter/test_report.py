@@ -1,7 +1,5 @@
 """Tests for lint report formatters."""
 
-from __future__ import annotations
-
 import json
 
 from octorules.linter.engine import LintContext, LintResult, Severity

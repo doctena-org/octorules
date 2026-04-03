@@ -1,7 +1,5 @@
 """Tests for lint engine — framework tests (no provider-specific logic)."""
 
-from __future__ import annotations
-
 import textwrap
 
 from octorules.linter.engine import (

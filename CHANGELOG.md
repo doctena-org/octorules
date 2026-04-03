@@ -5,6 +5,54 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.22.1] - 2026-04-03
+
+### Added
+- `octorules.retry` module: shared `retry_with_backoff()` with exponential
+  backoff and jitter for provider operations.
+- `octorules.pathutil` module: shared `validate_path_within()` for path
+  traversal protection.
+- Provider utilities in `octorules.provider.utils`: `to_plain_dict()`,
+  `normalize_fields()`, `denormalize_fields()`, `fetch_parallel()` — shared
+  helpers for all providers.
+- `strict` parameter on `call_audit_extensions()` to control whether audit
+  hook errors are fatal.
+- `cached_property` on `ZonePlan.has_changes` and `ZonePlan.total_changes`
+  for performance.
+- File-level cache in `Config._load_rules_file()` to avoid re-reading shared
+  rules files.
+- Idempotent phase registration: re-registering the same phase (same name +
+  provider_id) is a no-op.
+
+### Changed
+- Processor hooks (`process_desired`, `process_changes`) now validate return
+  types — returning the wrong type raises `ConfigError` with a clear message
+  naming the processor.
+- `BaseProcessor` is now a `Protocol` instead of a base class — processors
+  no longer need to inherit from it.
+- `PlanOutput` is now a single dataclass with a `fmt` field; `PlanText`,
+  `PlanJson`, etc. are factory functions.
+- Exception types narrowed in `_discover_provider_modules()`, `_fetch_json()`,
+  and secret handler loading.
+- `_setup_logging()` and `cmd_versions()` use `sys.modules` scan instead of
+  `packages_distributions()` (~130ms faster per call).
+- Subprocess-based provider tests converted to in-process (test suite ~3x
+  faster).
+
+### Removed
+- `from __future__ import annotations` removed from all source files
+  (Python 3.10+ native syntax).
+- `PageShieldPolicyPlan` backward-compat stub and
+  `ZonePlan.page_shield_policy_plans` property — use
+  `extension_plans["page_shield"]` directly.
+- `ZonePlan.__init__` monkey-patch for deprecated
+  `page_shield_policy_plans` kwarg.
+- `_init_provider()` deprecated function — use `_init_providers()`.
+- `_get_cloudflare_provider()` and implicit CloudflareProvider fallback in
+  `_resolve_provider_class()`.
+- `CloudflareProvider` lazy re-export from `octorules.provider` — import
+  from `octorules_cloudflare` directly.
+
 ## [0.22.0] - 2026-04-02
 
 ### Added

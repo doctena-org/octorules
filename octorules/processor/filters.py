@@ -1,20 +1,17 @@
 """Built-in processor filters for common WAF pipeline transformations."""
 
-from __future__ import annotations
-
 import re
 from typing import TYPE_CHECKING
 
 from octorules.config import ConfigError
 from octorules.planner import ChangeType
-from octorules.processor import BaseProcessor
 
 if TYPE_CHECKING:
     from octorules.planner import ZonePlan
     from octorules.provider.base import BaseProvider
 
 
-class PhaseFilter(BaseProcessor):
+class PhaseFilter:
     """Filter desired rules by phase name.
 
     Args:
@@ -35,13 +32,13 @@ class PhaseFilter(BaseProcessor):
         self._include = set(include) if include else None
         self._exclude = set(exclude) if exclude else None
 
-    def process_desired(self, zone_name: str, desired: dict, provider: BaseProvider) -> dict:
+    def process_desired(self, zone_name: str, desired: dict, provider: "BaseProvider") -> dict:
         if self._include is not None:
             return {p: rules for p, rules in desired.items() if p in self._include}
         return {p: rules for p, rules in desired.items() if p not in self._exclude}
 
 
-class RefFilter(BaseProcessor):
+class RefFilter:
     """Filter rules by regex pattern on the 'ref' field.
 
     Args:
@@ -65,7 +62,7 @@ class RefFilter(BaseProcessor):
         except re.error as e:
             raise ConfigError(f"RefFilter: invalid regex pattern: {e}") from None
 
-    def process_desired(self, zone_name: str, desired: dict, provider: BaseProvider) -> dict:
+    def process_desired(self, zone_name: str, desired: dict, provider: "BaseProvider") -> dict:
         result = {}
         for phase, rules in desired.items():
             if not isinstance(rules, list):
@@ -78,7 +75,7 @@ class RefFilter(BaseProcessor):
         return result
 
 
-class ChangeTypeFilter(BaseProcessor):
+class ChangeTypeFilter:
     """Filter planned changes by type.
 
     Removes changes of the specified types from all plan components
@@ -99,7 +96,9 @@ class ChangeTypeFilter(BaseProcessor):
                 f"ChangeTypeFilter: unknown change type {e}. Valid types: {valid}"
             ) from None
 
-    def process_changes(self, zone_name: str, plan: ZonePlan, provider: BaseProvider) -> ZonePlan:
+    def process_changes(
+        self, zone_name: str, plan: "ZonePlan", provider: "BaseProvider"
+    ) -> "ZonePlan":
         for pp in plan.phase_plans:
             pp.changes = [c for c in pp.changes if c.change_type not in self._exclude]
         for crp in plan.custom_ruleset_plans:

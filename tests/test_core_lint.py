@@ -1,7 +1,5 @@
 """Tests for core lint rules (CORE002, CORE003, CORE004, CORE006)."""
 
-from __future__ import annotations
-
 from octorules.commands._lint import _core_lint_orphaned_files, _core_lint_zone
 from octorules.config import Config, ZoneConfig
 from octorules.linter.engine import LintContext, Severity
@@ -14,8 +12,6 @@ def _ids(ctx: LintContext) -> set[str]:
 # ---------------------------------------------------------------------------
 # CORE003: All rules disabled in phase
 # ---------------------------------------------------------------------------
-
-
 class TestCore003AllDisabled:
     def test_all_disabled_warns(self):
         ctx = LintContext(zone_name="test.com")
@@ -73,8 +69,6 @@ class TestCore003AllDisabled:
 # ---------------------------------------------------------------------------
 # CORE004: Ref collision across phases
 # ---------------------------------------------------------------------------
-
-
 class TestCore004RefCollision:
     def test_same_ref_different_phases_warns(self):
         ctx = LintContext(zone_name="test.com")
@@ -129,8 +123,6 @@ class TestCore004RefCollision:
 # ---------------------------------------------------------------------------
 # CORE006: Empty rules file
 # ---------------------------------------------------------------------------
-
-
 class TestCore003EdgeCases:
     def test_phase_with_non_dict_entries_skipped(self):
         """Non-dict entries in a phase list are ignored, not counted."""
@@ -197,8 +189,6 @@ class TestCore006EmptyFile:
 # ---------------------------------------------------------------------------
 # CORE002: Orphaned rules files
 # ---------------------------------------------------------------------------
-
-
 class TestCore002OrphanedFiles:
     def test_orphaned_file_detected(self, tmp_path):
         rules_dir = tmp_path / "rules"

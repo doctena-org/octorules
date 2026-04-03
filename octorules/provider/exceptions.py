@@ -6,8 +6,6 @@ implementations (e.g. octorules-cloudflare) map their SDK exceptions
 to these base types.
 """
 
-from __future__ import annotations
-
 
 class ProviderError(Exception):
     """Base class for all provider errors (transient API failures, etc.)."""

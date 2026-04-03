@@ -1,7 +1,5 @@
 """Configuration loading and secret handler resolution."""
 
-from __future__ import annotations
-
 import importlib
 import logging
 import re
@@ -12,6 +10,7 @@ from pathlib import Path
 
 import yaml
 
+from octorules.pathutil import validate_path_within
 from octorules.plan_output import PLAN_OUTPUT_CLASSES, PlanOutput
 
 log = logging.getLogger(__name__)
@@ -78,9 +77,7 @@ def _make_include_loader(base_path: Path, visited: set[Path]) -> type:
         rel_path = loader.construct_scalar(node)
         include_path = (base_path / rel_path).resolve()
         # Prevent path traversal outside the base directory tree
-        try:
-            include_path.relative_to(base_path.resolve())
-        except ValueError:
+        if not validate_path_within(include_path, base_path):
             raise ConfigError(
                 f"Include path escapes base directory: {rel_path!r} "
                 f"(resolves to {include_path}, base is {base_path.resolve()})"
@@ -421,6 +418,7 @@ class Config:
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
     zone_templates: dict[str, ZoneConfig] = field(default_factory=dict)
     _rules_cache: dict[str, dict] = field(default_factory=dict, repr=False, compare=False)
+    _file_cache: dict[Path, dict] = field(default_factory=dict, repr=False, compare=False)
     _secret_handlers_raw: dict = field(default_factory=dict, repr=False, compare=False)
     _config_path: Path | None = field(default=None, repr=False, compare=False)
     _secrets_resolved: bool = field(default=False, repr=False, compare=False)
@@ -477,7 +475,11 @@ class Config:
 
         for ep in entry_points(group="octorules.secret_handlers"):
             if ep.name not in handlers:
-                handlers[ep.name] = ep.load()(ep.name)
+                try:
+                    cls = ep.load()
+                    handlers[ep.name] = cls(ep.name)
+                except (ImportError, AttributeError, ModuleNotFoundError) as e:
+                    raise ConfigError(f"Failed to load secret handler {ep.name!r}: {e}") from e
 
         # Config-declared handlers
         for sh_name, sh_data in self._secret_handlers_raw.items():
@@ -510,7 +512,7 @@ class Config:
         self._secrets_resolved = True
 
     @classmethod
-    def from_file(cls, path: str | Path) -> Config:
+    def from_file(cls, path: str | Path) -> "Config":
         """Load config from a YAML file.
 
         The config file is a YAML mapping with four main sections:
@@ -765,19 +767,22 @@ class Config:
         if cache_key in self._rules_cache:
             return self._rules_cache[cache_key]
         rules_file = (self.rules_dir / f"{file_stem}.yaml").resolve()
-        try:
-            rules_file.relative_to(self.rules_dir.resolve())
-        except ValueError:
+        if not validate_path_within(rules_file, self.rules_dir):
             raise ConfigError(f"{label} resolves outside rules directory") from None
         if not rules_file.exists():
             log.info("No rules file for %s (expected %s)", label, rules_file)
             self._rules_cache[cache_key] = {}
             return self._rules_cache[cache_key]
-        data = _yaml_load(rules_file)
-        if not isinstance(data, dict):
-            raise ConfigError(
-                f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
-            )
+        # File-level cache: avoid re-reading when multiple zones share a file.
+        if rules_file in self._file_cache:
+            data = self._file_cache[rules_file]
+        else:
+            data = _yaml_load(rules_file)
+            if not isinstance(data, dict):
+                raise ConfigError(
+                    f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
+                )
+            self._file_cache[rules_file] = data
         self._rules_cache[cache_key] = data
         return data
 

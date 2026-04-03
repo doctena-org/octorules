@@ -1,7 +1,5 @@
 """Tests for the formatter."""
 
-from __future__ import annotations
-
 import io
 import json
 

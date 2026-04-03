@@ -17,8 +17,6 @@ Multiple rule IDs can be comma-separated.  Whitespace around ``=`` and IDs is
 tolerated.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from pathlib import Path

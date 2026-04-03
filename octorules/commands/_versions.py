@@ -1,7 +1,5 @@
 """Versions command implementation."""
 
-from __future__ import annotations
-
 from octorules import __version__
 
 
@@ -13,14 +11,16 @@ def cmd_versions() -> int:
         return 0
 
     import platform
-    from importlib.metadata import PackageNotFoundError, packages_distributions, version
+    import sys
+    from importlib.metadata import PackageNotFoundError, version
 
-    # Discover installed octorules provider/extension packages
+    # Discover installed octorules provider/extension packages from
+    # sys.modules (already imported by entry-point discovery).
     extras: list[tuple[str, str]] = []
-    for pkg_name in sorted(packages_distributions()):
-        if pkg_name.startswith("octorules_"):
+    for mod_name in sorted(sys.modules):
+        if mod_name.startswith("octorules_") and "." not in mod_name:
             try:
-                label = pkg_name.replace("_", "-")
+                label = mod_name.replace("_", "-")
                 extras.append((label, version(label)))
             except PackageNotFoundError:
                 pass

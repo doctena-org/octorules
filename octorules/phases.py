@@ -6,8 +6,6 @@ All derived collections (``ALL_PROVIDER_IDS``, ``PHASE_BY_NAME``, etc.) are
 mutated **in-place** so existing imports see updates.
 """
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -30,7 +28,7 @@ class Phase:
     # after stripping ``octorules:`` metadata.  Receives ``(rule_dict, phase)``
     # and must return the prepared dict.  Providers register this to handle
     # expression normalization, default fields, action injection, etc.
-    prepare_rule: Callable[[dict, Phase], dict] | None = field(default=None, repr=False)
+    prepare_rule: Callable[[dict, "Phase"], dict] | None = field(default=None, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -43,9 +41,11 @@ _BUILTIN_PHASES: list[Phase] = []
 # Mutable registry and derived collections
 # ---------------------------------------------------------------------------
 
-# The mutable registry — starts as a copy of builtins.
+# The single source of truth — providers append via register_phase(s).
 PHASES: list[Phase] = list(_BUILTIN_PHASES)
 
+# Derived collections — rebuilt in-place on every registration so that
+# code which imported them at module level sees updates.
 PHASE_BY_NAME: dict[str, Phase] = {}
 PHASE_BY_PROVIDER_ID: dict[str, Phase] = {}
 ALL_FRIENDLY_NAMES: list[str] = []
@@ -54,36 +54,13 @@ ZONE_PROVIDER_IDS: list[str] = []
 ACCOUNT_PROVIDER_IDS: list[str] = []
 
 # Phase names that were renamed — old name → current friendly name.
-# Providers register aliases via ``register_phase_alias()``.
 RENAMED_PHASES: dict[str, str] = {}
 
 
-def register_phase_alias(old: str, new: str) -> None:
-    """Register a backward-compat alias: *old* → *new*.
-
-    After registration, ``PHASE_BY_NAME[old]`` resolves to the same Phase as *new*.
-    """
-    with _REGISTRY_LOCK:
-        RENAMED_PHASES[old] = new
-        _rebuild_derived()
-
-
-def unregister_phase_alias(old: str) -> None:
-    """Remove a phase alias (for test teardown)."""
-    with _REGISTRY_LOCK:
-        RENAMED_PHASES.pop(old, None)
-        _rebuild_derived()
-
-
 def _rebuild_derived() -> None:
-    """Rebuild all derived dicts/lists in-place from ``PHASES``.
-
-    Mutates the module-level collections so any code that imported them
-    at module level sees the updates.
-    """
+    """Rebuild all derived collections in-place from PHASES."""
     PHASE_BY_NAME.clear()
     PHASE_BY_NAME.update({p.friendly_name: p for p in PHASES})
-    # Re-apply backward-compatibility aliases
     for alias, canonical in RENAMED_PHASES.items():
         if canonical in PHASE_BY_NAME:
             PHASE_BY_NAME[alias] = PHASE_BY_NAME[canonical]
@@ -104,43 +81,82 @@ def _rebuild_derived() -> None:
     ACCOUNT_PROVIDER_IDS.extend(p.provider_id for p in PHASES if p.account_level)
 
 
-# Initial build
 _rebuild_derived()
+
+
+def register_phase_alias(old: str, new: str) -> None:
+    """Register a backward-compat alias: *old* → *new*.
+
+    After registration, ``PHASE_BY_NAME[old]`` resolves to the same Phase as *new*.
+    """
+    with _REGISTRY_LOCK:
+        RENAMED_PHASES[old] = new
+        _rebuild_derived()
+
+
+def unregister_phase_alias(old: str) -> None:
+    """Remove a phase alias (for test teardown)."""
+    with _REGISTRY_LOCK:
+        RENAMED_PHASES.pop(old, None)
+        _rebuild_derived()
+
 
 # ---------------------------------------------------------------------------
 # Registration API
 # ---------------------------------------------------------------------------
-
-
 def register_phase(phase: Phase) -> None:
-    """Register a new phase. Raises ValueError if the name or provider_id already exists."""
+    """Register a new phase.
+
+    Idempotent: re-registering a phase with the same ``friendly_name`` and
+    ``provider_id`` is a no-op (the first registration wins).  Raises
+    ValueError if the name or provider_id is taken by a phase with a
+    *different* identity (different name/id pair).
+    """
     with _REGISTRY_LOCK:
-        if phase.friendly_name in PHASE_BY_NAME:
+        existing_by_name = PHASE_BY_NAME.get(phase.friendly_name)
+        existing_by_id = PHASE_BY_PROVIDER_ID.get(phase.provider_id)
+        if existing_by_name is not None:
+            if existing_by_name.provider_id == phase.provider_id:
+                return  # idempotent — same name+id pair
             raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
-        if phase.provider_id in PHASE_BY_PROVIDER_ID:
+        if existing_by_id is not None:
+            if existing_by_id.friendly_name == phase.friendly_name:
+                return  # idempotent — same name+id pair
             raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
         PHASES.append(phase)
         _rebuild_derived()
 
 
 def register_phases(phases: list[Phase]) -> None:
-    """Register multiple phases at once. Atomic: all succeed or none are added."""
+    """Register multiple phases at once. Atomic: all succeed or none are added.
+
+    Idempotent: phases already registered with identical attributes are skipped.
+    Raises ValueError if a name or provider_id is taken by a *different* phase.
+    """
     with _REGISTRY_LOCK:
-        # Validate all first
+        to_add: list[Phase] = []
         for phase in phases:
-            if phase.friendly_name in PHASE_BY_NAME:
+            existing_by_name = PHASE_BY_NAME.get(phase.friendly_name)
+            existing_by_id = PHASE_BY_PROVIDER_ID.get(phase.provider_id)
+            if existing_by_name is not None:
+                if existing_by_name.provider_id == phase.provider_id:
+                    continue  # idempotent — same name+id pair
                 raise ValueError(f"Phase {phase.friendly_name!r} is already registered")
-            if phase.provider_id in PHASE_BY_PROVIDER_ID:
+            if existing_by_id is not None:
+                if existing_by_id.friendly_name == phase.friendly_name:
+                    continue  # idempotent — same name+id pair
                 raise ValueError(f"Provider ID {phase.provider_id!r} is already registered")
-        # Check for duplicates within the batch
-        names = [p.friendly_name for p in phases]
-        provider_ids = [p.provider_id for p in phases]
+            to_add.append(phase)
+        # Check for duplicates within the new batch
+        names = [p.friendly_name for p in to_add]
+        provider_ids = [p.provider_id for p in to_add]
         if len(set(names)) != len(names):
             raise ValueError("Duplicate friendly_name in batch")
         if len(set(provider_ids)) != len(provider_ids):
             raise ValueError("Duplicate provider_id in batch")
-        PHASES.extend(phases)
-        _rebuild_derived()
+        PHASES.extend(to_add)
+        if to_add:
+            _rebuild_derived()
 
 
 def unregister_phase(friendly_name: str) -> None:
@@ -225,8 +241,6 @@ def strip_api_fields(obj: dict, category: str) -> dict:
 # ---------------------------------------------------------------------------
 # Lookup helpers
 # ---------------------------------------------------------------------------
-
-
 def suggest_phase(name: str) -> str | None:
     """Return the closest matching phase name, or None if nothing is close.
 

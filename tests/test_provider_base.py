@@ -1,10 +1,6 @@
 """Tests for the provider base protocol and shared types."""
 
-from __future__ import annotations
-
 import importlib.util
-import subprocess
-import sys
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,28 +46,14 @@ class TestBaseProviderProtocol:
         ],
     )
     def test_provider_satisfies_base_protocol(self, pkg, class_path):
-        """Each installed provider must be recognized as a BaseProvider at runtime.
+        """Each installed provider must be recognized as a BaseProvider at runtime."""
+        import importlib
 
-        Runs in a subprocess to avoid phase registration collisions with
-        conftest's test phases.
-        """
         module, cls_name = class_path.split(":")
-        code = (
-            f"from {module} import {cls_name}\n"
-            f"from octorules.provider.base import BaseProvider\n"
-            f"instance = {cls_name}.__new__({cls_name})\n"
-            f"assert isinstance(instance, BaseProvider), "
-            f"'{cls_name} does not satisfy BaseProvider protocol'\n"
-            f"print('OK')\n"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "OK" in result.stdout
+        mod = importlib.import_module(module)
+        cls = getattr(mod, cls_name)
+        instance = cls.__new__(cls)
+        assert isinstance(instance, BaseProvider), f"{cls_name} does not satisfy BaseProvider"
 
 
 class TestScopeImportPaths:

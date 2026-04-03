@@ -1,7 +1,5 @@
 """Base class for secret handlers."""
 
-from __future__ import annotations
-
 import logging
 
 

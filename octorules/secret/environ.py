@@ -1,7 +1,5 @@
 """Built-in environment variable secret handler."""
 
-from __future__ import annotations
-
 import os
 
 from octorules.secret.base import BaseSecrets

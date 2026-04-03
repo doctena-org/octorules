@@ -1,7 +1,5 @@
 """Tests for custom ruleset formatting."""
 
-from __future__ import annotations
-
 import io
 import json
 

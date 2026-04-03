@@ -1,7 +1,5 @@
 """Planning pipeline and plan/compare/report commands."""
 
-from __future__ import annotations
-
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,7 +16,7 @@ from octorules.commands._helpers import (
 from octorules.commands._providers import (
     _get_zone_providers,
 )
-from octorules.config import Config, slugify
+from octorules.config import Config, ConfigError, slugify
 from octorules.extensions import (
     call_plan_zone_finalize,
     call_plan_zone_prefetch,
@@ -77,7 +75,15 @@ def _plan_single_zone(
     # Apply process_desired hooks
     if processors and zone_cfg.processors:
         for proc_name in zone_cfg.processors:
-            desired = processors[proc_name].process_desired(zone_name, desired, provider)
+            hook = getattr(processors[proc_name], "process_desired", None)
+            if hook is not None:
+                result = hook(zone_name, desired, provider)
+                if not isinstance(result, dict):
+                    raise ConfigError(
+                        f"Processor {proc_name!r}.process_desired() returned "
+                        f"{type(result).__name__}, expected dict"
+                    )
+                desired = result
 
     # Filter rules by target metadata
     if target_name is not None:
@@ -110,7 +116,15 @@ def _plan_single_zone(
     # Apply process_changes hooks
     if processors and zone_cfg.processors:
         for proc_name in zone_cfg.processors:
-            zp = processors[proc_name].process_changes(zone_name, zp, provider)
+            hook = getattr(processors[proc_name], "process_changes", None)
+            if hook is not None:
+                result = hook(zone_name, zp, provider)
+                if not isinstance(result, ZonePlan):
+                    raise ConfigError(
+                        f"Processor {proc_name!r}.process_changes() returned "
+                        f"{type(result).__name__}, expected ZonePlan"
+                    )
+                zp = result
 
     # Finalize extension hooks (join prefetched data, compute diffs)
     call_plan_zone_finalize(zp, all_desired, scope, provider, ext_contexts)

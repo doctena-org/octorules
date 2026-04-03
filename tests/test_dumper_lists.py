@@ -1,7 +1,5 @@
 """Tests for lists serialization in the dumper."""
 
-from __future__ import annotations
-
 import logging
 
 import yaml

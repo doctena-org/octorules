@@ -1,7 +1,5 @@
 """Tests for the dumper."""
 
-from __future__ import annotations
-
 import yaml
 
 from octorules.config import _yaml_load
@@ -925,8 +923,6 @@ class TestEnsureRef:
 # ---------------------------------------------------------------------------
 # _strip_trailing_whitespace / _literalize / _clean_list_item
 # ---------------------------------------------------------------------------
-
-
 class TestStripTrailingWhitespace:
     def test_strips_trailing_spaces(self):
         assert _strip_trailing_whitespace("a  \nb  \n") == "a\nb\n"

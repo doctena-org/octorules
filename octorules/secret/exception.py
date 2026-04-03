@@ -1,7 +1,5 @@
 """Secret handler exceptions."""
 
-from __future__ import annotations
-
 from octorules.config import ConfigError
 
 
