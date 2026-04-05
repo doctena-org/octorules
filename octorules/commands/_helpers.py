@@ -8,7 +8,7 @@ from typing import IO
 
 from octorules.config import Config, ConfigError
 from octorules.pathutil import validate_path_within
-from octorules.phases import PHASE_BY_NAME, unknown_phase_message
+from octorules.phases import KNOWN_NON_PHASE_KEYS, PHASE_BY_NAME, unknown_phase_message
 from octorules.plan_output import PlanText
 from octorules.planner import RuleDict
 from octorules.provider.base import SUPPORTS_CUSTOM_RULESETS, SUPPORTS_LISTS
@@ -55,10 +55,15 @@ def _validate_phases(phases: list[str] | None) -> list[str] | None:
 def _filter_desired_by_phase(
     desired: dict[str, list[RuleDict]], phases: list[str] | None
 ) -> dict[str, list[RuleDict]]:
-    """Filter desired rules dict to only include specified phases."""
+    """Filter desired rules dict to only include specified phases.
+
+    Non-phase keys (custom_rulesets, lists, extension keys) are always
+    preserved so that callers like validate, lint, and audit can access
+    them regardless of the ``--phase`` filter.
+    """
     if phases is None:
         return desired
-    return {k: v for k, v in desired.items() if k in phases}
+    return {k: v for k, v in desired.items() if k in phases or k in KNOWN_NON_PHASE_KEYS}
 
 
 def _filter_current_by_phase(

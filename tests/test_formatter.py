@@ -2,6 +2,7 @@
 
 import io
 import json
+from unittest.mock import MagicMock
 
 from octorules._color import _GREEN, _RESET, Pen, supports_color
 from octorules.formatter import (
@@ -812,6 +813,45 @@ class TestBuildReportData:
         assert phase["modifies"] == 1
         assert phase["removes"] == 0
         assert phase["status"] == "drifted"
+
+    def test_extension_returning_false_preserves_phase_drift(self):
+        """Phase-level drift is NOT lost when a format extension returns False.
+
+        Regression test: the fix changed
+            zone_has_drift = bool(fmt.format_report(...))
+        to
+            zone_has_drift = zone_has_drift or bool(...)
+        """
+        from octorules.extensions import register_format_extension, unregister_format_extension
+
+        class _FalseReportExtension:
+            def format_report(self, plans, zone_has_drift, phases_data):
+                return False
+
+        register_format_extension("_test_false_ext", _FalseReportExtension())
+        try:
+            pp = PhasePlan(
+                phase=REDIRECT_PHASE,
+                changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
+            )
+            zp = ZonePlan(
+                "example.com",
+                phase_plans=[pp],
+                extension_plans={"_test_false_ext": [MagicMock(has_changes=True)]},
+            )
+            desired = {
+                "example.com": {
+                    "redirect_rules": [{"ref": "r1", "expression": "true"}],
+                }
+            }
+            current = {"example.com": {}}
+            data = build_report_data([zp], desired, current)
+            # Phase has drift (yaml_only), extension returns False —
+            # zone must still be marked as drifted.
+            assert data["zones"][0]["status"] == "drifted"
+            assert data["summary"]["drifted"] == 1
+        finally:
+            unregister_format_extension("_test_false_ext")
 
 
 class TestFormatReportCsv:

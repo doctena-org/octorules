@@ -107,6 +107,25 @@ class TestParseSuppressions:
         result = parse_suppressions(f)
         assert result == {"r1": {"M013"}, "My CSP": {"S001"}}
 
+    def test_description_not_first_key(self, tmp_path):
+        """Suppression anchors to description: even when it is NOT the first key in a list item.
+
+        Regression test: the fix makes _DESC_RE match ``  description: ...``
+        (without a leading ``- ``) so suppressions work when description is
+        a subsequent key in the YAML mapping.  The directive appears right
+        before the indented ``description:`` line (after a previous anchor).
+        """
+        f = tmp_path / "rules.yaml"
+        f.write_text(
+            "- ref: first-rule\n"
+            "  expression: true\n"
+            "  # octorules:disable=CF015\n"
+            '  description: "My policy"\n'
+        )
+        result = parse_suppressions(f)
+        assert "My policy" in result
+        assert result["My policy"] == {"CF015"}
+
     def test_directive_not_followed_by_anchor_after_first_anchor(self, tmp_path):
         """Directive followed by non-anchor line after first anchor is discarded."""
         f = tmp_path / "rules.yaml"

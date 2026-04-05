@@ -1,0 +1,63 @@
+# octorules — Azure WAF configuration
+#
+# Manages Azure WAF policies for Front Door (default) or Application Gateway.
+# Phases: custom rules and rate-limit rules.
+#
+# Install:  pip install octorules-azure
+#
+# Authentication: DefaultAzureCredential — env vars
+# (AZURE_CLIENT_ID, AZURE_CLIENT_SECRET, AZURE_TENANT_ID),
+# managed identity, or Azure CLI (az login).
+#
+# Provider docs: https://github.com/doctena-org/octorules-azure
+
+providers:
+  # --- Single WAF type (simple) ---
+  # Use a single provider when all your policies share the same WAF type.
+  azure:
+    subscription_id: env/AZURE_SUBSCRIPTION_ID   # Required
+    resource_group: env/AZURE_RESOURCE_GROUP      # Required
+    waf_type: front_door       # front_door (default) or app_gateway
+    timeout: 30.0              # HTTP timeout (default: 30)
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
+
+  # --- Both WAF types (advanced) ---
+  # waf_type is per-provider-instance.  To manage both Front Door and
+  # Application Gateway, declare two provider instances with explicit class:
+  #
+  # azure-fd:
+  #   class: octorules_azure.AzureWafProvider
+  #   subscription_id: env/AZURE_SUBSCRIPTION_ID
+  #   resource_group: env/AZURE_RG_FRONTDOOR
+  #   waf_type: front_door
+  #
+  # azure-ag:
+  #   class: octorules_azure.AzureWafProvider
+  #   subscription_id: env/AZURE_SUBSCRIPTION_ID
+  #   resource_group: env/AZURE_RG_APPGATEWAY
+  #   waf_type: app_gateway
+
+  rules:
+    directory: ./rules
+
+manager:
+  max_workers: 2
+  plan_outputs:
+    text:
+      class: octorules.plan_output.PlanText
+
+zones:
+  my-waf-policy:
+    sources:
+      - rules
+
+  # When using two provider instances, assign zones to targets:
+  # my-frontdoor-policy:
+  #   sources: [rules]
+  #   targets: [azure-fd]
+  # my-appgateway-policy:
+  #   sources: [rules]
+  #   targets: [azure-ag]

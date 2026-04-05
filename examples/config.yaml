@@ -1,16 +1,174 @@
+# octorules — multi-provider configuration example
+#
+# This config demonstrates all five providers managed from a single config.
+# For single-provider examples, see config-cloudflare.yaml, config-aws.yaml,
+# config-google.yaml, config-azure.yaml, and config-bunny.yaml.
+
+# ---------------------------------------------------------------------------
+# Secret handlers — pluggable credential backends
+# ---------------------------------------------------------------------------
+# The built-in "env" handler (env/VAR_NAME -> $VAR_NAME) is always available.
+# Declare additional handlers here; kwargs are resolved via already-registered
+# handlers, so you can bootstrap with env/.
+secret_handlers:
+  vault:
+    class: octorules_vault.VaultSecrets
+    url: https://vault.internal
+    token: env/VAULT_TOKEN
+
+# ---------------------------------------------------------------------------
+# Providers — one section per provider instance
+# ---------------------------------------------------------------------------
 providers:
   cloudflare:
+    # All keys except "class" and "safety" are forwarded to the provider
+    # constructor as **kwargs.  The "env/" prefix resolves the value from
+    # the environment variable at runtime — keep secrets out of YAML.
     token: env/CLOUDFLARE_API_TOKEN
+    timeout: 30.0
+    max_retries: 2
+
+  aws:
+    region: us-west-2
+    waf_scope: REGIONAL        # REGIONAL or CLOUDFRONT
+    wcu_limit: 5000            # Web ACL capacity units limit for lint checks
+    timeout: 30.0
+    max_retries: 2
+    # Authentication: standard boto3 credential chain (env vars,
+    # ~/.aws/credentials, IAM roles).  No explicit key in config.
+
+  google:
+    project: env/GCLOUD_PROJECT
+    timeout: 30.0
+    # Authentication: Google Application Default Credentials (ADC).
+    # Run "gcloud auth application-default login" locally, or use
+    # Workload Identity in CI.
+
+  azure:
+    subscription_id: env/AZURE_SUBSCRIPTION_ID
+    resource_group: env/AZURE_RESOURCE_GROUP
+    waf_type: front_door       # front_door (default) or app_gateway
+    timeout: 30.0              # For both types, use two instances — see config-azure.yaml
+
+  bunny:
+    api_key: env/BUNNY_API_KEY
+    timeout: 30.0
+    max_retries: 2
+
+  # Shared rules and lists directories.
   rules:
     directory: ./rules
+  lists:
+    directory: ./rules/custom_lists
 
+# ---------------------------------------------------------------------------
+# Processors — transform or filter rules in the plan/sync pipeline
+# ---------------------------------------------------------------------------
+processors:
+  # Block all REMOVE changes as a safety guard
+  no_deletes:
+    class: octorules.processor.filters.ChangeTypeFilter
+    exclude:
+      - REMOVE
+
+  # Only plan/sync WAF-related phases
+  waf_only:
+    class: octorules.processor.filters.PhaseFilter
+    include:
+      - waf_custom_rules
+      - waf_managed_rules
+      - rate_limiting_rules
+      - aws_waf_custom_rules
+      - aws_waf_rate_rules
+      - gcloud_armor_custom_rules
+      - azure_waf_custom_rules
+      - bunny_waf_custom_rules
+
+  # Skip rules whose ref starts with "test-"
+  skip_test_rules:
+    class: octorules.processor.filters.RefFilter
+    exclude: "^test-"
+
+# ---------------------------------------------------------------------------
+# Manager — concurrency and plan output settings
+# ---------------------------------------------------------------------------
 manager:
-  max_workers: 1
+  max_workers: 4               # Parallel zone/phase processing (default: 1)
   plan_outputs:
     text:
       class: octorules.plan_output.PlanText
+    json:
+      class: octorules.plan_output.PlanJson
+      path: /tmp/octorules-plan.json
+    markdown:
+      class: octorules.plan_output.PlanMarkdown
+      path: /tmp/octorules-plan.md
+    html:
+      class: octorules.plan_output.PlanHtml
+      path: /tmp/octorules-plan.html
 
+# ---------------------------------------------------------------------------
+# Zones — per-zone settings
+# ---------------------------------------------------------------------------
+# The key under "zones:" is the zone name.  The rules file for each zone
+# must match: rules/<zone-name>.yaml.  What "zone name" means depends on
+# the provider:
+#
+#   Cloudflare       — DNS domain (e.g. example.com)
+#   AWS WAF          — Web ACL name (e.g. my-web-acl)
+#   Google Cloud Armor — security policy name (e.g. my-security-policy)
+#   Azure WAF        — WAF policy name (e.g. my-waf-policy)
+#   Bunny Shield     — pull zone name (e.g. my-pull-zone)
+#
+# At runtime, resolve_zone_id("<name>") translates the name to the
+# provider's internal ID.
 zones:
+  # Cloudflare zone
   example.com:
     sources:
       - rules
+    targets:
+      - cloudflare
+    processors:
+      - no_deletes
+    safety:
+      delete_threshold: 10.0   # Stricter threshold for this zone
+      update_threshold: 30.0
+      min_existing: 5
+
+  # AWS WAF Web ACL
+  my-web-acl:
+    sources:
+      - rules
+    targets:
+      - aws
+
+  # Google Cloud Armor security policy
+  my-security-policy:
+    sources:
+      - rules
+    targets:
+      - google
+    always_dry_run: true       # Never apply changes (review-only)
+
+  # Azure WAF policy
+  my-waf-policy:
+    sources:
+      - rules
+    targets:
+      - azure
+
+  # Bunny Shield pull zone
+  my-pull-zone:
+    sources:
+      - rules
+    targets:
+      - bunny
+
+  # Wildcard — auto-discover zones from providers that support it.
+  # Creates a zone for every provider-discovered zone that has a matching
+  # rules/<zone>.yaml file.
+  '*':
+    sources:
+      - rules
+    allow_unmanaged: false

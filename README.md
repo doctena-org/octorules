@@ -15,6 +15,8 @@ octorules is provider-agnostic. Each provider is a separate package:
 | [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) | Cloudflare Rules (23 phases) | Stable |
 | [octorules-aws](https://github.com/doctena-org/octorules-aws) | AWS WAF v2 (4 phases) | Beta |
 | [octorules-google](https://github.com/doctena-org/octorules-google) | Google Cloud Armor (4 phases) | Beta |
+| [octorules-azure](https://github.com/doctena-org/octorules-azure) | Azure WAF — Front Door & App Gateway (3 phases) | Alpha |
+| [octorules-bunny](https://github.com/doctena-org/octorules-bunny) | Bunny.net Shield WAF (4 phases) | Alpha |
 
 ## Getting started
 
@@ -26,6 +28,8 @@ Install the provider package for your WAF. This pulls in octorules core automati
 pip install octorules-cloudflare    # Cloudflare (includes wirefilter expression engine)
 pip install octorules-aws           # AWS WAF v2
 pip install octorules-google        # Google Cloud Armor (includes cel-python)
+pip install octorules-azure         # Azure WAF (Front Door / Application Gateway)
+pip install octorules-bunny         # Bunny.net Shield WAF
 ```
 
 Core only (offline lint/validate, no provider):
@@ -53,6 +57,8 @@ zones:
 ```
 
 The `env/` prefix resolves values from environment variables at runtime — keep secrets out of YAML. This is the built-in secret handler; see [Secret handlers](#secret-handlers) for pluggable backends (Vault, AWS Secrets Manager, etc.).
+
+> **Complete examples** — the [`examples/`](examples/) directory contains detailed config and rules files for all five providers (Cloudflare, AWS, Google, Azure, Bunny), including multi-provider setups, every config field, and every phase/rule format. Start there rather than writing config from scratch.
 
 All keys under a provider section (except `class` and `safety`) are forwarded as keyword arguments to the provider constructor — octodns-style passthrough. See each provider's documentation for available settings.
 
@@ -140,7 +146,17 @@ Includes resolve relative to the file containing the directive. Nested includes 
 
 ### Defining rules
 
-Create a rules file for each zone:
+Create a rules file for each zone. The filename must match the zone name used as the key under `zones:` in `config.yaml`, which maps to the provider's own concept of a "zone":
+
+| Provider | Zone concept | Example zone name | Rules file |
+|---|---|---|---|
+| Cloudflare | DNS domain | `example.com` | `rules/example.com.yaml` |
+| AWS WAF | Web ACL name | `my-web-acl` | `rules/my-web-acl.yaml` |
+| Google Cloud Armor | Security policy name | `my-security-policy` | `rules/my-security-policy.yaml` |
+| Azure WAF | WAF policy name | `my-waf-policy` | `rules/my-waf-policy.yaml` |
+| Bunny Shield | Pull zone name | `my-pull-zone` | `rules/my-pull-zone.yaml` |
+
+The mapping is: `zones.<name>` in `config.yaml` → `rules/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID.
 
 ```yaml
 # rules/example.com.yaml
@@ -412,9 +428,9 @@ Providers declare optional feature support via a `SUPPORTS` class variable. The 
 | Feature | Description | Providers |
 |---------|-------------|-----------|
 | `custom_rulesets` | Account-level WAF rulesets (rule groups) | Cloudflare, AWS |
-| `lists` | IP/ASN/hostname/redirect lists (IP sets) | Cloudflare, AWS |
+| `lists` | IP/ASN/hostname/redirect/regex lists (IP sets, regex pattern sets) | Cloudflare, AWS |
 | `page_shield` | Content Security Policy management | Cloudflare |
-| `zone_discovery` | Automatic zone enumeration via `list_zones()` | Cloudflare, AWS, Google |
+| `zone_discovery` | Automatic zone enumeration via `list_zones()` | Cloudflare, AWS, Google, Azure, Bunny |
 
 See each provider's documentation for feature details and YAML syntax.
 
@@ -539,7 +555,7 @@ octorules lint [--format text|json|sarif] [--severity error|warning|info] [--pla
 |------|-------------|
 | `--format` | Output format: `text` (default), `json`, `sarif` |
 | `--severity` | Minimum severity to report (default: `info`) |
-| `--plan` | Plan tier for entitlement checks (default: auto-detect from API) |
+| `--plan` | Plan tier for entitlement checks (default: `enterprise`) |
 | `--rule` | Only check specific rule ID(s); can be repeated |
 | `--output` | Write results to a file instead of stdout |
 | `--exit-code` | Exit with 1 on errors, 2 on warnings (for CI) |

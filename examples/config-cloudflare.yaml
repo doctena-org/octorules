@@ -1,0 +1,33 @@
+# octorules — Cloudflare-only configuration
+#
+# Manages Cloudflare Rules across 23 phases, plus custom rulesets, lists,
+# and Page Shield policies.
+#
+# Install:  pip install octorules-cloudflare
+#
+# Provider docs: https://github.com/doctena-org/octorules-cloudflare
+
+providers:
+  cloudflare:
+    token: env/CLOUDFLARE_API_TOKEN
+    timeout: 30.0              # HTTP timeout in seconds (default: 30)
+    max_retries: 2             # SDK retry count (default: 2)
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
+  rules:
+    directory: ./rules
+  lists:
+    directory: ./rules/custom_lists
+
+manager:
+  max_workers: 4
+  plan_outputs:
+    text:
+      class: octorules.plan_output.PlanText
+
+zones:
+  example.com:
+    sources:
+      - rules

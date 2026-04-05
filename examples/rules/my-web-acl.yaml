@@ -1,0 +1,198 @@
+# AWS WAF v2 rules for Web ACL "my-web-acl"
+#
+# AWS WAF uses JSON-style statement structures.  Rules are normalized to use
+# "ref" (mapped from the AWS "Name" field) as the stable identifier.
+#
+# Phases: aws_waf_custom_rules, aws_waf_rate_rules, aws_waf_managed_rules,
+#         aws_waf_rule_group_rules
+#
+# Statement reference:
+# https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statements.html
+
+# ---------------------------------------------------------------------------
+# Custom Rules — standard match-and-action rules
+# ---------------------------------------------------------------------------
+aws_waf_custom_rules:
+  - ref: block-bad-ips
+    Priority: 1
+    Action:
+      Block: {}
+    Statement:
+      IPSetReferenceStatement:
+        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/ipset/bad-ips/abcd1234
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: block-bad-ips
+
+  - ref: allow-internal
+    Priority: 2
+    Action:
+      Allow: {}
+    Statement:
+      IPSetReferenceStatement:
+        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/ipset/internal-ips/efgh5678
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: allow-internal
+
+  - ref: block-bad-user-agents
+    Priority: 3
+    Action:
+      Block:
+        CustomResponse:
+          ResponseCode: 403
+          ResponseHeaders:
+            - Name: x-blocked-by
+              Value: octorules
+    Statement:
+      ByteMatchStatement:
+        FieldToMatch:
+          SingleHeader:
+            Name: user-agent
+        PositionalConstraint: CONTAINS
+        SearchString: sqlmap
+        TextTransformations:
+          - Priority: 0
+            Type: LOWERCASE
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: block-bad-user-agents
+
+  - ref: geo-block
+    Priority: 4
+    Action:
+      Block: {}
+    Statement:
+      GeoMatchStatement:
+        CountryCodes:
+          - KP
+          - IR
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: geo-block
+
+  - ref: size-limit
+    Priority: 5
+    Action:
+      Block: {}
+    Statement:
+      SizeConstraintStatement:
+        FieldToMatch:
+          Body:
+            OversizeHandling: MATCH
+        ComparisonOperator: GT
+        Size: 8192
+        TextTransformations:
+          - Priority: 0
+            Type: NONE
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: size-limit
+
+# ---------------------------------------------------------------------------
+# Rate-Based Rules — rate limiting with aggregation
+# ---------------------------------------------------------------------------
+aws_waf_rate_rules:
+  - ref: rate-limit-api
+    Priority: 10
+    Action:
+      Block:
+        CustomResponse:
+          ResponseCode: 429
+    Statement:
+      RateBasedStatement:
+        Limit: 2000
+        AggregateKeyType: IP
+        ScopeDownStatement:
+          ByteMatchStatement:
+            FieldToMatch:
+              UriPath: {}
+            PositionalConstraint: STARTS_WITH
+            SearchString: /api/
+            TextTransformations:
+              - Priority: 0
+                Type: NONE
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: rate-limit-api
+
+# ---------------------------------------------------------------------------
+# Managed Rule Groups — AWS and marketplace rules
+# ---------------------------------------------------------------------------
+aws_waf_managed_rules:
+  - ref: aws-common-rules
+    Priority: 100
+    Statement:
+      ManagedRuleGroupStatement:
+        VendorName: AWS
+        Name: AWSManagedRulesCommonRuleSet
+        ExcludedRules:
+          - Name: SizeRestrictions_BODY
+    OverrideAction:
+      None: {}
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: aws-common-rules
+
+  - ref: aws-sqli-rules
+    Priority: 101
+    Statement:
+      ManagedRuleGroupStatement:
+        VendorName: AWS
+        Name: AWSManagedRulesSQLiRuleSet
+    OverrideAction:
+      None: {}
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: aws-sqli-rules
+
+  - ref: aws-bad-inputs
+    Priority: 102
+    Statement:
+      ManagedRuleGroupStatement:
+        VendorName: AWS
+        Name: AWSManagedRulesKnownBadInputsRuleSet
+    OverrideAction:
+      Count: {}
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: aws-bad-inputs
+
+# ---------------------------------------------------------------------------
+# Rule Group References — custom rule groups attached to the Web ACL
+# ---------------------------------------------------------------------------
+aws_waf_rule_group_rules:
+  - ref: api-protection-group
+    Priority: 200
+    Statement:
+      RuleGroupReferenceStatement:
+        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/rulegroup/api-protection/abcd1234
+        ExcludedRules:
+          - Name: RateLimit5xx
+    OverrideAction:
+      None: {}
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: api-protection-group
+
+  - ref: shared-ip-blocklist-group
+    Priority: 201
+    Statement:
+      RuleGroupReferenceStatement:
+        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/rulegroup/ip-blocklist/efgh5678
+    OverrideAction:
+      Count: {}
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: shared-ip-blocklist-group

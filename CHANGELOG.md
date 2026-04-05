@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.0] - 2026-04-05
+
+### Added
+- `"regex"` added to valid list kinds in the planner — enables AWS Regex
+  Pattern Set support via `kind: regex`.
+- Per-provider example configs (`examples/config-*.yaml`) and rules files
+  (`examples/rules/my-*.yaml`) for all five providers.
+
+### Changed
+- README: Azure and Bunny added to provider ecosystem table;
+  zone-name-to-rules-file mapping documented; `lists` feature description
+  updated to include regex pattern sets.
+
+### Fixed
+- `ZonePlan.has_changes` and `total_changes` used `cached_property` on mutable
+  lists — changed to `property` to prevent stale cached values after plan
+  mutations.
+- `build_report_data` extension drift: `format_report` return value overwrote
+  phase-level drift state — now uses `or` for monotonic accumulation.
+- `_filter_desired_by_phase` dropped non-phase keys (`custom_rulesets`,
+  `lists`) when `--phase` was used, causing `validate` and `audit` to silently
+  skip them.
+- `--plan` help text in `lint` subcommand incorrectly claimed auto-detection
+  from provider API — updated to reflect actual default (`enterprise`).
+- Account planning futures lacked timeout — added `_FUTURE_TIMEOUT` (120s)
+  matching other futures in the planning pipeline.
+- `Config._rules_cache` and `_file_cache` were unprotected against concurrent
+  access — added `threading.Lock` with narrowed scope to allow concurrent
+  file I/O.
+- Suppression parser `_DESC_RE` only matched `description:` as the first key
+  in a YAML list item — now also matches non-first-key positions.
+- Dead `"Block"` entry in `check_ip_shadow` `blocking_actions` frozenset —
+  removed (all comparisons are lowercased).
+- Extension dump data (`page_shield_policies`, `cloudflare_zone_security`,
+  etc.) was silently dropped during `octorules dump` — `_dump.py` passed
+  extension data as `**kwargs` instead of `extra_sections=`, causing the
+  dumper to ignore it.
+
 ## [0.22.1] - 2026-04-03
 
 ### Added

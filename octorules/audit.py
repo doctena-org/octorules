@@ -346,7 +346,7 @@ def check_ip_shadow(rule_ips: list[RuleIPInfo], phase_order: list[str]) -> list[
         by_zone.setdefault(info.zone_name, []).append(info)
 
     blocking_actions = frozenset(
-        {"block", "managed_challenge", "js_challenge", "challenge", "deny", "Block"}
+        {"block", "managed_challenge", "js_challenge", "challenge", "deny"}
     )
 
     for zone_name, infos in by_zone.items():

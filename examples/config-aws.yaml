@@ -1,0 +1,39 @@
+# octorules — AWS WAF v2 configuration
+#
+# Manages AWS WAF Web ACLs (custom rules, rate rules, managed rule groups)
+# plus Rule Groups (custom rulesets) and IP Sets (lists).
+#
+# Install:  pip install octorules-aws
+#
+# Authentication: standard boto3 credential chain — env vars
+# (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN),
+# ~/.aws/credentials, or IAM roles.
+#
+# Provider docs: https://github.com/doctena-org/octorules-aws
+
+providers:
+  aws:
+    region: us-west-2          # AWS region (default: $AWS_DEFAULT_REGION or us-east-1)
+    waf_scope: REGIONAL        # REGIONAL or CLOUDFRONT (default: $AWS_WAF_SCOPE or REGIONAL)
+    wcu_limit: 5000            # WCU capacity limit for lint checks (default: 1500)
+    timeout: 30.0              # Connection + read timeout (default: 30)
+    max_retries: 2             # Adaptive retry count (default: 2)
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
+  rules:
+    directory: ./rules
+  lists:
+    directory: ./rules/custom_lists
+
+manager:
+  max_workers: 2
+  plan_outputs:
+    text:
+      class: octorules.plan_output.PlanText
+
+zones:
+  my-web-acl:
+    sources:
+      - rules

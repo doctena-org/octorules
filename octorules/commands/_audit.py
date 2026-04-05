@@ -93,10 +93,6 @@ def cmd_audit(
     for stem in file_stems:
         rules_data = config.load_rules_by_stem(stem)
         desired = _filter_desired_by_phase(rules_data, phase_filter)
-        # Preserve the lists section through phase filtering so list IPs
-        # always participate in audit checks (lists aren't a phase).
-        if "lists" in rules_data and "lists" not in desired:
-            desired["lists"] = rules_data["lists"]
         if not desired:
             log.info("  %s: no rules (skipped)", stem)
             continue

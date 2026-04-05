@@ -132,7 +132,7 @@ class CustomRulesetPlan:
 class ListPlan:
     list_name: str
     list_id: str | None = None  # None for CREATE (not yet in provider)
-    list_kind: str = ""  # ip, asn, hostname, redirect
+    list_kind: str = ""  # ip, asn, hostname, redirect, regex
     create: bool = False  # list needs to be created
     delete: bool = False  # list will be deleted
     description_change: tuple[str | None, str | None] | None = None  # (current, desired)
@@ -183,7 +183,7 @@ class ZonePlan:
             return f"{self.zone_name}\x00{self.target}"
         return self.zone_name
 
-    @cached_property
+    @property
     def has_changes(self) -> bool:
         return (
             any(pp.has_changes for pp in self.phase_plans)
@@ -192,7 +192,7 @@ class ZonePlan:
             or any(any(p.has_changes for p in plans) for plans in self.extension_plans.values())
         )
 
-    @cached_property
+    @property
     def total_changes(self) -> int:
         ext_total = sum(
             sum(p.total_changes for p in plans) for plans in self.extension_plans.values()
@@ -898,7 +898,7 @@ def check_safety(
 
 # --- List helpers ---
 
-_VALID_LIST_KINDS = frozenset({"ip", "asn", "hostname", "redirect"})
+_VALID_LIST_KINDS = frozenset({"ip", "asn", "hostname", "redirect", "regex"})
 
 
 def _item_identity(item: dict, kind: str) -> str:
@@ -920,6 +920,8 @@ def _item_identity(item: dict, kind: str) -> str:
         if isinstance(redirect, dict):
             return redirect.get("source_url", "")
         return ""
+    if kind == "regex":
+        return item.get("regex", "")
     return ""
 
 

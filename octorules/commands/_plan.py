@@ -458,7 +458,7 @@ def _plan_all_scopes(
                 *_plan_zones(config, prov_dict, zone_names, phase_filter, executor, processors)
             )
             for prov, future in zip(acct_providers, acct_futures, strict=True):
-                result._add_account(*future.result(), prov)
+                result._add_account(*future.result(timeout=_FUTURE_TIMEOUT), prov)
     else:
         if do_zones:
             result._add_zones(
