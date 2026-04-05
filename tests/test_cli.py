@@ -1553,6 +1553,36 @@ class TestPhaseFiltering:
         result = _filter_desired_by_phase(desired, ["redirect_rules"])
         assert list(result.keys()) == ["redirect_rules"]
 
+    def test_filter_desired_by_phase_preserves_non_phase_keys(self):
+        """custom_rulesets and lists survive --phase filtering.
+
+        Regression test: the fix makes _filter_desired_by_phase preserve
+        keys in KNOWN_NON_PHASE_KEYS even when --phase filters are active.
+        """
+        from octorules.phases import KNOWN_NON_PHASE_KEYS, register_non_phase_key
+
+        # Save original state so we can restore it — a provider import
+        # may have already registered these keys.
+        original = KNOWN_NON_PHASE_KEYS.copy()
+        register_non_phase_key("custom_rulesets")
+        register_non_phase_key("lists")
+        try:
+            desired = {
+                "redirect_rules": [{"ref": "r1"}],
+                "cache_rules": [{"ref": "c1"}],
+                "custom_rulesets": [{"name": "my-rs"}],
+                "lists": [{"name": "my-list"}],
+            }
+            result = _filter_desired_by_phase(desired, ["redirect_rules"])
+            assert "redirect_rules" in result
+            assert "cache_rules" not in result
+            assert "custom_rulesets" in result
+            assert "lists" in result
+        finally:
+            # Restore original state (in-place mutation required).
+            KNOWN_NON_PHASE_KEYS.clear()
+            KNOWN_NON_PHASE_KEYS.update(original)
+
     def test_filter_desired_none_returns_all(self):
         desired = {"redirect_rules": [{"ref": "r1"}], "cache_rules": [{"ref": "c1"}]}
         result = _filter_desired_by_phase(desired, None)
@@ -3424,14 +3454,14 @@ class TestCmdAuditCLI:
 
     def test_audit_no_rules_returns_0(self, sample_config):
         """Audit with no rules files returns 0 (nothing to audit)."""
-        with patch("octorules.cli._discover_provider_modules"):
+        with patch("octorules.commands._audit._discover_provider_modules"):
             result = cmd_audit(sample_config, None)
         assert result == 0
 
     def test_audit_invalid_check_returns_1(self, sample_config, caplog):
         """Unknown check name returns exit code 1."""
         with (
-            patch("octorules.cli._discover_provider_modules"),
+            patch("octorules.commands._audit._discover_provider_modules"),
             caplog.at_level(logging.ERROR),
         ):
             result = cmd_audit(sample_config, None, checks=["nonexistent-check"])
@@ -3443,7 +3473,7 @@ class TestCmdAuditCLI:
         # Create a minimal rules file with no IP-bearing rules.
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
-        with patch("octorules.cli._discover_provider_modules"):
+        with patch("octorules.commands._audit._discover_provider_modules"):
             result = cmd_audit(sample_config, ["example.com"])
         assert result == 0
 
@@ -3456,7 +3486,7 @@ class TestCmdAuditCLI:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "rules").mkdir(exist_ok=True)
         with (
-            patch("octorules.cli._discover_provider_modules"),
+            patch("octorules.commands._audit._discover_provider_modules"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main(["--config", str(config_file), "audit"])
@@ -3665,7 +3695,7 @@ class TestQuietFlag:
 
         set_quiet(True)
         try:
-            with patch("octorules.cli._discover_provider_modules"):
+            with patch("octorules.commands._audit._discover_provider_modules"):
                 cmd_lint(sample_config, ["example.com"])
             # stdout should be empty; stderr summary is still allowed
             assert capsys.readouterr().out == ""
@@ -3682,7 +3712,7 @@ class TestQuietFlag:
 
         set_quiet(True)
         try:
-            with patch("octorules.cli._discover_provider_modules"):
+            with patch("octorules.commands._audit._discover_provider_modules"):
                 result = cmd_audit(sample_config, ["example.com"])
             assert result == 0
             assert capsys.readouterr().out == ""
@@ -3740,7 +3770,7 @@ class TestQuietFlag:
 
         try:
             with (
-                patch("octorules.cli._discover_provider_modules"),
+                patch("octorules.commands._audit._discover_provider_modules"),
                 pytest.raises(SystemExit) as exc_info,
             ):
                 main(["--quiet", "--config", str(config_file), "versions"])

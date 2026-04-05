@@ -34,7 +34,8 @@ _REF_RE = re.compile(r"^\s*-\s*ref:\s*(\S+)")
 
 # Matches a YAML list item with a description key (for Page Shield policies).
 # Handles bare (with or without spaces), double-quoted, and single-quoted descriptions.
-_DESC_RE = re.compile(r"^\s*-\s*description:\s*(?:\"(.+?)\"|'(.+?)'|(.+?))\s*$")
+# Matches both ``- description: ...`` (first key) and ``  description: ...`` (non-first key).
+_DESC_RE = re.compile(r"^\s*(?:-\s*)?description:\s*(?:\"(.+?)\"|'(.+?)'|(.+?))\s*$")
 
 
 def parse_suppressions(

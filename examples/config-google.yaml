@@ -1,0 +1,34 @@
+# octorules — Google Cloud Armor configuration
+#
+# Manages Cloud Armor security policies (custom rules, rate-limiting rules,
+# preconfigured WAF rules, reCAPTCHA redirect rules).
+#
+# Install:  pip install octorules-google
+#
+# Authentication: Google Application Default Credentials (ADC).
+# Locally:  gcloud auth application-default login
+# In CI:    Workload Identity Federation or service account key.
+#
+# Provider docs: https://github.com/doctena-org/octorules-google
+
+providers:
+  google:
+    project: env/GCLOUD_PROJECT   # GCP project ID (required)
+    timeout: 30.0                 # gRPC/HTTP timeout (default: 30)
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
+  rules:
+    directory: ./rules
+
+manager:
+  max_workers: 2
+  plan_outputs:
+    text:
+      class: octorules.plan_output.PlanText
+
+zones:
+  my-security-policy:
+    sources:
+      - rules

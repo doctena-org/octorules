@@ -257,9 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--plan",
         dest="lint_plan",
         default=None,
-        help="Plan tier override for entitlement checks "
+        help="Plan tier for entitlement checks "
         "(e.g. free/pro/business/enterprise). "
-        "When omitted, auto-detected from the provider API per zone.",
+        "Defaults to 'enterprise' when omitted.",
     )
     lint_parser.add_argument(
         "--output",

@@ -3,6 +3,7 @@
 import importlib
 import logging
 import re
+import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -419,6 +420,7 @@ class Config:
     zone_templates: dict[str, ZoneConfig] = field(default_factory=dict)
     _rules_cache: dict[str, dict] = field(default_factory=dict, repr=False, compare=False)
     _file_cache: dict[Path, dict] = field(default_factory=dict, repr=False, compare=False)
+    _cache_lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     _secret_handlers_raw: dict = field(default_factory=dict, repr=False, compare=False)
     _config_path: Path | None = field(default=None, repr=False, compare=False)
     _secrets_resolved: bool = field(default=False, repr=False, compare=False)
@@ -764,27 +766,45 @@ class Config:
             file_stem: Filename without extension (e.g. ``"example.com"``).
             label: Human label for error/log messages (e.g. ``"zone 'example.com'"``).
         """
-        if cache_key in self._rules_cache:
-            return self._rules_cache[cache_key]
+        # Fast path: check cache under lock, return immediately if hit.
+        with self._cache_lock:
+            if cache_key in self._rules_cache:
+                return self._rules_cache[cache_key]
+
+        # Slow path: resolve and validate the file path (no lock needed).
         rules_file = (self.rules_dir / f"{file_stem}.yaml").resolve()
         if not validate_path_within(rules_file, self.rules_dir):
             raise ConfigError(f"{label} resolves outside rules directory") from None
+
         if not rules_file.exists():
             log.info("No rules file for %s (expected %s)", label, rules_file)
-            self._rules_cache[cache_key] = {}
-            return self._rules_cache[cache_key]
-        # File-level cache: avoid re-reading when multiple zones share a file.
-        if rules_file in self._file_cache:
-            data = self._file_cache[rules_file]
-        else:
-            data = _yaml_load(rules_file)
-            if not isinstance(data, dict):
-                raise ConfigError(
-                    f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
-                )
+            with self._cache_lock:
+                self._rules_cache[cache_key] = {}
+                return self._rules_cache[cache_key]
+
+        # Check the file-level cache under lock; if miss, release lock
+        # and do I/O outside the lock so other threads can proceed.
+        with self._cache_lock:
+            if rules_file in self._file_cache:
+                data = self._file_cache[rules_file]
+                self._rules_cache[cache_key] = data
+                return data
+
+        # File I/O and YAML parsing outside the lock — this is the
+        # expensive part that we don't want to serialize.
+        data = _yaml_load(rules_file)
+        if not isinstance(data, dict):
+            raise ConfigError(
+                f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
+            )
+
+        # Re-acquire lock to write caches. Another thread may have
+        # loaded the same file concurrently — that's harmless (same
+        # file produces the same data, and dict assignment is atomic).
+        with self._cache_lock:
             self._file_cache[rules_file] = data
-        self._rules_cache[cache_key] = data
-        return data
+            self._rules_cache[cache_key] = data
+            return data
 
     def load_zone_rules(self, zone_name: str) -> dict:
         """Load the rules YAML file for a given zone.
@@ -796,8 +816,9 @@ class Config:
         zone_cfg = self.zones.get(zone_name)
         if zone_cfg and zone_cfg.sources and "rules" not in zone_cfg.sources:
             log.debug("Zone %s does not include 'rules' in sources, skipping rules file", zone_name)
-            self._rules_cache[cache_key] = {}
-            return self._rules_cache[cache_key]
+            with self._cache_lock:
+                self._rules_cache[cache_key] = {}
+                return self._rules_cache[cache_key]
         return self._load_rules_file(cache_key, zone_name, f"zone {zone_name}")
 
     def load_account_rules(self, account_name: str) -> dict:

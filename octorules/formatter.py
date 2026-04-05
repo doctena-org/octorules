@@ -826,7 +826,9 @@ def build_report_data(
         for ext_name, fmt in get_format_extensions().items():
             ext_plans = zp.extension_plans.get(ext_name, [])
             if ext_plans:
-                zone_has_drift = bool(fmt.format_report(ext_plans, zone_has_drift, phases_data))
+                zone_has_drift = zone_has_drift or bool(
+                    fmt.format_report(ext_plans, zone_has_drift, phases_data)
+                )
 
         zone_status = "drifted" if zone_has_drift else "in_sync"
         if zone_status == "in_sync":

@@ -1043,11 +1043,18 @@ class TestCmdAudit:
 
     _empty_cdn = CdnRangeResult(ranges={}, source="api")
 
+    # Skip _discover_provider_modules inside cmd_audit — this class
+    # registers its own test extractor and does not need real providers
+    # (whose SDK imports are expensive, e.g. google-cloud-compute ~2s).
+    _discover_patch = patch("octorules.commands._audit._discover_provider_modules", lambda: None)
+
     def setup_method(self):
+        self._discover_patch.start()
         register_audit_extension("test_cf", _cf_extract_ips)
 
     def teardown_method(self):
         unregister_audit_extension("test_cf")
+        self._discover_patch.stop()
 
     def test_discovers_all_yaml_files(self, tmp_path):
         """Audit processes every *.yaml in rules_dir, not just zones."""

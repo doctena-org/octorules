@@ -1,0 +1,132 @@
+# Azure WAF rules for policy "my-waf-policy"
+#
+# Azure WAF supports Front Door and Application Gateway.  Set waf_type in
+# config.yaml to choose which.  Rules use matchConditions with operators
+# like IPMatch, GeoMatch, Contains, BeginsWith, Regex, etc.
+#
+# Phases: azure_waf_custom_rules, azure_waf_rate_rules
+#
+# Operator reference:
+# https://learn.microsoft.com/en-us/azure/web-application-firewall/
+
+# ---------------------------------------------------------------------------
+# Custom Rules — match conditions with block/allow/redirect/log actions
+# ---------------------------------------------------------------------------
+azure_waf_custom_rules:
+  - ref: BlockBadIPs
+    priority: 1
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RemoteAddr
+        selector: null
+        operator: IPMatch
+        negateCondition: false
+        matchValue:
+          - 198.51.100.0/24
+          - 203.0.113.0/24
+        transforms: []
+
+  - ref: BlockBadCountries
+    priority: 2
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RemoteAddr
+        selector: null
+        operator: GeoMatch
+        negateCondition: false
+        matchValue:
+          - KP
+          - IR
+        transforms: []
+
+  - ref: BlockSQLi
+    priority: 3
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: QueryString
+        selector: null
+        operator: Contains
+        negateCondition: false
+        matchValue:
+          - "' OR 1=1"
+          - "'; DROP TABLE"
+          - "UNION SELECT"
+        transforms:
+          - Lowercase
+          - UrlDecode
+
+  - ref: AllowHealthChecks
+    priority: 4
+    action: Allow
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RequestUri
+        selector: null
+        operator: BeginsWith
+        negateCondition: false
+        matchValue:
+          - /health
+          - /ready
+        transforms:
+          - Lowercase
+
+  - ref: BlockLargePayloads
+    priority: 5
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RequestBody
+        selector: null
+        operator: Regex
+        negateCondition: false
+        matchValue:
+          - ".{10000,}"
+        transforms: []
+
+# ---------------------------------------------------------------------------
+# Rate-Limit Rules — throttle by IP or other group-by keys
+# ---------------------------------------------------------------------------
+azure_waf_rate_rules:
+  - ref: RateLimitAPI
+    priority: 10
+    action: Block
+    enabledState: Enabled
+    ruleType: RateLimitRule
+    rateLimitDurationInMinutes: 1
+    rateLimitThreshold: 100
+    groupBy:
+      - variableName: SocketAddr
+    matchConditions:
+      - matchVariable: RequestUri
+        selector: null
+        operator: BeginsWith
+        negateCondition: false
+        matchValue:
+          - /api/
+        transforms:
+          - Lowercase
+
+  - ref: RateLimitGlobal
+    priority: 11
+    action: Log
+    enabledState: Enabled
+    ruleType: RateLimitRule
+    rateLimitDurationInMinutes: 5
+    rateLimitThreshold: 5000
+    groupBy:
+      - variableName: SocketAddr
+    matchConditions:
+      - matchVariable: RequestMethod
+        selector: null
+        operator: Any
+        negateCondition: false
+        matchValue: []
+        transforms: []

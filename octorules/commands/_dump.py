@@ -74,7 +74,7 @@ def cmd_dump(
             rules,
             out_dir,
             lists_dir=lists_dir,
-            **ext_data,
+            extra_sections=ext_data,
         )
         return zone_name, result, None
 
@@ -147,7 +147,7 @@ def cmd_dump(
                 custom_rulesets=custom_rulesets,
                 lists=lists,
                 lists_dir=lists_dir,
-                **ext_data,
+                extra_sections=ext_data,
             )
             if result:
                 log.info("Dumped account %s -> %s", provider.account_name, result)
