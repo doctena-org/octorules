@@ -10,14 +10,18 @@ from octorules.extensions import (
     call_audit_extensions,
     call_plan_zone_finalize,
     call_plan_zone_prefetch,
+    call_validate_extensions,
+    get_format_extensions,
     register_apply_extension,
     register_audit_extension,
     register_dump_extension,
+    register_format_extension,
     register_plan_zone_hook,
     register_validate_extension,
     unregister_apply_extension,
     unregister_audit_extension,
     unregister_dump_extension,
+    unregister_format_extension,
     unregister_plan_zone_hook,
     unregister_validate_extension,
 )
@@ -358,3 +362,73 @@ class TestAuditExtensionErrorHandling:
             assert "strict_false" in failed
         finally:
             unregister_audit_extension("strict_false")
+
+
+class TestRegistrySnapshotSafety:
+    """Tests that call_* functions snapshot registries before iterating.
+
+    This prevents ``RuntimeError: dictionary changed size during iteration``
+    when a hook registration happens concurrently with iteration.
+    """
+
+    def test_get_format_extensions_returns_snapshot(self):
+        """get_format_extensions() returns a copy, not a live reference."""
+        sentinel_name = "_snapshot_test_fmt"
+        # Ensure clean state
+        unregister_format_extension(sentinel_name)
+
+        snapshot = get_format_extensions()
+        assert isinstance(snapshot, dict)
+        assert sentinel_name not in snapshot
+
+        # Register a new format extension AFTER taking the snapshot.
+        fmt = MagicMock()
+        register_format_extension(sentinel_name, fmt)
+        try:
+            # The snapshot must NOT contain the newly registered extension.
+            assert sentinel_name not in snapshot
+            # But a fresh call should see it.
+            assert sentinel_name in get_format_extensions()
+        finally:
+            unregister_format_extension(sentinel_name)
+
+    def test_call_validate_extensions_snapshot_during_iteration(self):
+        """Iteration over a snapshot is safe even if a hook mutates the registry.
+
+        We register a validate hook that, when called, registers *another*
+        validate hook.  Without snapshotting, this would raise
+        ``RuntimeError: list changed size during iteration``.
+        """
+        call_log = []
+        inner_registered = False
+
+        def inner_hook(desired, zone_name, errors, lines):
+            call_log.append("inner")
+
+        def mutating_hook(desired, zone_name, errors, lines):
+            nonlocal inner_registered
+            call_log.append("mutating")
+            # Mutate the live registry during iteration — the snapshot
+            # protects against RuntimeError here.
+            if not inner_registered:
+                register_validate_extension(inner_hook)
+                inner_registered = True
+
+        register_validate_extension(mutating_hook)
+        try:
+            # Must NOT raise RuntimeError.
+            call_validate_extensions({}, "example.com", [], [])
+            assert "mutating" in call_log
+            # inner_hook was registered by mutating_hook, but the iteration
+            # used a snapshot so inner_hook was NOT called in this pass.
+            assert "inner" not in call_log
+
+            # A second call should now invoke both hooks because inner_hook
+            # is part of the registry.
+            call_log.clear()
+            call_validate_extensions({}, "example.com", [], [])
+            assert "mutating" in call_log
+            assert "inner" in call_log
+        finally:
+            unregister_validate_extension(mutating_hook)
+            unregister_validate_extension(inner_hook)
