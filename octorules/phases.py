@@ -202,6 +202,7 @@ def unregister_non_phase_key(key: str) -> None:
 
 _api_fields: dict[str, set[str]] = {
     "rule": set(),
+    "action_parameters": set(),
     "list_item": set(),
     "page_shield_policy": set(),
 }
@@ -210,7 +211,8 @@ _api_fields: dict[str, set[str]] = {
 def register_api_fields(category: str, fields: set[str]) -> None:
     """Register provider API fields to strip for *category*.
 
-    Categories: ``"rule"``, ``"list_item"``, ``"page_shield_policy"``.
+    Categories: ``"rule"``, ``"action_parameters"``, ``"list_item"``,
+    ``"page_shield_policy"``.
     """
     with _REGISTRY_LOCK:
         if category not in _api_fields:

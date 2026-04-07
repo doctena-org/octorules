@@ -228,7 +228,15 @@ def _normalize_value(v: object, *, key: str = "") -> object:
 def normalize_rule(rule: RuleDict) -> RuleDict:
     """Strip API-only fields, the ``octorules:`` metadata key, and normalize expression values."""
     excluded = _api_only_fields() | {_OCTORULES_KEY}
-    return {k: _normalize_value(v, key=k) for k, v in rule.items() if k not in excluded}
+    ap_excluded = get_api_fields("action_parameters")
+    result: RuleDict = {}
+    for k, v in rule.items():
+        if k in excluded:
+            continue
+        if k == "action_parameters" and isinstance(v, dict) and ap_excluded:
+            v = {ak: av for ak, av in v.items() if ak not in ap_excluded}
+        result[k] = _normalize_value(v, key=k)
+    return result
 
 
 def _is_ignored(rule: dict) -> bool:
