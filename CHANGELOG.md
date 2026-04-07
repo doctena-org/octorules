@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.4] - 2026-04-07
+
+### Changed
+- `check_ip_overlap` rewritten as sweep-line algorithm — O(n log n) instead of
+  O(n^2), ~99% faster on large IP lists.
+- `check_cdn_ranges` uses sorted-interval binary search — O((n+m) log m)
+  instead of O(n * m), ~99% faster on large IP lists.
+- `fetch_cdn_ranges` uses baked-in package data when fresh, only fetching from
+  live APIs when data is older than `cdn_stale_days`. When APIs are needed,
+  all three are fetched concurrently instead of sequentially.
+
 ## [0.23.3] - 2026-04-07
 
 ### Added
