@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.2] - 2026-04-07
+
+### Added
+- `action_parameters` category in `register_api_fields` — providers can now
+  register API-only fields inside `action_parameters` that are stripped during
+  dump and plan normalization.
+
 ## [0.23.1] - 2026-04-07
 
 ### Fixed

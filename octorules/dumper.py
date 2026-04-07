@@ -239,6 +239,7 @@ def _ensure_ref(rule: dict) -> dict:
 def _clean_rule(rule: dict, default_action: str | None) -> dict:
     """Remove API-only fields and optionally the action if it matches the default."""
     rule_api_fields = get_api_fields("rule")
+    ap_api_fields = get_api_fields("action_parameters")
     cleaned = {}
     for k, v in rule.items():
         if k in rule_api_fields:
@@ -246,6 +247,9 @@ def _clean_rule(rule: dict, default_action: str | None) -> dict:
         # Skip action if it matches the phase default
         if k == "action" and default_action and v == default_action:
             continue
+        # Strip API-only keys from action_parameters
+        if k == "action_parameters" and isinstance(v, dict) and ap_api_fields:
+            v = {ak: av for ak, av in v.items() if ak not in ap_api_fields}
         cleaned[k] = _literalize(v)
     ordered = {}
     for key in ("ref", "description"):
