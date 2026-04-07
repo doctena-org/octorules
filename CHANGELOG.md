@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.1] - 2026-04-07
+
+### Fixed
+- Extension registry `call_*` functions now snapshot the hook list under lock
+  before iteration, preventing potential `RuntimeError` if a registration
+  occurs concurrently. `get_format_extensions()` returns a copy.
+
 ## [0.23.0] - 2026-04-05
 
 ### Added

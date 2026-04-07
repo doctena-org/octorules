@@ -273,8 +273,10 @@ def call_plan_zone_prefetch(
     Snapshots the hook list so finalize uses the same hooks even if
     registrations change between prefetch and finalize.
     """
+    with _REGISTRY_LOCK:
+        hooks = list(_plan_zone_hooks)
     pairs: list[tuple] = []
-    for prefetch, finalize in _plan_zone_hooks:
+    for prefetch, finalize in hooks:
         try:
             ctx = prefetch(all_desired, scope, provider)
         except Exception:
@@ -309,8 +311,10 @@ def call_apply_extensions(
 
     Returns (synced_labels, first_error).
     """
+    with _REGISTRY_LOCK:
+        extensions = dict(_apply_extensions)
     all_synced: list[str] = []
-    for name, fn in _apply_extensions.items():
+    for name, fn in extensions.items():
         plans = zone_plan.extension_plans.get(name, [])
         if not plans:
             continue
@@ -325,7 +329,9 @@ def call_validate_extensions(
     desired: dict, zone_name: str, errors: list[str], lines: list[str]
 ) -> None:
     """Call all registered validation hooks."""
-    for fn in _validate_extensions:
+    with _REGISTRY_LOCK:
+        hooks = list(_validate_extensions)
+    for fn in hooks:
         fn(desired, zone_name, errors, lines)
 
 
@@ -335,8 +341,10 @@ def call_dump_extensions(
     out_dir: "Path",
 ) -> dict:
     """Call all registered dump hooks. Returns merged dict of extra data."""
+    with _REGISTRY_LOCK:
+        hooks = list(_dump_extensions)
     result: dict = {}
-    for fn in _dump_extensions:
+    for fn in hooks:
         data = fn(scope, provider, out_dir)
         if data:
             result.update(data)
@@ -364,9 +372,11 @@ def call_audit_extensions(
       results are returned and the failed extension is recorded.  Set
       *strict=True* to make audit errors fatal (raises immediately).
     """
+    with _REGISTRY_LOCK:
+        extensions = dict(_audit_extensions)
     results: list = []
     failed: list[str] = []
-    for name, fn in _audit_extensions.items():
+    for name, fn in extensions.items():
         try:
             results.extend(fn(rules_data, phase_name))
         except Exception:
@@ -378,5 +388,6 @@ def call_audit_extensions(
 
 
 def get_format_extensions() -> dict[str, FormatExtension]:
-    """Return the registered format extensions."""
-    return _format_extensions
+    """Return a snapshot of the registered format extensions."""
+    with _REGISTRY_LOCK:
+        return dict(_format_extensions)
