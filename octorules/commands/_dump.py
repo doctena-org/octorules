@@ -39,7 +39,7 @@ def cmd_dump(
 ) -> int:
     """Run the dump command. Returns exit code."""
     config.resolve_secrets()
-    providers = _providers_mod._init_providers(config)
+    providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
     lists_dir = out_dir / "custom_lists" if output_dir else config.lists_dir
     provider_ids = _phase_filter_to_provider_ids(phase_filter)
@@ -160,6 +160,7 @@ def cmd_dump(
         with ThreadPoolExecutor(max_workers=len(acct_providers)) as acct_executor:
             acct_futures = [acct_executor.submit(_dump_account, prov) for prov in acct_providers]
             zone_names = _helpers_mod._get_zones(config, zone_filter)
+            log.debug("Dumping %d zone(s) to %s", len(zone_names), out_dir)
             results = _helpers_mod._map_ordered(_fetch_and_dump, zone_names, config.max_workers)
             for zone_name, result, error in results:
                 if error:
@@ -174,6 +175,7 @@ def cmd_dump(
     else:
         if do_zones:
             zone_names = _helpers_mod._get_zones(config, zone_filter)
+            log.debug("Dumping %d zone(s) to %s", len(zone_names), out_dir)
             results = _helpers_mod._map_ordered(_fetch_and_dump, zone_names, config.max_workers)
             for zone_name, result, error in results:
                 if error:

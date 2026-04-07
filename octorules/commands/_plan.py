@@ -1,6 +1,7 @@
 """Planning pipeline and plan/compare/report commands."""
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 import octorules.commands._helpers as _helpers_mod
@@ -92,8 +93,10 @@ def _plan_single_zone(
     provider_ids = _phase_filter_to_provider_ids(phase_filter)
 
     # Start extension prefetch (e.g. Page Shield API call) concurrently
+    log.debug("Planning %s: starting prefetch", zone_name)
     ext_contexts = call_plan_zone_prefetch(all_desired, scope, provider)
 
+    log.debug("Planning %s: fetching rules", zone_name)
     current = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
 
     # Exclude phases that failed to fetch — planning against missing data
@@ -127,8 +130,10 @@ def _plan_single_zone(
                 zp = result
 
     # Finalize extension hooks (join prefetched data, compute diffs)
+    log.debug("Planning %s: finalizing extensions", zone_name)
     call_plan_zone_finalize(zp, all_desired, scope, provider, ext_contexts)
 
+    log.debug("Planning %s: complete (%d changes)", zone_name, zp.total_changes)
     return (zone_name, zp, desired, current)
 
 
@@ -200,6 +205,8 @@ def _plan_zones(
             zp.target = target
         return result
 
+    log.debug("Planning %d zone(s) with %d workers", len(work_items), config.max_workers)
+    t0 = time.monotonic()
     results = _helpers_mod._map_ordered(
         _plan_one,
         work_items,
@@ -218,6 +225,7 @@ def _plan_zones(
             desired_by_zone[zp.plan_key] = desired
             current_by_zone[zp.plan_key] = current
 
+    log.debug("Planning complete: %d zone(s) in %.1fs", len(zone_plans), time.monotonic() - t0)
     return zone_plans, desired_by_zone, current_by_zone, failed_zones
 
 
@@ -481,7 +489,7 @@ def _cmd_plan_or_compare(
 ) -> int:
     """Shared implementation for plan and compare commands."""
     config.resolve_secrets()
-    providers = _providers_mod._init_providers(config)
+    providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
     processors = _providers_mod._init_processors(config)
     r = _plan_all_scopes(
         config, providers, zone_filter, phase_filter, scope_filter, processors=processors
@@ -562,7 +570,7 @@ def cmd_report(
 ) -> int:
     """Run the report command. Returns 0 normally, 1 if any zone failed."""
     config.resolve_secrets()
-    providers = _providers_mod._init_providers(config)
+    providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
     processors = _providers_mod._init_processors(config)
     r = _plan_all_scopes(
         config, providers, zone_filter, phase_filter, scope_filter, processors=processors

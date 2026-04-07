@@ -90,6 +90,7 @@ def cmd_audit(
             accepted_by_zone[stem] = accepted
             log.info("  %s: accepted audit checks: %s", stem, ", ".join(sorted(accepted)))
 
+    log.debug("Auditing %d zone(s)", len(file_stems))
     for stem in file_stems:
         rules_data = config.load_rules_by_stem(stem)
         desired = _filter_desired_by_phase(rules_data, phase_filter)

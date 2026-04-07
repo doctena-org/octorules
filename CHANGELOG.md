@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.23.3] - 2026-04-07
+
+### Added
+- `zone_filter` parameter on `resolve_zone_ids` and `_init_providers` — when
+  `--zone` is used, only the requested zones are resolved, avoiding unnecessary
+  API calls for unrelated zones.
+- Extension prefetch hooks now run concurrently via `ThreadPoolExecutor`,
+  reducing per-zone planning time when multiple extensions are registered
+  (e.g. Cloudflare's 6 extensions overlap instead of running sequentially).
+- Debug logging across all commands (plan, sync, lint, audit, dump) — zone
+  resolution timing, per-zone plan stages, worker counts, and extension
+  prefetch counts are now visible with `--debug`.
+
 ## [0.23.2] - 2026-04-07
 
 ### Added

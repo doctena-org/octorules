@@ -130,7 +130,10 @@ def _discover_zones(config: Config, providers: dict[str, BaseProvider]) -> None:
         config.expand_templates(discovered)
 
 
-def _init_providers(config: Config) -> dict[str, BaseProvider]:
+def _init_providers(
+    config: Config,
+    zone_filter: list[str] | None = None,
+) -> dict[str, BaseProvider]:
     """Create all providers from config and resolve missing zone IDs.
 
     For each ``ProviderConfig`` in ``config.providers``:
@@ -140,6 +143,10 @@ def _init_providers(config: Config) -> dict[str, BaseProvider]:
 
     Then validates multi-target constraints, discovers zones, and resolves
     zone IDs using per-provider resolve functions.
+
+    When *zone_filter* is provided, only the listed zones are resolved
+    (plus any account-scoped zones).  This avoids unnecessary API calls
+    when ``--zone`` restricts the operation to a subset.
     """
     providers: dict[str, BaseProvider] = {}
     for name, pc in config.providers.items():
@@ -156,7 +163,7 @@ def _init_providers(config: Config) -> dict[str, BaseProvider]:
 
     # Resolve zone IDs with per-provider resolve functions
     resolve_fns = {name: prov.resolve_zone_id for name, prov in providers.items()}
-    resolve_zone_ids(config, resolve_fns)
+    resolve_zone_ids(config, resolve_fns, zone_filter=zone_filter)
 
     return providers
 
