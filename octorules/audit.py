@@ -241,13 +241,25 @@ def _load_baked_in_ranges() -> CdnRangeResult:
     return CdnRangeResult(ranges=ranges, source="baked-in", generated_at=oldest)
 
 
-def fetch_cdn_ranges(timeout: int = 15) -> CdnRangeResult:
-    """Fetch CDN IP ranges from public APIs, falling back to baked-in data.
+def fetch_cdn_ranges(timeout: int = 15, cdn_stale_days: int = 60) -> CdnRangeResult:
+    """Return CDN IP ranges, using baked-in data when fresh.
 
-    Tries all three CDN APIs.  If any succeed, returns a ``CdnRangeResult``
-    with ``source="api"``.  If all fail, falls back to the baked-in JSON
-    files shipped with the package.
+    Strategy:
+    1. Load baked-in ranges from package data files.
+    2. If they are fresh (younger than *cdn_stale_days*), return immediately
+       — no network calls needed.
+    3. If stale (or missing), fetch from all three CDN APIs concurrently.
+    4. If all API fetches fail, fall back to stale baked-in data anyway.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    baked = _load_baked_in_ranges()
+    if baked.ranges and not baked.is_stale(cdn_stale_days):
+        log.debug("Using fresh baked-in CDN ranges (%s)", baked.source)
+        return baked
+
+    # Baked-in data is stale or missing — fetch from APIs concurrently.
+    log.debug("Baked-in CDN ranges are stale, fetching from APIs")
     sources = [
         ("Cloudflare", "https://api.cloudflare.com/client/v4/ips", _parse_cloudflare_ips),
         (
@@ -257,22 +269,37 @@ def fetch_cdn_ranges(timeout: int = 15) -> CdnRangeResult:
         ),
         ("Google Cloud", "https://www.gstatic.com/ipranges/cloud.json", _parse_google_cloud_ips),
     ]
+
     result: dict[str, list[str]] = {}
-    for label, url, parser in sources:
+
+    def _fetch_one(source_tuple: tuple) -> tuple[str, list[str]] | None:
+        label, url, parser = source_tuple
         data = _fetch_json(url, timeout=timeout)
         if data is None:
-            continue
+            return None
         cidrs = parser(data)
         if cidrs:
-            result[label] = cidrs
             log.debug("Fetched %d CIDRs from %s", len(cidrs), label)
+            return (label, cidrs)
+        return None
+
+    with ThreadPoolExecutor(max_workers=len(sources)) as executor:
+        futures = {executor.submit(_fetch_one, s): s for s in sources}
+        for future in as_completed(futures):
+            pair = future.result()
+            if pair is not None:
+                result[pair[0]] = pair[1]
 
     if result:
         return CdnRangeResult(ranges=result, source="api")
 
-    # All API fetches failed — fall back to baked-in data.
-    log.warning("CDN API fetch failed, falling back to baked-in ranges")
-    return _load_baked_in_ranges()
+    # All API fetches failed — fall back to stale baked-in data.
+    if baked.ranges:
+        log.warning("CDN API fetch failed, falling back to stale baked-in ranges")
+        return baked
+
+    log.warning("No CDN IP ranges available (API fetch failed, no baked-in data)")
+    return CdnRangeResult(ranges={}, source="baked-in")
 
 
 # ---------------------------------------------------------------------------
@@ -291,43 +318,91 @@ def check_ip_overlap(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
 
     Compares IPs across *different* rules (intra-rule overlaps are
     already caught by per-provider linters).
+
+    Uses a sweep-line algorithm: entries are sorted by network address
+    (ascending) then prefix length (ascending = broadest first).  A stack
+    of "active" networks is maintained; each new entry is checked against
+    the stack top.  If the new entry falls within the active network and
+    belongs to a different rule, it's an overlap.  Complexity is
+    O(n log n) instead of O(n²).
     """
     findings: list[AuditFinding] = []
 
-    # Build list of (rule_ref, phase, cidr_str, network) tuples
-    entries: list[tuple[str, str, str, str, ipaddress.IPv4Network | ipaddress.IPv6Network]] = []
+    # Build and sort entries per address family.
+    Entry = tuple[
+        int,  # network_address (as int, for sorting)
+        int,  # prefix_length
+        int,  # broadcast_address (as int, for containment check)
+        str,  # ref
+        str,  # phase_name
+        str,  # zone_name
+        str,  # cidr_str
+        ipaddress.IPv4Network | ipaddress.IPv6Network,  # net
+    ]
+
+    entries_v4: list[Entry] = []
+    entries_v6: list[Entry] = []
     for info in rule_ips:
         for cidr in info.ip_ranges:
             net = _to_network(cidr)
-            if net is not None:
-                entries.append((info.ref, info.phase_name, info.zone_name, cidr, net))
-
-    for i, (ref_a, phase_a, zone_a, cidr_a, net_a) in enumerate(entries):
-        for ref_b, phase_b, _zone_b, cidr_b, net_b in entries[i + 1 :]:
-            if ref_a == ref_b and phase_a == phase_b:
-                continue  # Skip intra-rule comparison
-            if net_a.version != net_b.version:
+            if net is None:
                 continue
-            if not net_a.overlaps(net_b):
-                continue
-            # Determine narrower/broader for message
-            if net_a.prefixlen >= net_b.prefixlen:
-                narrower, broader = cidr_a, cidr_b
-            else:
-                narrower, broader = cidr_b, cidr_a
-            findings.append(
-                AuditFinding(
-                    check="ip-overlap",
-                    severity=FindingSeverity.WARNING,
-                    message=(
-                        f"Overlapping IP ranges: {narrower} (in {ref_a}/{phase_a})"
-                        f" overlaps {broader} (in {ref_b}/{phase_b})"
-                    ),
-                    zone_name=zone_a,
-                    phase_name=phase_a,
-                    ref=ref_a,
-                )
+            entry = (
+                int(net.network_address),
+                net.prefixlen,
+                int(net.broadcast_address),
+                info.ref,
+                info.phase_name,
+                info.zone_name,
+                cidr,
+                net,
             )
+            if net.version == 4:
+                entries_v4.append(entry)
+            else:
+                entries_v6.append(entry)
+
+    def _sweep(entries: list[Entry]) -> None:
+        # Sort by network address ascending, then prefix length ascending
+        # (broadest first when same network address — e.g. /8 before /16).
+        entries.sort(key=lambda e: (e[0], e[1]))
+
+        # Stack of active (broadcast_int, ref, phase, zone, cidr, net).
+        # An entry is "active" while the sweep position is within its range.
+        _Net = ipaddress.IPv4Network | ipaddress.IPv6Network
+        stack: list[tuple[int, str, str, str, str, _Net]] = []
+
+        for net_addr, _prefixlen, bcast, ref, phase, zone, cidr_str, net in entries:
+            # Pop expired entries from the stack (their broadcast < current network address).
+            while stack and stack[-1][0] < net_addr:
+                stack.pop()
+
+            # Check remaining stack entries for overlap (they all contain this entry).
+            for _s_bcast, s_ref, s_phase, _s_zone, s_cidr, _s_net in stack:
+                # Skip intra-rule comparison.
+                if ref == s_ref and phase == s_phase:
+                    continue
+                # The stack entry contains this entry (broader contains narrower).
+                narrower = cidr_str
+                broader = s_cidr
+                findings.append(
+                    AuditFinding(
+                        check="ip-overlap",
+                        severity=FindingSeverity.WARNING,
+                        message=(
+                            f"Overlapping IP ranges: {narrower} (in {ref}/{phase})"
+                            f" overlaps {broader} (in {s_ref}/{s_phase})"
+                        ),
+                        zone_name=zone,
+                        phase_name=phase,
+                        ref=ref,
+                    )
+                )
+
+            stack.append((bcast, ref, phase, zone, cidr_str, net))
+
+    _sweep(entries_v4)
+    _sweep(entries_v6)
     return findings
 
 
@@ -426,47 +501,87 @@ def check_cdn_ranges(
     rule_ips: list[RuleIPInfo],
     cdn_ranges: dict[str, list[str]],
 ) -> list[AuditFinding]:
-    """Check if any rule IPs match known CDN provider IP ranges."""
+    """Check if any rule IPs match known CDN provider IP ranges.
+
+    Uses a sorted-interval approach: CDN ranges are sorted by start
+    address, then each rule CIDR is checked via binary search against
+    candidate CDN ranges.  Complexity is O((n + m) log m) instead of
+    O(n * m).
+    """
+    import bisect
+
     findings: list[AuditFinding] = []
 
-    # Pre-parse CDN networks
-    cdn_nets: dict[str, list[ipaddress.IPv4Network | ipaddress.IPv6Network]] = {}
+    # Pre-parse CDN networks into (start_int, end_int, provider, net) sorted by start.
+    CdnEntry = tuple[int, int, str, ipaddress.IPv4Network | ipaddress.IPv6Network]
+    cdn_v4: list[CdnEntry] = []
+    cdn_v6: list[CdnEntry] = []
     for provider, cidrs in cdn_ranges.items():
-        nets = []
         for cidr in cidrs:
             net = _to_network(cidr)
-            if net is not None:
-                nets.append(net)
-        if nets:
-            cdn_nets[provider] = nets
+            if net is None:
+                continue
+            entry = (int(net.network_address), int(net.broadcast_address), provider, net)
+            if net.version == 4:
+                cdn_v4.append(entry)
+            else:
+                cdn_v6.append(entry)
 
-    if not cdn_nets:
+    cdn_v4.sort()
+    cdn_v6.sort()
+    # Extract start addresses for bisect.
+    cdn_v4_starts = [e[0] for e in cdn_v4]
+    cdn_v6_starts = [e[0] for e in cdn_v6]
+
+    if not cdn_v4 and not cdn_v6:
         return findings
+
+    def _check_against(
+        net: ipaddress.IPv4Network | ipaddress.IPv6Network,
+        cdn_list: list[CdnEntry],
+        cdn_starts: list[int],
+    ) -> tuple[str, ipaddress.IPv4Network | ipaddress.IPv6Network] | None:
+        """Find the first CDN range that overlaps *net*, or None."""
+        addr_start = int(net.network_address)
+        addr_end = int(net.broadcast_address)
+
+        # Find CDN ranges whose start <= addr_end (candidates for overlap).
+        idx = bisect.bisect_right(cdn_starts, addr_end)
+        # Check candidates in reverse (closest start first).
+        for i in range(idx - 1, -1, -1):
+            cdn_start, cdn_end, cdn_provider, cdn_net = cdn_list[i]
+            # Overlap: ranges intersect if start_a <= end_b AND start_b <= end_a.
+            if cdn_start <= addr_end and addr_start <= cdn_end:
+                return (cdn_provider, cdn_net)
+            # Optimisation: if this CDN range ends before our start, all
+            # earlier ranges also end before our start (sorted order).
+            if cdn_end < addr_start:
+                break
+        return None
 
     for info in rule_ips:
         for cidr in info.ip_ranges:
             net = _to_network(cidr)
             if net is None:
                 continue
-            for provider, nets in cdn_nets.items():
-                for cdn_net in nets:
-                    if net.version != cdn_net.version:
-                        continue
-                    if net.overlaps(cdn_net):
-                        findings.append(
-                            AuditFinding(
-                                check="cdn-ranges",
-                                severity=FindingSeverity.WARNING,
-                                message=(
-                                    f"{cidr} (in {info.ref}/{info.phase_name})"
-                                    f" overlaps {provider} range {cdn_net}"
-                                ),
-                                zone_name=info.zone_name,
-                                phase_name=info.phase_name,
-                                ref=info.ref,
-                            )
-                        )
-                        break  # One finding per (rule_cidr, cdn_provider) pair
+            cdn_list = cdn_v4 if net.version == 4 else cdn_v6
+            cdn_starts = cdn_v4_starts if net.version == 4 else cdn_v6_starts
+            match = _check_against(net, cdn_list, cdn_starts)
+            if match is not None:
+                cdn_provider, cdn_net = match
+                findings.append(
+                    AuditFinding(
+                        check="cdn-ranges",
+                        severity=FindingSeverity.WARNING,
+                        message=(
+                            f"{cidr} (in {info.ref}/{info.phase_name})"
+                            f" overlaps {cdn_provider} range {cdn_net}"
+                        ),
+                        zone_name=info.zone_name,
+                        phase_name=info.phase_name,
+                        ref=info.ref,
+                    )
+                )
     return findings
 
 
@@ -765,7 +880,7 @@ def run_audit(
         findings.extend(check_ip_shadow(all_rule_ips, phase_order))
 
     if "cdn-ranges" in checks:
-        cdn_result = fetch_cdn_ranges(timeout=cdn_timeout)
+        cdn_result = fetch_cdn_ranges(timeout=cdn_timeout, cdn_stale_days=cdn_stale_days)
         if cdn_result.ranges:
             findings.extend(check_cdn_ranges(all_rule_ips, cdn_result.ranges))
             if cdn_result.is_stale(cdn_stale_days):
