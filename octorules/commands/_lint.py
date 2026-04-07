@@ -162,6 +162,7 @@ def cmd_lint(
     has_warnings = False
     processed_stems: set[str] = set()
 
+    log.debug("Linting %d zone(s)", len(all_stems))
     for zone_name in all_stems:
         # Use load_rules_by_stem for account-scoped files not in config.zones.
         if zone_name in config.zones:
@@ -203,6 +204,7 @@ def cmd_lint(
 
         # Core rules (provider-agnostic, run after provider plugins)
         _core_lint_zone(desired, ctx)
+        log.debug("Linted %s: %d result(s)", zone_name, len(ctx.results))
 
         # Track which plugins were active (produced results or suppressed findings).
         if ctx.results or ctx.suppressed_count:

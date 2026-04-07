@@ -1146,6 +1146,69 @@ class TestResolveZoneIds:
         with pytest.raises(ConfigError, match="Failed to resolve zone 'fail.com'"):
             resolve_zone_ids(config, maybe_explode, max_workers=2)
 
+    def test_zone_filter_resolves_only_listed_zones(self):
+        """zone_filter restricts which zones are resolved."""
+        resolved = []
+
+        def tracking_resolve(name):
+            resolved.append(name)
+            return f"id-for-{name}"
+
+        config = Config(
+            rules_dir="/tmp/rules",
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "b.com": ZoneConfig(name="b.com"),
+                "c.com": ZoneConfig(name="c.com"),
+            },
+        )
+        resolve_zone_ids(config, tracking_resolve, zone_filter=["a.com", "c.com"])
+        # a.com and c.com resolved
+        assert config.zones["a.com"].zone_id == "id-for-a.com"
+        assert config.zones["c.com"].zone_id == "id-for-c.com"
+        # b.com was NOT resolved
+        assert config.zones["b.com"].zone_id is None
+        # resolve_fn was only called for the filtered zones
+        assert sorted(resolved) == ["a.com", "c.com"]
+
+    def test_zone_filter_none_resolves_all(self):
+        """zone_filter=None resolves all zones (backward compat)."""
+        config = Config(
+            rules_dir="/tmp/rules",
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "b.com": ZoneConfig(name="b.com"),
+                "c.com": ZoneConfig(name="c.com"),
+            },
+        )
+        resolve_zone_ids(config, lambda name: f"id-for-{name}", zone_filter=None)
+        assert config.zones["a.com"].zone_id == "id-for-a.com"
+        assert config.zones["b.com"].zone_id == "id-for-b.com"
+        assert config.zones["c.com"].zone_id == "id-for-c.com"
+
+    def test_zone_filter_empty_list_resolves_all(self):
+        """zone_filter=[] is falsy, so it behaves like None (resolves all)."""
+        resolved = []
+
+        def tracking_resolve(name):
+            resolved.append(name)
+            return f"id-for-{name}"
+
+        config = Config(
+            rules_dir="/tmp/rules",
+            zones={
+                "a.com": ZoneConfig(name="a.com"),
+                "b.com": ZoneConfig(name="b.com"),
+                "c.com": ZoneConfig(name="c.com"),
+            },
+        )
+        resolve_zone_ids(config, tracking_resolve, zone_filter=[])
+        # Empty list is falsy — same behavior as None, all zones resolved
+        assert config.zones["a.com"].zone_id == "id-for-a.com"
+        assert config.zones["b.com"].zone_id == "id-for-b.com"
+        assert config.zones["c.com"].zone_id == "id-for-c.com"
+        assert sorted(resolved) == ["a.com", "b.com", "c.com"]
+
 
 class TestPlanOutputs:
     """Tests for manager.plan_outputs config parsing."""

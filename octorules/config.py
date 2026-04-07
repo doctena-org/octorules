@@ -4,6 +4,7 @@ import importlib
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -844,6 +845,7 @@ def resolve_zone_ids(
     config: Config,
     resolve_fn: Callable[[str], str] | dict[str, Callable[[str], str]],
     max_workers: int | None = None,
+    zone_filter: list[str] | None = None,
 ) -> None:
     """Resolve zone IDs by calling resolve_fn(zone_name) for zones without one.
 
@@ -855,8 +857,14 @@ def resolve_zone_ids(
 
     Args:
         max_workers: Concurrency for resolution. Uses config.max_workers when None.
+        zone_filter: When provided, only resolve these zone names (plus any
+            account-scoped zones).  Reduces API calls when ``--zone`` is used.
     """
-    to_resolve = {name: cfg for name, cfg in config.zones.items() if cfg.zone_id is None}
+    candidates = config.zones.items()
+    if zone_filter:
+        filter_set = set(zone_filter)
+        candidates = ((name, cfg) for name, cfg in candidates if name in filter_set)
+    to_resolve = {name: cfg for name, cfg in candidates if cfg.zone_id is None}
     if not to_resolve:
         return
 
@@ -875,6 +883,7 @@ def resolve_zone_ids(
                 raise ConfigError(f"Zone {name!r} has no target provider; cannot resolve zone ID")
 
     workers = max_workers if max_workers is not None else config.max_workers
+    log.debug("Resolving %d zone(s) with %d workers", len(to_resolve), workers)
 
     def _resolve_one(zone_name: str) -> str:
         try:
@@ -884,13 +893,25 @@ def resolve_zone_ids(
         except Exception as e:
             raise ConfigError(f"Failed to resolve zone {zone_name!r}: {e}") from e
 
+    t0 = time.monotonic()
+
     if workers <= 1 or len(to_resolve) <= 1:
         for zone_name, zone_cfg in to_resolve.items():
             zone_cfg.zone_id = _resolve_one(zone_name)
+            log.debug("Resolved %s -> %s", zone_name, zone_cfg.zone_id)
+        log.debug(
+            "Zone resolution complete: %d zone(s) in %.1fs", len(to_resolve), time.monotonic() - t0
+        )
         return
 
     with ThreadPoolExecutor(max_workers=min(workers, len(to_resolve))) as executor:
         futures = {executor.submit(_resolve_one, name): name for name in to_resolve}
         for future in as_completed(futures):
             zone_name = futures[future]
-            to_resolve[zone_name].zone_id = future.result()
+            zone_id = future.result()
+            to_resolve[zone_name].zone_id = zone_id
+            log.debug("Resolved %s -> %s", zone_name, zone_id)
+
+    log.debug(
+        "Zone resolution complete: %d zone(s) in %.1fs", len(to_resolve), time.monotonic() - t0
+    )

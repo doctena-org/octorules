@@ -268,22 +268,56 @@ def call_plan_zone_prefetch(
     scope: "Scope",
     provider: "BaseProvider",
 ) -> list[tuple]:
-    """Call prefetch hooks. Returns list of (finalize_fn, context) pairs.
+    """Call prefetch hooks concurrently. Returns list of (finalize_fn, context) pairs.
 
     Snapshots the hook list so finalize uses the same hooks even if
     registrations change between prefetch and finalize.
+
+    All prefetch hooks are submitted to a thread pool and run concurrently.
+    If any hook raises an exception, all pending futures are cancelled and
+    the first exception propagates immediately.
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     with _REGISTRY_LOCK:
         hooks = list(_plan_zone_hooks)
-    pairs: list[tuple] = []
-    for prefetch, finalize in hooks:
+    log.debug("Prefetching %d extension(s)", len(hooks))
+
+    if not hooks:
+        return []
+
+    # Single hook — no thread pool overhead needed.
+    if len(hooks) == 1:
+        prefetch, finalize = hooks[0]
         try:
             ctx = prefetch(all_desired, scope, provider)
         except Exception:
             log.exception("Error in plan zone prefetch hook %s", prefetch)
             raise
-        pairs.append((finalize, ctx))
-    return pairs
+        return [(finalize, ctx)]
+
+    # Multiple hooks — run concurrently.
+    results: dict[int, object] = {}
+    with ThreadPoolExecutor(max_workers=len(hooks)) as executor:
+        future_to_idx = {}
+        for idx, (prefetch, _finalize) in enumerate(hooks):
+            future = executor.submit(prefetch, all_desired, scope, provider)
+            future_to_idx[future] = idx
+
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                results[idx] = future.result()
+            except Exception:
+                # Cancel remaining futures and propagate the error.
+                for f in future_to_idx:
+                    f.cancel()
+                prefetch_fn = hooks[idx][0]
+                log.exception("Error in plan zone prefetch hook %s", prefetch_fn)
+                raise
+
+    # Rebuild pairs in original registration order.
+    return [(hooks[idx][1], results[idx]) for idx in range(len(hooks))]
 
 
 def call_plan_zone_finalize(
@@ -318,6 +352,7 @@ def call_apply_extensions(
         plans = zone_plan.extension_plans.get(name, [])
         if not plans:
             continue
+        log.debug("Applying extension %s", name)
         synced, error = fn(zone_plan, plans, scope, provider)
         all_synced.extend(synced)
         if error:

@@ -74,7 +74,9 @@ class TestPlanZoneHookPrefetch:
 
             pairs = call_plan_zone_prefetch({}, scope, provider)
             assert len(pairs) == baseline + 3
-            assert call_log == ["prefetch-0", "prefetch-1", "prefetch-2"]
+            # Prefetch hooks run concurrently — order is non-deterministic,
+            # but all three must have been called.
+            assert set(call_log) == {"prefetch-0", "prefetch-1", "prefetch-2"}
 
             call_log.clear()
             zp = MagicMock()
@@ -116,6 +118,84 @@ class TestPlanZoneHookPrefetch:
                 call_plan_zone_finalize(MagicMock(), {}, scope, provider, pairs)
         finally:
             unregister_plan_zone_hook(ok_prefetch, bad_finalize)
+
+    def test_concurrent_prefetch_preserves_result_order(self):
+        """Results are returned in registration order, not completion order."""
+        import threading
+        import time
+
+        barrier = threading.Barrier(3)
+
+        def make_hooks(tag, delay):
+            def prefetch(all_desired, scope, provider):
+                barrier.wait()  # Synchronize all hooks to start together
+                time.sleep(delay)
+                return f"ctx-{tag}"
+
+            def finalize(zp, all_desired, scope, provider, ctx):
+                pass
+
+            return prefetch, finalize
+
+        # Hook-1 completes fastest, hook-0 and hook-2 are slower.
+        hooks = [
+            make_hooks(0, 0.1),  # registered first, slow
+            make_hooks(1, 0.0),  # registered second, fastest
+            make_hooks(2, 0.05),  # registered third, medium
+        ]
+        for pf, fn in hooks:
+            register_plan_zone_hook(pf, fn)
+        try:
+            scope = Scope(zone_id="z1")
+            provider = MagicMock()
+            pairs = call_plan_zone_prefetch({}, scope, provider)
+
+            # Extract our test results (skip any baseline hooks from real providers).
+            our_pairs = [
+                (fin, ctx) for fin, ctx in pairs if isinstance(ctx, str) and ctx.startswith("ctx-")
+            ]
+            assert len(our_pairs) == 3
+            # Must be in registration order (0, 1, 2) not completion order (1, 2, 0).
+            assert [ctx for _fin, ctx in our_pairs] == ["ctx-0", "ctx-1", "ctx-2"]
+        finally:
+            for pf, fn in hooks:
+                unregister_plan_zone_hook(pf, fn)
+
+    def test_prefetch_error_cancels_concurrent_hooks(self):
+        """Error in one concurrent hook propagates without hanging."""
+        from octorules.provider.exceptions import ProviderAuthError
+
+        def ok_prefetch_0(all_desired, scope, provider):
+            return "ctx-0"
+
+        def ok_finalize_0(zp, all_desired, scope, provider, ctx):
+            pass
+
+        def bad_prefetch(all_desired, scope, provider):
+            raise ProviderAuthError("auth expired")
+
+        def bad_finalize(zp, all_desired, scope, provider, ctx):
+            pass
+
+        def ok_prefetch_2(all_desired, scope, provider):
+            return "ctx-2"
+
+        def ok_finalize_2(zp, all_desired, scope, provider, ctx):
+            pass
+
+        hooks = [
+            (ok_prefetch_0, ok_finalize_0),
+            (bad_prefetch, bad_finalize),
+            (ok_prefetch_2, ok_finalize_2),
+        ]
+        for pf, fn in hooks:
+            register_plan_zone_hook(pf, fn)
+        try:
+            with pytest.raises(ProviderAuthError, match="auth expired"):
+                call_plan_zone_prefetch({}, Scope(zone_id="z1"), MagicMock())
+        finally:
+            for pf, fn in hooks:
+                unregister_plan_zone_hook(pf, fn)
 
     def test_hooks_cleaned_up_after_test(self):
         """Verify hooks don't leak between tests (sanity check for test isolation)."""

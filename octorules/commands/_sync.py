@@ -3,6 +3,7 @@
 import json as _json
 import logging
 import re
+import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -543,6 +544,8 @@ def _cmd_sync_inner(
             return 1, []
 
     actionable = [zp for zp in r.zone_plans if zp.has_changes]
+    log.debug("Syncing %d zone(s) with changes", len(actionable))
+    t0 = time.monotonic()
     exit_code, sync_results = _apply_zone_changes(
         actionable,
         r.desired_by_zone,
@@ -552,6 +555,9 @@ def _cmd_sync_inner(
         provider_map=r.provider_map,
         executor=executor,
     )
+    log.debug("Sync complete: %d zone(s) in %.1fs", len(actionable), time.monotonic() - t0)
+    for sr in sync_results:
+        log.debug("Synced %s: %s", sr.zone_name, sr.synced)
     if audit_log and sync_results:
         _write_audit_log(audit_log, sync_results)
     return exit_code, sync_results
@@ -591,7 +597,7 @@ def cmd_sync(
             f"Invalid checksum format: {checksum!r} (expected 64-character hex string)"
         )
     config.resolve_secrets()
-    providers = _providers_mod._init_providers(config)
+    providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
     processors = _providers_mod._init_processors(config)
     # Shared executor reused across plan + apply phases
     shared_ex: ThreadPoolExecutor | None = None
