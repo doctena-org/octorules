@@ -34,8 +34,9 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
-          tag="${{ github.ref_name }}"
+          tag="${TAG}"
           if gh release view "$tag" > /dev/null 2>&1; then
             echo "Release $tag already exists, uploading assets"
             gh release upload "$tag" dist/* --clobber

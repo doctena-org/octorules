@@ -206,9 +206,38 @@ def check_catch_all(
 # Core rule IDs (provider-agnostic, always available).
 CORE_RULE_IDS: frozenset[str] = frozenset({"CORE002", "CORE003", "CORE004", "CORE006"})
 
+# Register core rules in the global registry so --list-rules shows them.
+# Deferred to a function to avoid circular import (registry.py imports Severity
+# from this module).  Called by get_known_rule_ids() and list_rules().
+_core_rules_registered = False
+
+
+def _register_core_rules() -> None:
+    global _core_rules_registered
+    if _core_rules_registered:
+        return
+    _core_rules_registered = True
+
+    from octorules.linter.rules.registry import RuleMeta, register_rules
+
+    register_rules(
+        [
+            RuleMeta(
+                "CORE002",
+                "core",
+                "Orphaned rules file (no matching zone in config)",
+                Severity.WARNING,
+            ),
+            RuleMeta("CORE003", "core", "All rules in phase are disabled", Severity.WARNING),
+            RuleMeta("CORE004", "core", "Same ref used in multiple phases", Severity.WARNING),
+            RuleMeta("CORE006", "core", "Rules file has no actual rules", Severity.WARNING),
+        ]
+    )
+
 
 def get_known_rule_ids() -> frozenset[str]:
     """Return the union of all rule IDs from registered lint plugins + core rules."""
+    _register_core_rules()
     from octorules.linter.plugin import get_registered_plugins
 
     ids: set[str] = set(CORE_RULE_IDS)

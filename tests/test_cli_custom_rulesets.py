@@ -3,7 +3,8 @@
 import logging
 from unittest.mock import MagicMock, patch
 
-from octorules.cli import cmd_dump, cmd_sync, cmd_validate
+from octorules.cli import cmd_dump, cmd_sync
+from octorules.commands._validate import cmd_validate
 from octorules.config import Config, ProviderConfig, ZoneConfig
 from octorules.planner import ChangeType, RuleChange, ZonePlan
 from octorules.provider import Scope

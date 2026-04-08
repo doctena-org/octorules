@@ -6,13 +6,10 @@ from pathlib import Path
 from octorules.commands import (
     _validate_phases,
     cmd_audit,
-    cmd_compare,
     cmd_dump,
     cmd_lint,
     cmd_plan,
-    cmd_report,
     cmd_sync,
-    cmd_validate,
 )
 from octorules.config import Config
 
@@ -82,24 +79,6 @@ class Manager:
             scope_filter=scope,
         )
 
-    def compare(
-        self,
-        *,
-        zones: list[str] | None = None,
-        phases: list[str] | None = None,
-        scope: str = "all",
-        checksum: bool = False,
-    ) -> int:
-        """Run the compare command. Returns exit code."""
-        _validate_phases(phases)
-        return cmd_compare(
-            self.config,
-            zones,
-            phase_filter=phases,
-            checksum=checksum,
-            scope_filter=scope,
-        )
-
     def dump(
         self,
         *,
@@ -116,40 +95,6 @@ class Manager:
             output_dir,
             scope_filter=scope,
             phase_filter=phases,
-        )
-
-    def validate(
-        self,
-        *,
-        zones: list[str] | None = None,
-        phases: list[str] | None = None,
-        output: str | None = None,
-    ) -> int:
-        """Run the validate command. Returns exit code."""
-        _validate_phases(phases)
-        return cmd_validate(
-            self.config,
-            zones,
-            phase_filter=phases,
-            output_file=output,
-        )
-
-    def report(
-        self,
-        *,
-        zones: list[str] | None = None,
-        phases: list[str] | None = None,
-        scope: str = "all",
-        format: str = "csv",
-    ) -> int:
-        """Run the report command. Returns exit code."""
-        _validate_phases(phases)
-        return cmd_report(
-            self.config,
-            zones,
-            phase_filter=phases,
-            report_format=format,
-            scope_filter=scope,
         )
 
     def lint(

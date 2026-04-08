@@ -108,6 +108,52 @@ def _core_lint_orphaned_files(config: Config, processed_stems: set[str]) -> list
     return results
 
 
+def list_rules(fmt: str = "text", filters: list[str] | None = None) -> int:
+    """List all available lint rules and return exit code 0.
+
+    When *filters* is provided, only rules whose ID starts with one of the
+    filter prefixes are shown (e.g. ``["CF", "CORE"]``).
+
+    Core rules are registered lazily to avoid circular imports.
+    """
+    import json as _json
+
+    from octorules.linter.engine import _register_core_rules
+    from octorules.linter.rules.registry import RULE_REGISTRY
+
+    _register_core_rules()
+    rules = sorted(RULE_REGISTRY.values(), key=lambda r: r.rule_id)
+    if filters:
+        prefixes = tuple(f.upper() for f in filters)
+        rules = [r for r in rules if r.rule_id.upper().startswith(prefixes)]
+
+    if fmt == "json":
+        data = [
+            {
+                "id": r.rule_id,
+                "category": r.category,
+                "severity": r.default_severity.name,
+                "description": r.description,
+            }
+            for r in rules
+        ]
+        print(_json.dumps({"rules": data, "total": len(data)}, indent=2))
+    else:
+        # Text table with minimum column widths matching header labels
+        id_w = max(7, *(len(r.rule_id) for r in rules)) if rules else 7
+        sev_w = 8  # len("SEVERITY")
+        cat_w = max(8, *(len(r.category) for r in rules)) if rules else 8
+        print(f"{'RULE_ID':<{id_w}}  {'SEVERITY':<{sev_w}}  {'CATEGORY':<{cat_w}}  DESCRIPTION")
+        print(f"{'-------':<{id_w}}  {'--------':<{sev_w}}  {'--------':<{cat_w}}  -----------")
+        for r in rules:
+            print(
+                f"{r.rule_id:<{id_w}}  {r.default_severity.name:<{sev_w}}  "
+                f"{r.category:<{cat_w}}  {r.description}"
+            )
+        print(f"\n{len(rules)} rule(s) available.")
+    return 0
+
+
 def cmd_lint(
     config: Config,
     zone_filter: list[str] | None,
@@ -162,8 +208,9 @@ def cmd_lint(
     has_warnings = False
     processed_stems: set[str] = set()
 
-    log.debug("Linting %d zone(s)", len(all_stems))
-    for zone_name in all_stems:
+    total_zones = len(all_stems)
+    log.debug("Linting %d zone(s)", total_zones)
+    for zi, zone_name in enumerate(all_stems, 1):
         # Use load_rules_by_stem for account-scoped files not in config.zones.
         if zone_name in config.zones:
             raw_rules = config.load_zone_rules(zone_name)
@@ -238,14 +285,23 @@ def cmd_lint(
         else:
             log.info("  %s: no issues found", zone_name)
 
+        if total_zones > 1:
+            log.debug("  [%d/%d] linted %s", zi, total_zones, zone_name)
+
     # CORE002: orphaned rules files (after all zones processed).
     # Skip when --zone filter is used (user chose specific zones).
     orphaned = _core_lint_orphaned_files(config, processed_stems) if not zone_filter else []
     if orphaned:
         all_results.extend(orphaned)
+        # Format orphaned results through the same formatter for consistent output
+        from octorules.linter.engine import LintContext as _LC
+
+        orphan_ctx = _LC(file_path="(orphaned files)", zone_name="(orphaned)")
+        orphan_ctx.results = orphaned
+        output = formatter(orphan_ctx)
+        if output and not is_quiet():
+            print(output, end="")
         for r in orphaned:
-            if not is_quiet():
-                print(f"[{r.severity.name}] {r.rule_id} {r.message}")
             if r.severity == Severity.ERROR:
                 has_errors = True
             elif r.severity == Severity.WARNING:
@@ -274,12 +330,112 @@ def cmd_lint(
                 labels.append(f"{p.name} (unused)")
         log.info("Lint plugins: %s", ", ".join(labels))
 
-    # Print summary to stderr so it's always visible regardless of log level
+    # Print summary to stderr (suppressed by --quiet)
     summary_parts: list[str] = []
     summary_parts.append(f"{len(all_results)} issue(s) found")
     if total_suppressed > 0:
         summary_parts.append(f"{total_suppressed} suppressed")
-    print(f"Lint: {', '.join(summary_parts)}.", file=sys.stderr)
+    if not is_quiet():
+        print(f"Lint: {', '.join(summary_parts)}.", file=sys.stderr)
+
+    if exit_code:
+        if has_errors:
+            return 1
+        if has_warnings:
+            return 2
+    elif has_errors:
+        return 1
+    return 0
+
+
+def cmd_lint_file(
+    file_path: str,
+    *,
+    lint_format: str = "text",
+    lint_severity: str = "info",
+    lint_rules: list[str] | None = None,
+    output_file: str | None = None,
+    exit_code: bool = False,
+) -> int:
+    """Lint a single rules file without a config file. Returns exit code."""
+    from pathlib import Path
+
+    import yaml
+
+    from octorules.linter.engine import Severity, get_known_rule_ids, lint_zone_file
+    from octorules.linter.report import FORMATTERS
+    from octorules.linter.suppressions import parse_suppressions
+
+    path = Path(file_path)
+    if not path.exists():
+        log.error("File not found: %s", file_path)
+        return 1
+
+    try:
+        with open(path) as fh:
+            desired = yaml.safe_load(fh)
+    except yaml.YAMLError as e:
+        log.error("Failed to parse YAML: %s", e)
+        return 1
+
+    if not isinstance(desired, dict) or not desired:
+        log.info("  %s: no rules found (empty or non-dict)", path.name)
+        if not is_quiet():
+            print("Lint: 0 issue(s) found.", file=sys.stderr)
+        return 0
+
+    zone_name = path.stem
+    plan_tier = "enterprise"
+
+    severity_map = {"error": Severity.ERROR, "warning": Severity.WARNING, "info": Severity.INFO}
+    severity = severity_map[lint_severity]
+    formatter = FORMATTERS[lint_format]
+
+    known_rules = get_known_rule_ids()
+    suppressions = parse_suppressions(path, known_rules=known_rules)
+
+    ctx = lint_zone_file(
+        desired,
+        file_path=str(path),
+        zone_name=zone_name,
+        plan_tier=plan_tier,
+        severity_filter=severity,
+        rule_filter=lint_rules,
+        suppressions=suppressions,
+    )
+
+    # Core rules (provider-agnostic, run after provider plugins)
+    _core_lint_zone(desired, ctx)
+
+    has_errors = False
+    has_warnings = False
+
+    if ctx.results:
+        output = formatter(ctx)
+        if output and not is_quiet():
+            print(output, end="")
+        if ctx.has_errors:
+            has_errors = True
+        if ctx.has_warnings:
+            has_warnings = True
+    elif lint_format == "summary":
+        output = formatter(ctx)
+        if output and not is_quiet():
+            print(output, end="")
+    else:
+        log.info("  %s: no issues found", zone_name)
+
+    if output_file and ctx.results:
+        if not _write_output_file(output_file, lambda f: formatter(ctx, f)):
+            return 1
+
+    # Print summary to stderr (suppressed by --quiet)
+    summary_parts: list[str] = []
+    summary_parts.append(f"{len(ctx.results)} issue(s) found")
+    if ctx.suppressed_count > 0:
+        summary_parts.append(f"{ctx.suppressed_count} suppressed")
+    if not is_quiet():
+        print(f"Lint: {', '.join(summary_parts)}.", file=sys.stderr)
 
     if exit_code:
         if has_errors:

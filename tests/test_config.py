@@ -2734,3 +2734,75 @@ class TestSafetyThresholdInheritance:
         assert zy.delete_threshold == 90.0
         assert zy.update_threshold == 80.0
         assert zy.min_existing == 9
+
+
+class TestUnknownConfigKeyWarnings:
+    """Tests for unknown key warnings during config loading."""
+
+    def test_unknown_zone_key_warns(self, tmp_path, caplog):
+        """A typo in zone config (e.g. 'sorces') triggers a warning."""
+        (tmp_path / "rules").mkdir()
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+            "    sorces:\n"
+            "      - rules\n"
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            Config.from_file(cfg)
+        assert "Unknown key 'sorces' in zones.example.com" in caplog.text
+
+    def test_unknown_top_level_key_warns(self, tmp_path, caplog):
+        """A typo at top level (e.g. 'provider' singular) triggers a warning."""
+        (tmp_path / "rules").mkdir()
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "provider:\n"
+            "  cloudflare: {}\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            Config.from_file(cfg)
+        assert "Unknown top-level config key 'provider'" in caplog.text
+
+    def test_known_keys_no_warning(self, tmp_path, caplog):
+        """A valid config with no typos produces no 'Unknown key' warnings."""
+        (tmp_path / "rules").mkdir()
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: tok\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            Config.from_file(cfg)
+        assert "Unknown key" not in caplog.text
+        assert "Unknown top-level" not in caplog.text

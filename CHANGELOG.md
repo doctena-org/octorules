@@ -5,6 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] - 2026-04-08
+
+### Added
+- `rule` subcommand — browse/search the lint rule catalog (`octorules rule
+  --all`, `octorules rule CF201`, `--format json`)
+- `--config-only` flag on `lint` — validates config file structure without
+  linting rules files
+- Single-file lint mode — `octorules lint rules/example.yaml` lints one file
+  without a config
+- `--syslog ADDRESS` flag — sends logs to syslog (UDP or Unix socket) alongside
+  stderr
+- Progress indication — `[3/13] planned doctena.com` during multi-zone
+  operations
+- Lazy provider discovery — `lint` and `audit` load only configured providers
+- Zone tab-completion — `--zone <TAB>` completes zone names via shtab
+- Unknown config key warnings — typos like `sorces:` produce warnings instead of
+  being silently ignored
+- All-deletions warning — plan output warns when all changes are removals
+- CORE rules (CORE002-006) registered in RULE_REGISTRY for `rule` catalog
+- Debug logging across all commands
+
+### Changed
+- `--quiet` now suppresses stderr summary and exit lines (unless exit code is
+  non-zero)
+- `--format` replaces `--output-format` on all commands (consistent naming)
+- `--output FILE` metavar on lint/audit/validate (was leaking internal dest
+  names)
+- Shared flags (`--config`, `--zone`, etc.) hidden in subcommand help (only
+  shown in main help)
+- `versions` subcommand no longer inherits irrelevant shared flags
+- Orphaned lint warnings (CORE002) now formatted through the same formatter as
+  all other lint results
+- Audit terminology standardized: "issue(s) found" and "suppressed" (was
+  "finding(s)" and "accepted")
+- Auth error now followed by "Check that your API credentials are configured
+  correctly."
+
+### Removed
+- `compare` subcommand — use `plan --exit-code` instead (exits 2 on changes)
+- `report` subcommand — was a formatting variant of `plan`
+- `validate` subcommand — use `lint --config-only` for config validation
+
+### Fixed
+- Pre-existing test-ordering issue where provider discovery contaminated dump
+  tests
+
 ## [0.23.4] - 2026-04-07
 
 ### Changed

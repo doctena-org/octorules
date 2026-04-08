@@ -21,6 +21,26 @@ from octorules.provider.exceptions import ProviderError
 log = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Lazy per-provider loading
+# ---------------------------------------------------------------------------
+def _ensure_provider_loaded(name: str) -> None:
+    """Load a single provider module by name.
+
+    Python's import system caches modules, so calling ``ep.load()`` on an
+    already-imported provider is a no-op.  No application-level caching needed.
+    """
+    from importlib.metadata import entry_points
+
+    for ep in entry_points(group="octorules.providers"):
+        if ep.name == name:
+            try:
+                ep.load()
+            except (ImportError, AttributeError, ModuleNotFoundError, ValueError) as e:
+                log.warning("Failed to load provider %s: %s", name, e)
+            return
+
+
 def _load_provider_class(dotted_path: str) -> type:
     """Import a provider class from a dotted module path.
 

@@ -135,17 +135,29 @@ def _emit_plan_outputs(config: Config, zone_plans: list) -> bool:
 
 
 def _map_ordered(
-    fn, items: list, max_workers: int, executor: ThreadPoolExecutor | None = None
+    fn,
+    items: list,
+    max_workers: int,
+    executor: ThreadPoolExecutor | None = None,
+    progress: Callable[[int, int, object], None] | None = None,
 ) -> list:
     """Run fn(item) for each item, returning results in input order.
 
     Uses ThreadPoolExecutor when max_workers > 1, otherwise runs sequentially.
     An optional *executor* can be provided to reuse a thread pool across calls.
+    When *progress* is provided, it is called as
+    ``progress(completed, total, item)`` after each item finishes.
     Exceptions from callables propagate directly; callers should ensure fn
     handles expected errors internally (e.g. returning sentinel values).
     """
+    total = len(items)
     if max_workers <= 1:
-        return [fn(item) for item in items]
+        results = []
+        for i, item in enumerate(items):
+            results.append(fn(item))
+            if progress:
+                progress(i + 1, total, item)
+        return results
 
     def _run(ex: ThreadPoolExecutor) -> list:
         results: dict[int, object] = {}
@@ -153,6 +165,8 @@ def _map_ordered(
         for future in as_completed(futures):
             idx = futures[future]
             results[idx] = future.result()
+            if progress:
+                progress(len(results), total, items[idx])
         return [results[i] for i in range(len(items))]
 
     if executor is not None:

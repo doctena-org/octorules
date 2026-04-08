@@ -377,6 +377,20 @@ def _parse_zone(
         ) from exc
     _validate_safety(delete_threshold, update_threshold, min_existing, ctx)
 
+    # Warn on unrecognized zone keys (catches typos like 'sorces' instead of 'sources')
+    _KNOWN_ZONE_KEYS = {
+        "sources",
+        "targets",
+        "processors",
+        "always_dry_run",
+        "allow_unmanaged",
+        "safety",
+        "zone_id",
+    }
+    unknown_zone_keys = set(zone_data.keys()) - _KNOWN_ZONE_KEYS
+    for key in sorted(unknown_zone_keys):
+        log.warning("Unknown key '%s' in zones.%s (ignored)%s", key, zone_name, zd_ctx)
+
     return ZoneConfig(
         name=zone_name,
         sources=sources,
@@ -745,6 +759,19 @@ class Config:
         # it for internal concurrency (e.g. parallel phase fetching).
         for pc in providers.values():
             pc.kwargs.setdefault("max_workers", max_workers)
+
+        # Warn on unrecognized top-level keys (catches typos like 'provider:')
+        _KNOWN_TOP_LEVEL_KEYS = {
+            "secret_handlers",
+            "providers",
+            "zones",
+            "zone_templates",
+            "manager",
+            "processors",
+        }
+        unknown_top = set(raw.keys()) - _KNOWN_TOP_LEVEL_KEYS
+        for key in sorted(unknown_top):
+            log.warning("Unknown top-level config key '%s' (ignored)%s", key, raw_ctx)
 
         return cls(
             rules_dir=rules_dir,

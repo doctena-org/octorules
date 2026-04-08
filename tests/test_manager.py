@@ -98,19 +98,6 @@ class TestManagerDelegation:
                 scope_filter="all",
             )
 
-    def test_compare_delegates(self, _cfg_path):
-        mgr = Manager(_cfg_path)
-        with patch("octorules.manager.cmd_compare", return_value=1) as mock:
-            result = mgr.compare(zones=["example.com"], checksum=True)
-            assert result == 1
-            mock.assert_called_once_with(
-                mgr.config,
-                ["example.com"],
-                phase_filter=None,
-                checksum=True,
-                scope_filter="all",
-            )
-
     def test_dump_delegates(self, _cfg_path):
         mgr = Manager(_cfg_path)
         with patch("octorules.manager.cmd_dump", return_value=0) as mock:
@@ -122,31 +109,6 @@ class TestManagerDelegation:
                 "/tmp/out",
                 scope_filter="zones",
                 phase_filter=None,
-            )
-
-    def test_validate_delegates(self, _cfg_path):
-        mgr = Manager(_cfg_path)
-        with patch("octorules.manager.cmd_validate", return_value=0) as mock:
-            result = mgr.validate(zones=["example.com"], output="/tmp/out.txt")
-            assert result == 0
-            mock.assert_called_once_with(
-                mgr.config,
-                ["example.com"],
-                phase_filter=None,
-                output_file="/tmp/out.txt",
-            )
-
-    def test_report_delegates(self, _cfg_path):
-        mgr = Manager(_cfg_path)
-        with patch("octorules.manager.cmd_report", return_value=0) as mock:
-            result = mgr.report(format="json", scope="account")
-            assert result == 0
-            mock.assert_called_once_with(
-                mgr.config,
-                None,
-                phase_filter=None,
-                report_format="json",
-                scope_filter="account",
             )
 
     def test_lint_delegates(self, _cfg_path):
