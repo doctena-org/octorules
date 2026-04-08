@@ -20,13 +20,10 @@ from octorules.cli import (
     _write_output_file,
     build_parser,
     cmd_audit,
-    cmd_compare,
     cmd_dump,
     cmd_lint,
     cmd_plan,
-    cmd_report,
     cmd_sync,
-    cmd_validate,
     cmd_versions,
     main,
 )
@@ -90,7 +87,7 @@ class TestPositiveInt:
 
 
 class TestBuildParser:
-    @pytest.mark.parametrize("cmd", ["plan", "dump", "validate", "versions", "compare", "report"])
+    @pytest.mark.parametrize("cmd", ["plan", "dump", "versions"])
     def test_command_parses(self, cmd):
         parser = build_parser()
         args = parser.parse_args([cmd])
@@ -123,13 +120,6 @@ class TestBuildParser:
         "argv,attr,expected",
         [
             (["dump", "--output-dir", "/tmp/out"], "output_dir", "/tmp/out"),
-            (["validate", "--output", "/tmp/val.txt"], "validate_output", "/tmp/val.txt"),
-            (["validate"], "validate_output", None),
-            (["report", "--output-format", "csv"], "report_format", "csv"),
-            (["report", "--output-format", "json"], "report_format", "json"),
-            (["report"], "report_format", "csv"),
-            (["compare", "--checksum"], "checksum", True),
-            (["compare"], "checksum", False),
         ],
     )
     def test_subcommand_flag(self, argv, attr, expected):
@@ -141,7 +131,7 @@ class TestBuildParser:
         "argv",
         [
             ["sync"],
-            ["report", "--output-format", "xml"],
+            ["--format", "xml"],
             ["--scope", "invalid", "plan"],
         ],
     )
@@ -856,329 +846,6 @@ class TestDumpAccount:
         assert (rules_dir / "example.com.yaml").exists()
 
 
-class TestCmdValidate:
-    def test_valid_rules(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 0
-        assert "All rules valid" in caplog.text
-
-    def test_no_rules_file(self, sample_config, caplog):
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 0
-        assert "skipped" in caplog.text
-
-    def test_no_rules_warns(self, sample_config, caplog):
-        """When all zones have no rules files, warn the user."""
-        with caplog.at_level(logging.WARNING, logger="octorules"):
-            result = cmd_validate(sample_config, None)
-        assert result == 0
-        assert "No rules found to validate" in caplog.text
-
-    def test_missing_ref(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - expression: 'true'\n")
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 1
-        assert "missing required 'ref'" in caplog.text
-
-    def test_missing_expression_caught_by_prepare_hook(self, sample_config, caplog):
-        """A rule without 'expression' fails in the CF prepare_rule hook."""
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n")
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 1
-
-    def test_duplicate_ref(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'a'\n  - ref: r1\n    expression: 'b'\n"
-        )
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 1
-        assert "Duplicate ref" in caplog.text
-
-    def test_waf_missing_action(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n")
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 1
-        assert "must specify an 'action'" in caplog.text
-
-    def test_unknown_phase_warns(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("typo_rules:\n  - ref: r1\n    expression: 'true'\n")
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 0  # warning only, not an error
-        assert "Unknown phase" in caplog.text
-
-    def test_output_file_written(self, sample_config, tmp_path, caplog):
-        """validate --output should write results to a file."""
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        output_file = tmp_path / "validate.txt"
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"], output_file=str(output_file))
-        assert result == 0
-        assert output_file.exists()
-        content = output_file.read_text()
-        assert "redirect_rules: OK" in content
-        assert "All rules valid" in content
-
-    def test_output_file_includes_errors(self, sample_config, tmp_path, caplog):
-        """validate --output should include validation errors in the file."""
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - expression: 'true'\n")
-        output_file = tmp_path / "validate.txt"
-        with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"], output_file=str(output_file))
-        assert result == 1
-        content = output_file.read_text()
-        assert "ERROR" in content
-
-    def test_output_file_write_error(self, sample_config, caplog):
-        """validate --output should return 1 on write failure."""
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        bad_path = str(sample_config.rules_dir)  # directory, not a file
-        with caplog.at_level(logging.ERROR, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"], output_file=bad_path)
-        assert result == 1
-        assert "Failed to write output file" in caplog.text
-
-    def test_multiple_phases_valid(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text(
-            "redirect_rules:\n"
-            "  - ref: r1\n"
-            "    expression: 'a'\n"
-            "cache_rules:\n"
-            "  - ref: c1\n"
-            "    expression: 'b'\n"
-        )
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"])
-        assert result == 0
-        assert "redirect_rules: OK (1 rule(s))" in caplog.text
-        assert "cache_rules: OK (1 rule(s))" in caplog.text
-
-
-class TestCmdCompare:
-    @patch("octorules.commands._providers._init_providers")
-    def test_no_differences_returns_0(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        result = cmd_compare(sample_config, None)
-        assert result == 0
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_with_differences_returns_1(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_prov.get_all_phase_rules.return_value = {}
-        result = cmd_compare(sample_config, ["example.com"])
-        assert result == 1
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_identical_rules_returns_0(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
-                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
-            ],
-        }
-        result = cmd_compare(sample_config, ["example.com"])
-        assert result == 0
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_zone_filter(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_compare(sample_config, ["example.com"])
-        mock_prov.get_all_phase_rules.assert_called_once_with(
-            Scope(zone_id="zone-abc", label="example.com"),
-            provider_ids=None,
-        )
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_phase_filter(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text(
-            "redirect_rules:\n"
-            "  - ref: r1\n"
-            "    expression: 'true'\n"
-            "cache_rules:\n"
-            "  - ref: c1\n"
-            "    expression: 'true'\n"
-        )
-        mock_prov.get_all_phase_rules.return_value = {}
-        result = cmd_compare(sample_config, ["example.com"], phase_filter=["redirect_rules"])
-        assert result == 1
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_checksum_prints_hash(self, mock_init_provs, sample_config, caplog):
-        """compare --checksum should print a SHA-256 checksum."""
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_prov.get_all_phase_rules.return_value = {}
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            cmd_compare(sample_config, ["example.com"], checksum=True)
-        assert "checksum=" in caplog.text
-        for line in caplog.text.splitlines():
-            if "checksum=" in line:
-                hex_hash = line.split("checksum=", 1)[1]
-                assert len(hex_hash) == 64
-                int(hex_hash, 16)  # valid hex
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_checksum_no_changes(self, mock_init_provs, sample_config, caplog):
-        """compare --checksum with no changes should still print checksum."""
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_compare(sample_config, None, checksum=True)
-        assert result == 0
-        assert "checksum=" in caplog.text
-
-
-class TestCmdReport:
-    @patch("octorules.commands._providers._init_providers")
-    def test_returns_0(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        result = cmd_report(sample_config, None)
-        assert result == 0
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_csv_output_has_header(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, None, report_format="csv")
-        out = capsys.readouterr().out
-        assert "Zone" in out
-        assert "Phase" in out
-        assert "Status" in out
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_csv_shows_drifted_phase(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, ["example.com"], report_format="csv")
-        out = capsys.readouterr().out
-        assert "yaml_only" in out
-        assert "redirect_rules" in out
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_csv_shows_in_sync_phase(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
-                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
-            ],
-        }
-        cmd_report(sample_config, ["example.com"], report_format="csv")
-        out = capsys.readouterr().out
-        assert "in_sync" in out
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_json_output_structure(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        import json
-
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, ["example.com"], report_format="json")
-        out = capsys.readouterr().out
-        data = json.loads(out)
-        assert "zones" in data
-        assert "summary" in data
-        assert data["zones"][0]["zone"] == "example.com"
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_zone_filter(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, ["example.com"], report_format="csv")
-        mock_prov.get_all_phase_rules.assert_called_once_with(
-            Scope(zone_id="zone-abc", label="example.com"),
-            provider_ids=None,
-        )
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_phase_filter(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text(
-            "redirect_rules:\n"
-            "  - ref: r1\n"
-            "    expression: 'true'\n"
-            "cache_rules:\n"
-            "  - ref: c1\n"
-            "    expression: 'true'\n"
-        )
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_report(
-            sample_config, ["example.com"], phase_filter=["redirect_rules"], report_format="csv"
-        )
-        out = capsys.readouterr().out
-        assert "redirect_rules" in out
-        assert "cache_rules" not in out
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_live_only_status(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
-                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
-            ],
-        }
-        cmd_report(sample_config, ["example.com"], report_format="csv")
-        out = capsys.readouterr().out
-        assert "live_only" in out
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_multiple_zones_summary(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        mock_prov.get_all_phase_rules.return_value = {}
-        cmd_report(sample_config, None, report_format="csv")
-        out = capsys.readouterr().out
-        assert "2 zones" in out
-
-
 class TestMain:
     def test_no_command_exits(self):
         with pytest.raises(SystemExit) as exc_info:
@@ -1253,15 +920,6 @@ class TestMain:
         assert exc_info.value.code == 0
         mock_cmd.assert_called_once()
 
-    @patch("octorules.cli.cmd_validate", return_value=0)
-    @patch("octorules.cli.Config.from_file")
-    def test_validate_invokes_cmd(self, mock_config, mock_cmd, tmp_config):
-        mock_config.return_value = MagicMock()
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--config", str(tmp_config), "validate"])
-        assert exc_info.value.code == 0
-        mock_cmd.assert_called_once()
-
     @patch("octorules.cli.cmd_dump", return_value=0)
     @patch("octorules.cli.Config.from_file")
     def test_dump_invokes_cmd(self, mock_config, mock_cmd, tmp_config):
@@ -1270,42 +928,6 @@ class TestMain:
             main(["--config", str(tmp_config), "dump"])
         assert exc_info.value.code == 0
         mock_cmd.assert_called_once()
-
-    @patch("octorules.cli.cmd_compare", return_value=0)
-    @patch("octorules.cli.Config.from_file")
-    def test_compare_invokes_cmd(self, mock_config, mock_cmd, tmp_config):
-        mock_config.return_value = MagicMock()
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--config", str(tmp_config), "compare"])
-        assert exc_info.value.code == 0
-        mock_cmd.assert_called_once()
-
-    @patch("octorules.cli.cmd_compare", return_value=1)
-    @patch("octorules.cli.Config.from_file")
-    def test_compare_exits_1_on_differences(self, mock_config, mock_cmd, tmp_config):
-        mock_config.return_value = MagicMock()
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--config", str(tmp_config), "compare"])
-        assert exc_info.value.code == 1
-
-    @patch("octorules.cli.cmd_report", return_value=0)
-    @patch("octorules.cli.Config.from_file")
-    def test_report_invokes_cmd(self, mock_config, mock_cmd, tmp_config):
-        mock_config.return_value = MagicMock()
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--config", str(tmp_config), "report"])
-        assert exc_info.value.code == 0
-        mock_cmd.assert_called_once()
-
-    @patch("octorules.cli.cmd_report", return_value=0)
-    @patch("octorules.cli.Config.from_file")
-    def test_report_passes_format(self, mock_config, mock_cmd, tmp_config):
-        mock_config.return_value = MagicMock()
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--config", str(tmp_config), "report", "--output-format", "json"])
-        assert exc_info.value.code == 0
-        _, kwargs = mock_cmd.call_args
-        assert kwargs.get("report_format") == "json" or mock_cmd.call_args[0][-1] == "json"
 
     @patch("octorules.cli.cmd_dump", return_value=0)
     @patch("octorules.cli.Config.from_file")
@@ -1662,20 +1284,6 @@ class TestPhaseFiltering:
         call_args = mock_prov.put_phase_rules.call_args
         assert call_args[0][0] == Scope(zone_id="zone-abc", label="example.com")
         assert call_args[0][1] == "http_request_dynamic_redirect"
-
-    def test_cmd_validate_with_phase_filter(self, sample_config, caplog):
-        rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text(
-            "redirect_rules:\n"
-            "  - ref: r1\n"
-            "    expression: 'true'\n"
-            "cache_rules:\n"
-            "  - ref: c1\n"  # missing expression — would fail validation
-        )
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            result = cmd_validate(sample_config, ["example.com"], phase_filter=["redirect_rules"])
-        # Only redirect_rules validated, cache_rules skipped
-        assert result == 0
 
 
 class TestChecksum:
@@ -3291,33 +2899,6 @@ class TestMultiProviderDump:
         assert aws_prov.get_all_custom_rulesets.called
 
 
-class TestMultiProviderReport:
-    """Report routes zones to the correct provider."""
-
-    @patch("octorules.commands._providers._init_providers")
-    def test_report_calls_correct_provider_per_zone(self, mock_init_provs, tmp_path, capsys):
-        """Report calls get_all_phase_rules on the right provider per zone."""
-        config = _multi_cli_config(tmp_path)
-        cf_prov = MagicMock()
-        aws_prov = MagicMock()
-        mock_init_provs.return_value = {"cloudflare": cf_prov, "aws": aws_prov}
-        cf_prov.get_all_phase_rules.return_value = {}
-        cf_prov.account_id = None
-        aws_prov.get_all_phase_rules.return_value = {}
-        aws_prov.account_id = None
-
-        result = cmd_report(config, None, scope_filter="zones")
-        assert result == 0
-
-        cf_scopes = [c.args[0] for c in cf_prov.get_all_phase_rules.call_args_list]
-        aws_scopes = [c.args[0] for c in aws_prov.get_all_phase_rules.call_args_list]
-        assert any(s.zone_id == "zone-cf" for s in cf_scopes)
-        assert any(s.zone_id == "wacl-1" for s in aws_scopes)
-
-
-# ---------------------------------------------------------------------------
-# Audit log tests
-# ---------------------------------------------------------------------------
 class TestAuditLog:
     """Tests for _write_audit_log and its integration with cmd_sync."""
 
@@ -3454,14 +3035,14 @@ class TestCmdAuditCLI:
 
     def test_audit_no_rules_returns_0(self, sample_config):
         """Audit with no rules files returns 0 (nothing to audit)."""
-        with patch("octorules.commands._audit._discover_provider_modules"):
+        with patch("octorules.commands._audit._ensure_provider_loaded"):
             result = cmd_audit(sample_config, None)
         assert result == 0
 
     def test_audit_invalid_check_returns_1(self, sample_config, caplog):
         """Unknown check name returns exit code 1."""
         with (
-            patch("octorules.commands._audit._discover_provider_modules"),
+            patch("octorules.commands._audit._ensure_provider_loaded"),
             caplog.at_level(logging.ERROR),
         ):
             result = cmd_audit(sample_config, None, checks=["nonexistent-check"])
@@ -3473,7 +3054,7 @@ class TestCmdAuditCLI:
         # Create a minimal rules file with no IP-bearing rules.
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
-        with patch("octorules.commands._audit._discover_provider_modules"):
+        with patch("octorules.commands._audit._ensure_provider_loaded"):
             result = cmd_audit(sample_config, ["example.com"])
         assert result == 0
 
@@ -3486,7 +3067,7 @@ class TestCmdAuditCLI:
         monkeypatch.chdir(tmp_path)
         (tmp_path / "rules").mkdir(exist_ok=True)
         with (
-            patch("octorules.commands._audit._discover_provider_modules"),
+            patch("octorules.commands._audit._ensure_provider_loaded"),
             pytest.raises(SystemExit) as exc_info,
         ):
             main(["--config", str(config_file), "audit"])
@@ -3695,7 +3276,7 @@ class TestQuietFlag:
 
         set_quiet(True)
         try:
-            with patch("octorules.commands._audit._discover_provider_modules"):
+            with patch("octorules.commands._audit._ensure_provider_loaded"):
                 cmd_lint(sample_config, ["example.com"])
             # stdout should be empty; stderr summary is still allowed
             assert capsys.readouterr().out == ""
@@ -3712,7 +3293,7 @@ class TestQuietFlag:
 
         set_quiet(True)
         try:
-            with patch("octorules.commands._audit._discover_provider_modules"):
+            with patch("octorules.commands._audit._ensure_provider_loaded"):
                 result = cmd_audit(sample_config, ["example.com"])
             assert result == 0
             assert capsys.readouterr().out == ""
@@ -3770,7 +3351,7 @@ class TestQuietFlag:
 
         try:
             with (
-                patch("octorules.commands._audit._discover_provider_modules"),
+                patch("octorules.commands._audit._ensure_provider_loaded"),
                 pytest.raises(SystemExit) as exc_info,
             ):
                 main(["--quiet", "--config", str(config_file), "versions"])
@@ -3946,25 +3527,6 @@ class TestLintPluginUsage:
 # ---------------------------------------------------------------------------
 # --config-only validate (#8)
 # ---------------------------------------------------------------------------
-class TestConfigOnlyValidate:
-    @patch("octorules.cli.Config.from_file")
-    def test_config_only_exits_0(self, mock_config, tmp_config, caplog):
-        mock_config.return_value = MagicMock()
-        with caplog.at_level(logging.INFO, logger="octorules"):
-            with pytest.raises(SystemExit) as exc_info:
-                main(["--config", str(tmp_config), "validate", "--config-only"])
-        assert exc_info.value.code == 0
-        assert "Config valid" in caplog.text
-
-    def test_config_only_invalid_exits_1(self):
-        with pytest.raises(SystemExit) as exc_info:
-            main(["--config", "/nonexistent/config.yaml", "validate", "--config-only"])
-        assert exc_info.value.code == 1
-
-
-# ---------------------------------------------------------------------------
-# --format json for sync (#9)
-# ---------------------------------------------------------------------------
 class TestSyncJsonFormat:
     def test_format_sync_results_json(self):
         from octorules.commands._sync import SyncResult, _format_sync_results_json
@@ -4012,14 +3574,12 @@ class TestArgcomplete:
         expected = {
             "plan",
             "sync",
-            "validate",
             "dump",
-            "compare",
-            "report",
             "lint",
             "audit",
             "versions",
             "completion",
+            "rule",
         }
         assert expected <= choices
 
@@ -4056,3 +3616,639 @@ class TestArgcomplete:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "octorules" in out
+
+    def test_completion_zone_names_bash(self, tmp_path, capsys):
+        """Zone names from config are injected into bash completion."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: test\n"
+            "zones:\n  alpha.com:\n    zone_id: z1\n  beta.org:\n    zone_id: z2\n"
+            f"rules_dir: {rules_dir}\n"
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", str(config_file), "completion", "bash"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "_octorules_zone_complete" in out
+        assert "alpha.com" in out
+        assert "beta.org" in out
+
+    def test_completion_zone_names_zsh(self, tmp_path, capsys):
+        """Zone names from config are injected into zsh completion."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: test\n"
+            "zones:\n  alpha.com:\n    zone_id: z1\n  beta.org:\n    zone_id: z2\n"
+            f"rules_dir: {rules_dir}\n"
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", str(config_file), "completion", "zsh"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "_octorules_zone_complete" in out
+        assert "alpha.com" in out
+
+    def test_completion_no_config_still_works(self, tmp_path, capsys):
+        """Missing config doesn't break completion — just no zone names."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--config", str(tmp_path / "no_such.yaml"), "completion", "bash"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "octorules" in out
+
+
+# ---------------------------------------------------------------------------
+# lint single-file mode tests
+# ---------------------------------------------------------------------------
+class TestLintFile:
+    """Tests for the lint single-file mode."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_discover(self):
+        """Prevent real provider discovery from contaminating global state."""
+        with patch("octorules.cli._discover_provider_modules"):
+            yield
+
+    def test_lint_file_no_issues(self, tmp_path, capsys):
+        """lint <file> with --severity error on a file with no errors returns 0."""
+        rules_file = tmp_path / "example.com.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", "--severity", "error", str(rules_file)])
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        assert "0 issue(s) found" in err
+
+    def test_lint_file_not_found(self, tmp_path, capsys):
+        """lint <file> with nonexistent file returns 1."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", str(tmp_path / "nonexistent.yaml")])
+        assert exc_info.value.code == 1
+
+    def test_lint_file_empty(self, tmp_path, capsys):
+        """lint <file> with empty YAML returns 0."""
+        rules_file = tmp_path / "empty.yaml"
+        rules_file.write_text("")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", str(rules_file)])
+        assert exc_info.value.code == 0
+        err = capsys.readouterr().err
+        assert "0 issue(s) found" in err
+
+    def test_lint_file_invalid_yaml(self, tmp_path, capsys):
+        """lint <file> with invalid YAML returns 1."""
+        rules_file = tmp_path / "bad.yaml"
+        rules_file.write_text(":\n  - [\n")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", str(rules_file)])
+        assert exc_info.value.code == 1
+
+    def test_lint_file_core_rules(self, tmp_path, capsys):
+        """lint <file> runs CORE006 on empty phases."""
+        from octorules.commands._lint import cmd_lint_file
+
+        rules_file = tmp_path / "nophases.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        code = cmd_lint_file(str(rules_file), lint_rules=["CORE006"])
+        assert code == 0
+        err = capsys.readouterr().err
+        # CORE006 is info-level, shows up but doesn't cause exit code
+        assert "issue(s) found" in err
+
+    def test_lint_file_json_format(self, tmp_path, capsys):
+        """lint <file> --format json produces JSON output."""
+        import json
+
+        rules_file = tmp_path / "test.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", "--format", "json", str(rules_file)])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert "results" in parsed
+
+    def test_lint_file_exit_code_warnings(self, tmp_path, capsys):
+        """lint <file> --exit-code returns 2 when only warnings found."""
+        from octorules.commands._lint import cmd_lint_file
+
+        rules_file = tmp_path / "warn.yaml"
+        # Two disabled rules triggers CORE003 (warning)
+        rules_file.write_text(
+            "redirect_rules:\n  - ref: r1\n    enabled: false\n  - ref: r2\n    enabled: false\n"
+        )
+        code = cmd_lint_file(
+            str(rules_file),
+            lint_severity="warning",
+            lint_rules=["CORE003"],
+            exit_code=True,
+        )
+        assert code == 2
+
+    def test_lint_file_output_file(self, tmp_path, capsys):
+        """lint <file> --output writes results to file."""
+        from octorules.commands._lint import cmd_lint_file
+
+        rules_file = tmp_path / "test.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        out_file = tmp_path / "results.txt"
+        code = cmd_lint_file(
+            str(rules_file),
+            lint_rules=["CORE006"],
+            output_file=str(out_file),
+        )
+        assert code == 0
+        assert out_file.exists()
+
+    def test_lint_file_severity_filter(self, tmp_path, capsys):
+        """lint <file> --severity error filters out lower severity."""
+        rules_file = tmp_path / "test.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", "--severity", "error", str(rules_file)])
+        assert exc_info.value.code == 0
+
+    def test_lint_file_summary_format(self, tmp_path, capsys):
+        """lint <file> --format summary produces summary output."""
+        rules_file = tmp_path / "test.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        with pytest.raises(SystemExit) as exc_info:
+            main(["lint", "--format", "summary", str(rules_file)])
+        assert exc_info.value.code == 0
+
+    def test_lint_file_discovers_all_providers(self, tmp_path, capsys):
+        """lint <file> calls _discover_provider_modules (not lazy)."""
+        rules_file = tmp_path / "test.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        with (
+            patch("octorules.cli._discover_provider_modules") as mock_disc,
+            pytest.raises(SystemExit),
+        ):
+            main(["lint", str(rules_file)])
+        mock_disc.assert_called_once()
+
+    def test_lint_file_zone_name_from_stem(self, tmp_path, capsys):
+        """lint <file> derives zone_name from file stem."""
+        from octorules.commands._lint import cmd_lint_file
+
+        rules_file = tmp_path / "my-zone.example.com.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        code = cmd_lint_file(str(rules_file), lint_severity="error")
+        assert code == 0
+
+    def test_lint_file_rule_filter(self, tmp_path, capsys):
+        """lint <file> --rule filters to specific rule IDs."""
+        from octorules.commands._lint import cmd_lint_file
+
+        rules_file = tmp_path / "test.yaml"
+        rules_file.write_text("redirect_rules: []\n")
+        code = cmd_lint_file(str(rules_file), lint_rules=["CORE006"])
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "CORE006" in out
+
+
+# ---------------------------------------------------------------------------
+# Lazy provider discovery tests
+# ---------------------------------------------------------------------------
+class TestLazyProviderDiscovery:
+    """Tests for _ensure_provider_loaded and lazy loading in lint/audit."""
+
+    def test_ensure_provider_loaded_idempotent(self):
+        """_ensure_provider_loaded can be called multiple times safely."""
+        from octorules.commands._providers import _ensure_provider_loaded
+
+        # Calling with a nonexistent provider is a no-op (no crash)
+        _ensure_provider_loaded("__test_nonexistent__")
+        _ensure_provider_loaded("__test_nonexistent__")
+
+    def test_ensure_provider_loaded_handles_import_error(self):
+        """_ensure_provider_loaded logs warning on broken entry-point."""
+        from unittest.mock import MagicMock
+
+        from octorules.commands._providers import _ensure_provider_loaded
+
+        broken_ep = MagicMock()
+        broken_ep.name = "__broken__"
+        broken_ep.load.side_effect = ImportError("no such module")
+        with patch(
+            "importlib.metadata.entry_points",
+            return_value=[broken_ep],
+        ):
+            # Should not raise — logs warning instead
+            _ensure_provider_loaded("__broken__")
+
+    def test_lint_uses_lazy_loading(self, tmp_path, capsys):
+        """main() lint calls _ensure_provider_loaded per provider."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "z.com.yaml").write_text("redirect_rules: []\n")
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            "providers:\n  cloudflare:\n    token: test\n"
+            "zones:\n  z.com:\n    zone_id: z1\n"
+            f"rules_dir: {rules_dir}\n"
+        )
+        with (
+            patch("octorules.cli._ensure_provider_loaded") as mock_ensure,
+            pytest.raises(SystemExit),
+        ):
+            main(
+                [
+                    "--config",
+                    str(config_file),
+                    "lint",
+                    "--zone",
+                    "z.com",
+                    "--severity",
+                    "error",
+                ]
+            )
+        mock_ensure.assert_called_once_with("cloudflare")
+
+    def test_audit_uses_lazy_loading(self, sample_config, capsys):
+        """Audit calls _ensure_provider_loaded per provider."""
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        with patch("octorules.commands._audit._ensure_provider_loaded") as mock_ensure:
+            cmd_audit(sample_config, ["example.com"])
+        mock_ensure.assert_called_once_with("cloudflare")
+
+
+class TestRuleSubcommand:
+    """Tests for the 'rule' subcommand (list/filter lint rules)."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_discover(self):
+        """Prevent real provider discovery from contaminating global state."""
+        with patch("octorules.cli._discover_provider_modules"):
+            yield
+
+    def test_rule_all_lists_rules(self, capsys):
+        """main(["rule", "--all"]) exits 0, stdout contains rule IDs and summary."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["rule", "--all"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "rule(s) available" in out
+        # Should have at least the core rules
+        assert "CORE" in out
+
+    def test_rule_prefix_filter(self, capsys):
+        """Prefix filter only shows matching rules."""
+        # Register a few fake rules to ensure filtering works
+        from octorules.linter.engine import Severity
+        from octorules.linter.rules.registry import (
+            RULE_REGISTRY,
+            RuleMeta,
+            register_rules,
+        )
+
+        fake_rules = [
+            RuleMeta("ZZ001", "test", "Test rule 1", Severity.WARNING),
+            RuleMeta("ZZ002", "test", "Test rule 2", Severity.WARNING),
+            RuleMeta("YY001", "test", "Other test rule", Severity.WARNING),
+        ]
+        register_rules(fake_rules)
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                main(["rule", "ZZ"])
+            assert exc_info.value.code == 0
+            out = capsys.readouterr().out
+            assert "ZZ001" in out
+            assert "ZZ002" in out
+            assert "YY001" not in out
+        finally:
+            for r in fake_rules:
+                RULE_REGISTRY.pop(r.rule_id, None)
+
+    def test_rule_exact_match(self, capsys):
+        """Exact rule ID shows only that rule."""
+        from octorules.linter.engine import Severity
+        from octorules.linter.rules.registry import (
+            RULE_REGISTRY,
+            RuleMeta,
+            register_rules,
+        )
+
+        fake = RuleMeta("EX999", "test", "Exact match test", Severity.ERROR)
+        register_rules([fake])
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                main(["rule", "EX999"])
+            assert exc_info.value.code == 0
+            out = capsys.readouterr().out
+            assert "EX999" in out
+            assert "1 rule(s) available" in out
+        finally:
+            RULE_REGISTRY.pop("EX999", None)
+
+    def test_rule_no_args_errors(self, caplog):
+        """rule without pattern or --all exits 1 with guidance."""
+        with (
+            caplog.at_level(logging.ERROR, logger="octorules"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["rule"])
+        assert exc_info.value.code == 1
+        assert "Specify a rule" in caplog.text
+
+    def test_rule_json_format(self, capsys):
+        """--format json produces valid JSON with 'rules' key."""
+        import json
+
+        with pytest.raises(SystemExit) as exc_info:
+            main(["rule", "--all", "--format", "json"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        data = json.loads(out)
+        assert "rules" in data
+        assert "total" in data
+        assert isinstance(data["rules"], list)
+        # Each rule should have expected fields
+        if data["rules"]:
+            rule = data["rules"][0]
+            assert "id" in rule
+            assert "category" in rule
+            assert "severity" in rule
+            assert "description" in rule
+
+    def test_rule_unknown_prefix(self, capsys):
+        """A prefix that matches nothing shows 0 rules."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["rule", "ZZZZ"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "0 rule(s) available" in out
+
+    def test_rule_core_rules_included(self, capsys):
+        """CORE prefix shows core rules (CORE002-CORE006)."""
+        with pytest.raises(SystemExit) as exc_info:
+            main(["rule", "CORE"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "CORE002" in out
+        assert "CORE003" in out
+        assert "CORE004" in out
+        assert "CORE006" in out
+
+
+class TestConfigOnly:
+    """Tests for the --config-only flag on lint."""
+
+    def test_config_only_valid_config(self, tmp_path, caplog):
+        """--config-only exits 0 for a valid config, log says 'Config valid'."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: test\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  example.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        with (
+            caplog.at_level(logging.INFO, logger="octorules"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["--config", str(cfg), "lint", "--config-only"])
+        assert exc_info.value.code == 0
+        assert "Config valid" in caplog.text
+
+    def test_config_only_invalid_config(self, tmp_path, caplog):
+        """--config-only exits 1 for an invalid config, log says 'Config error'."""
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text("providers: not_a_dict\n")
+        with (
+            caplog.at_level(logging.ERROR, logger="octorules"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["--config", str(cfg), "lint", "--config-only"])
+        assert exc_info.value.code == 1
+        assert "Config error" in caplog.text
+
+    def test_config_only_skips_rules(self, tmp_path, caplog):
+        """--config-only succeeds even when there are no rules files on disk."""
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        # Config references a zone but no rules file exists — still ok
+        cfg = tmp_path / "config.yaml"
+        cfg.write_text(
+            "providers:\n"
+            "  cloudflare:\n"
+            "    token: test\n"
+            "  rules:\n"
+            "    directory: ./rules\n"
+            "zones:\n"
+            "  no-rules-here.com:\n"
+            "    sources:\n"
+            "      - rules\n"
+        )
+        with (
+            caplog.at_level(logging.INFO, logger="octorules"),
+            pytest.raises(SystemExit) as exc_info,
+        ):
+            main(["--config", str(cfg), "lint", "--config-only"])
+        assert exc_info.value.code == 0
+        assert "Config valid" in caplog.text
+
+
+class TestSyslogSetup(TestSetupLogging):
+    """Tests for syslog handler configuration in _setup_logging."""
+
+    @staticmethod
+    def _cleanup_syslog_handlers():
+        """Remove any mock/syslog handlers left on the octorules logger."""
+        from logging.handlers import SysLogHandler
+
+        logger = logging.getLogger("octorules")
+        logger.handlers = [
+            h for h in logger.handlers if not isinstance(h, (SysLogHandler, MagicMock))
+        ]
+
+    def test_syslog_handler_added(self):
+        """SysLogHandler is created with a (host, port) tuple for host:port format."""
+        try:
+            with patch("logging.handlers.SysLogHandler") as mock_cls:
+                mock_handler = MagicMock()
+                mock_handler.setFormatter = MagicMock()
+                mock_cls.return_value = mock_handler
+                _setup_logging(syslog_address="localhost:514")
+                mock_cls.assert_called_once_with(address=("localhost", 514))
+                mock_handler.setFormatter.assert_called_once()
+        finally:
+            self._cleanup_syslog_handlers()
+
+    def test_syslog_bad_address_graceful(self, caplog):
+        """A malformed address should not raise — it logs a warning instead."""
+        # "bad:address:format" has multiple colons, rsplit(":", 1) gives
+        # ("bad:address", "format") and int("format") raises ValueError.
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            _setup_logging(syslog_address="bad:address:format")
+        assert "Failed to configure syslog" in caplog.text
+
+    def test_syslog_unix_socket_path(self):
+        """A path like /dev/log should be passed as a string, not a tuple."""
+        try:
+            with patch("logging.handlers.SysLogHandler") as mock_cls:
+                mock_handler = MagicMock()
+                mock_handler.setFormatter = MagicMock()
+                mock_cls.return_value = mock_handler
+                _setup_logging(syslog_address="/dev/log")
+                mock_cls.assert_called_once_with(address="/dev/log")
+        finally:
+            self._cleanup_syslog_handlers()
+
+
+class TestAllDeletionsWarning:
+    """Tests for the all-deletions warning in format_zone_plan."""
+
+    def test_all_deletions_warning(self):
+        """ZonePlan with only REMOVE changes triggers the all-deletions warning."""
+        from octorules.formatter import format_zone_plan
+        from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
+
+        phase_plan = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE),
+                RuleChange(ChangeType.REMOVE, "r2", REDIRECT_PHASE),
+            ],
+        )
+        zone_plan = ZonePlan("example.com", phase_plans=[phase_plan])
+        result = format_zone_plan(zone_plan, use_color=False)
+        assert "WARNING" in result
+        assert "deletions" in result
+        assert "all" in result
+
+    def test_mixed_changes_no_warning(self):
+        """ZonePlan with both ADD and REMOVE does NOT show the warning."""
+        from octorules.formatter import format_zone_plan
+        from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
+
+        phase_plan = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE),
+                RuleChange(ChangeType.REMOVE, "r2", REDIRECT_PHASE),
+            ],
+        )
+        zone_plan = ZonePlan("example.com", phase_plans=[phase_plan])
+        result = format_zone_plan(zone_plan, use_color=False)
+        assert "all" not in result.lower() or "deletions" not in result.lower()
+
+    def test_no_changes_no_warning(self):
+        """ZonePlan with no changes does NOT show the warning."""
+        from octorules.formatter import format_zone_plan
+        from octorules.planner import ZonePlan
+
+        zone_plan = ZonePlan("example.com")
+        result = format_zone_plan(zone_plan, use_color=False)
+        assert "WARNING" not in result
+        assert "deletions" not in result
+
+
+class TestProgressCallback:
+    """Tests for the _map_ordered progress callback and plan progress output."""
+
+    def test_map_ordered_progress_sequential(self):
+        """Progress callback fires for each item in sequential mode."""
+        from octorules.commands._helpers import _map_ordered
+
+        calls = []
+        results = _map_ordered(
+            lambda x: x * 2,
+            [1, 2, 3],
+            max_workers=1,
+            progress=lambda done, total, item: calls.append((done, total, item)),
+        )
+        assert results == [2, 4, 6]
+        assert calls == [(1, 3, 1), (2, 3, 2), (3, 3, 3)]
+
+    def test_map_ordered_progress_parallel(self):
+        """Progress callback fires for each item in parallel mode."""
+        from octorules.commands._helpers import _map_ordered
+
+        calls = []
+        results = _map_ordered(
+            lambda x: x * 2,
+            [10, 20, 30],
+            max_workers=3,
+            progress=lambda done, total, item: calls.append((done, total)),
+        )
+        assert sorted(results) == [20, 40, 60]
+        # All 3 items reported; done counts are 1, 2, 3 in some order
+        assert len(calls) == 3
+        assert {c[0] for c in calls} == {1, 2, 3}
+        assert all(c[1] == 3 for c in calls)
+
+    def test_map_ordered_no_progress(self):
+        """Without progress callback, no error."""
+        from octorules.commands._helpers import _map_ordered
+
+        results = _map_ordered(lambda x: x, [1, 2], max_workers=1)
+        assert results == [1, 2]
+
+    def test_map_ordered_single_item_no_progress_noise(self):
+        """Single-item list still calls progress (caller decides to skip)."""
+        from octorules.commands._helpers import _map_ordered
+
+        calls = []
+        _map_ordered(
+            lambda x: x,
+            ["only"],
+            max_workers=1,
+            progress=lambda done, total, item: calls.append((done, total, item)),
+        )
+        assert calls == [(1, 1, "only")]
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_plan_progress_multi_zone(self, mock_init_provs, tmp_path, caplog):
+        """Plan with multiple zones logs [n/total] planned zone_name."""
+        mock_prov = MagicMock()
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "a.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        (rules_dir / "b.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+        )
+        config = Config(
+            providers={"cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "t"})},
+            rules_dir=rules_dir,
+            zones={
+                "a.com": ZoneConfig(
+                    name="a.com", zone_id="za", sources=["rules"], targets=["cloudflare"]
+                ),
+                "b.com": ZoneConfig(
+                    name="b.com", zone_id="zb", sources=["rules"], targets=["cloudflare"]
+                ),
+            },
+        )
+        mock_prov.get_all_phase_rules.return_value = {}
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            cmd_plan(config, None)
+        # Should see progress for both zones
+        assert "[1/2] planned" in caplog.text
+        assert "[2/2] planned" in caplog.text
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_plan_progress_single_zone_no_noise(self, mock_init_provs, sample_config, caplog):
+        """Plan with single zone does NOT log progress (total == 1 guard)."""
+        mock_prov = MagicMock()
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        mock_prov.get_all_phase_rules.return_value = {}
+        with caplog.at_level(logging.INFO, logger="octorules"):
+            cmd_plan(sample_config, ["example.com"])
+        assert "[1/1] planned" not in caplog.text

@@ -5,7 +5,7 @@ import sys
 
 from octorules._context import is_quiet
 from octorules.commands._helpers import _filter_desired_by_phase
-from octorules.commands._providers import _discover_provider_modules
+from octorules.commands._providers import _ensure_provider_loaded
 from octorules.config import Config
 
 log = logging.getLogger(__name__)
@@ -47,9 +47,10 @@ def cmd_audit(
     )
     from octorules.phases import ALL_FRIENDLY_NAMES
 
-    # Import provider modules to trigger audit extension registration,
+    # Load only configured providers for audit extension registration,
     # without constructing provider instances (no API credentials needed).
-    _discover_provider_modules()
+    for prov_name in config.providers:
+        _ensure_provider_loaded(prov_name)
 
     selected_checks = frozenset(checks) if checks else ALL_CHECKS
     invalid = selected_checks - ALL_CHECKS
@@ -152,15 +153,16 @@ def cmd_audit(
     visible_count = len(
         [f for f in findings if _SEVERITY_RANK[f.severity] <= _SEVERITY_RANK[min_severity]]
     )
-    summary_parts: list[str] = []
-    if visible_count:
-        summary_parts.append(f"{visible_count} finding(s)")
-    if total_suppressed:
-        summary_parts.append(f"{total_suppressed} accepted")
-    if summary_parts:
-        print(f"\nAudit: {', '.join(summary_parts)}.", file=sys.stderr)
-    else:
-        print("Audit: no findings.", file=sys.stderr)
+    if not is_quiet():
+        summary_parts: list[str] = []
+        if visible_count:
+            summary_parts.append(f"{visible_count} issue(s) found")
+        if total_suppressed:
+            summary_parts.append(f"{total_suppressed} suppressed")
+        if summary_parts:
+            print(f"\nAudit: {', '.join(summary_parts)}.", file=sys.stderr)
+        else:
+            print("\nAudit: no issues found.", file=sys.stderr)
 
     # Exit code logic (mirrors linter).
     if exit_code:

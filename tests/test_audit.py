@@ -1079,10 +1079,10 @@ class TestCmdAudit:
 
     _empty_cdn = CdnRangeResult(ranges={}, source="api")
 
-    # Skip _discover_provider_modules inside cmd_audit — this class
+    # Skip _ensure_provider_loaded inside cmd_audit — this class
     # registers its own test extractor and does not need real providers
     # (whose SDK imports are expensive, e.g. google-cloud-compute ~2s).
-    _discover_patch = patch("octorules.commands._audit._discover_provider_modules", lambda: None)
+    _discover_patch = patch("octorules.commands._audit._ensure_provider_loaded", lambda name: None)
 
     def setup_method(self):
         self._discover_patch.start()
@@ -1427,7 +1427,7 @@ class TestCmdAudit:
             exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
         assert exit_code == 0  # suppressed
         captured = capsys.readouterr()
-        assert "accepted" in captured.err
+        assert "suppressed" in captured.err
 
     def test_default_warnings_return_zero(self, tmp_path):
         """WARNING findings without --exit-code return 0."""
@@ -1574,7 +1574,7 @@ class TestCmdAudit:
             exit_code = cmd_audit(config, zone_filter=None, checks=["zone-drift"], exit_code=True)
         assert exit_code == 0
         captured = capsys.readouterr()
-        assert "accepted" in captured.err
+        assert "suppressed" in captured.err
 
     def test_acceptance_multiple_checks_one_directive(self, tmp_path, capsys):
         """# octorules:accept=ip-overlap,zone-drift suppresses both."""
@@ -1630,12 +1630,12 @@ class TestCmdAudit:
         # Both rules are in the same phase, so no ip-shadow finding either.
         # The test verifies that suppression is check-specific.
         captured = capsys.readouterr()
-        assert "accepted" in captured.err
+        assert "suppressed" in captured.err
         # ip-overlap should not appear in output (suppressed)
         assert "ip-overlap" not in captured.out
 
     def test_acceptance_count_in_summary(self, tmp_path, capsys):
-        """Verify 'accepted' appears in stderr summary."""
+        """Verify 'suppressed' appears in stderr summary."""
         from octorules.commands import cmd_audit
         from octorules.config import Config
 
@@ -1658,7 +1658,7 @@ class TestCmdAudit:
         with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
             cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
         captured = capsys.readouterr()
-        assert "accepted" in captured.err
+        assert "suppressed" in captured.err
 
     def test_acceptance_with_space_after_colon(self, tmp_path, capsys):
         """# octorules: accept=ip-overlap works (space after colon)."""
@@ -1685,7 +1685,7 @@ class TestCmdAudit:
             exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
         assert exit_code == 0  # suppressed
         captured = capsys.readouterr()
-        assert "accepted" in captured.err
+        assert "suppressed" in captured.err
 
     def test_json_format_outputs_json(self, tmp_path, capsys):
         """--format json outputs valid JSON array."""

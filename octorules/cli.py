@@ -1,4 +1,4 @@
-"""CLI entry point: plan, sync, dump, validate, versions."""
+"""CLI entry point: plan, sync, dump, lint, audit, versions."""
 
 import argparse
 import logging
@@ -12,6 +12,7 @@ from octorules.commands import (
     _apply_parallel,
     _discover_provider_modules,
     _emit_plan_outputs,
+    _ensure_provider_loaded,
     _filter_current_by_phase,
     _filter_desired_by_phase,
     _format_api_error,
@@ -25,13 +26,10 @@ from octorules.commands import (
     _validate_phases,
     _write_output_file,
     cmd_audit,
-    cmd_compare,
     cmd_dump,
     cmd_lint,
     cmd_plan,
-    cmd_report,
     cmd_sync,
-    cmd_validate,
     cmd_versions,
 )
 from octorules.config import Config, ConfigError
@@ -50,6 +48,7 @@ __all__ = [
     "_apply_parallel",
     "_discover_provider_modules",
     "_emit_plan_outputs",
+    "_ensure_provider_loaded",
     "_filter_current_by_phase",
     "_filter_desired_by_phase",
     "_format_api_error",
@@ -64,13 +63,10 @@ __all__ = [
     "_write_output_file",
     "build_parser",
     "cmd_audit",
-    "cmd_compare",
     "cmd_dump",
     "cmd_lint",
     "cmd_plan",
-    "cmd_report",
     "cmd_sync",
-    "cmd_validate",
     "cmd_versions",
     "main",
 ]
@@ -91,12 +87,33 @@ def build_parser() -> argparse.ArgumentParser:
     # Shared parent parser: allows global flags both before and after the subcommand.
     # Uses SUPPRESS defaults so subparser values don't overwrite the main parser's.
     shared = argparse.ArgumentParser(add_help=False)
-    shared.add_argument("--config", default=argparse.SUPPRESS)
-    shared.add_argument("--zone", action="append", dest="zones", default=argparse.SUPPRESS)
-    shared.add_argument("--phase", action="append", dest="phases", default=argparse.SUPPRESS)
-    shared.add_argument("--scope", choices=["all", "zones", "account"], default=argparse.SUPPRESS)
-    shared.add_argument("--debug", action="store_true", default=argparse.SUPPRESS)
-    shared.add_argument("--quiet", action="store_true", default=argparse.SUPPRESS)
+    shared.add_argument("--config", default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    _shared_zone = shared.add_argument(
+        "--zone",
+        action="append",
+        dest="zones",
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    _shared_zone.complete = {"bash": "_octorules_zone_complete", "zsh": "_octorules_zone_complete"}
+    shared.add_argument(
+        "--phase", action="append", dest="phases", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+    shared.add_argument(
+        "--scope",
+        choices=["all", "zones", "account"],
+        default=argparse.SUPPRESS,
+        help=argparse.SUPPRESS,
+    )
+    shared.add_argument(
+        "--debug", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+    shared.add_argument(
+        "--quiet", action="store_true", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
+    shared.add_argument(
+        "--syslog", metavar="ADDRESS", default=argparse.SUPPRESS, help=argparse.SUPPRESS
+    )
 
     parser = argparse.ArgumentParser(
         prog="octorules",
@@ -108,12 +125,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="config.yaml",
         help="Path to config file (default: config.yaml)",
     )
-    parser.add_argument(
+    _main_zone = parser.add_argument(
         "--zone",
         action="append",
         dest="zones",
         help="Process only specified zone(s); can be repeated (default: all zones)",
     )
+    _main_zone.complete = {"bash": "_octorules_zone_complete", "zsh": "_octorules_zone_complete"}
 
     parser.add_argument(
         "--phase",
@@ -142,6 +160,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--quiet",
         action="store_true",
         help="Suppress informational output. Only errors and the exit code are reported.",
+    )
+    parser.add_argument(
+        "--syslog",
+        metavar="ADDRESS",
+        default=None,
+        help="Send logs to syslog (host:port for UDP, or /path/to/socket)",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -189,45 +213,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output format for sync results (default: text). 'json' prints structured results.",
     )
 
-    validate_parser = sub.add_parser(
-        "validate", parents=[shared], help="Validate config and rules files (offline)"
-    )
-    validate_parser.add_argument(
-        "--output",
-        dest="validate_output",
-        help="Write validation results to a file",
-    )
-    validate_parser.add_argument(
-        "--config-only",
-        action="store_true",
-        dest="config_only",
-        help="Only validate config file structure (skip rules files)",
-    )
-
     dump_parser = sub.add_parser("dump", parents=[shared], help="Export existing rules to YAML")
     dump_parser.add_argument(
         "--output-dir",
         help="Output directory for dumped rules (default: rules_dir from config)",
-    )
-
-    compare_parser = sub.add_parser(
-        "compare", parents=[shared], help="Compare local rules against live provider state"
-    )
-    compare_parser.add_argument(
-        "--checksum",
-        action="store_true",
-        help="Print a SHA-256 checksum of the comparison plan",
-    )
-
-    report_parser = sub.add_parser(
-        "report", parents=[shared], help="Drift report: deployed vs YAML source of truth"
-    )
-    report_parser.add_argument(
-        "--output-format",
-        choices=["csv", "json"],
-        default="csv",
-        dest="report_format",
-        help="Report output format (default: csv)",
     )
 
     lint_parser = sub.add_parser(
@@ -263,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     lint_parser.add_argument(
         "--output",
+        metavar="FILE",
         dest="lint_output",
         help="Write lint results to a file",
     )
@@ -271,6 +261,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="lint_exit_code",
         help="Exit with 1 when errors are found, 2 when warnings are found (useful for CI)",
+    )
+    lint_parser.add_argument(
+        "--config-only",
+        action="store_true",
+        dest="config_only",
+        help="Only validate config file structure (skip rules files)",
+    )
+    lint_parser.add_argument(
+        "file",
+        nargs="?",
+        default=None,
+        help="Lint a single rules file (no config needed). When omitted, "
+        "uses the config file to discover all zones.",
     )
 
     audit_parser = sub.add_parser(
@@ -315,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit_parser.add_argument(
         "--output",
+        metavar="FILE",
         dest="audit_output",
         help="Write audit results to a file",
     )
@@ -325,10 +329,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit with 1 when errors are found, 2 when warnings are found (useful for CI)",
     )
 
-    sub.add_parser("versions", parents=[shared], help="Show versions of octorules and dependencies")
+    sub.add_parser("versions", help="Show versions of octorules and dependencies")
     completion_parser = sub.add_parser(
         "completion",
-        help="Print shell completion script",
+        help="Print shell completion script (re-run after adding/removing zones)",
     )
     completion_parser.add_argument(
         "shell",
@@ -338,13 +342,33 @@ def build_parser() -> argparse.ArgumentParser:
         help="Shell type (default: bash)",
     )
 
+    rule_parser = sub.add_parser("rule", help="Show lint rule details")
+    rule_parser.add_argument(
+        "pattern",
+        nargs="?",
+        default=None,
+        help="Rule ID or prefix to filter (e.g. CF201, CF, CORE). "
+        "Omit or use --all to show all rules.",
+    )
+    rule_parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="rule_all",
+        help="List all available lint rules",
+    )
+    rule_parser.add_argument(
+        "--format",
+        dest="rule_format",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text)",
+    )
+
     # Provide defaults for subcommand-specific attributes so getattr is never needed
     parser.set_defaults(
         checksum=False,
         force=False,
-        validate_output=None,
         output_dir=None,
-        report_format="csv",
         scope="all",
         lint_format="text",
         lint_severity="info",
@@ -363,12 +387,16 @@ def build_parser() -> argparse.ArgumentParser:
         sync_format="text",
         config_only=False,
         shell="bash",
+        file=None,
+        syslog=None,
     )
 
     return parser
 
 
-def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
+def _setup_logging(
+    *, debug: bool = False, quiet: bool = False, syslog_address: str | None = None
+) -> None:
     """Configure the octorules logger."""
     if debug:
         level = logging.DEBUG
@@ -400,28 +428,50 @@ def _setup_logging(*, debug: bool = False, quiet: bool = False) -> None:
             for h in logger.handlers:
                 h.setLevel(level)
 
+    # Attach syslog handler to the same loggers discovered above.
+    if syslog_address:
+        from logging.handlers import SysLogHandler
+
+        try:
+            if ":" in syslog_address and not syslog_address.startswith("/"):
+                host, port_str = syslog_address.rsplit(":", 1)
+                address = (host, int(port_str))
+            else:
+                address = syslog_address
+            syslog_handler = SysLogHandler(address=address)
+            syslog_handler.setFormatter(logging.Formatter("octorules: %(message)s"))
+            for name in sorted(names):
+                logging.getLogger(name).addHandler(syslog_handler)
+        except (OSError, ValueError) as e:
+            logging.getLogger("octorules").warning(
+                "Failed to configure syslog (%s): %s", syslog_address, e
+            )
+
 
 _EXIT_MESSAGES: dict[str, dict[int, str]] = {
     "plan": {0: "success", 1: "error", 2: "changes detected"},
     "sync": {0: "success", 1: "error"},
-    "compare": {0: "identical", 1: "differences detected"},
     "lint": {0: "clean", 1: "errors found", 2: "warnings only"},
     "audit": {0: "clean", 1: "errors found", 2: "warnings only"},
-    "validate": {0: "valid", 1: "errors found"},
     "dump": {0: "success", 1: "error"},
-    "report": {0: "success", 1: "error"},
 }
 
 
 def _exit(command: str, code: int, elapsed: float | None = None) -> None:
-    """Print exit summary to stderr and exit."""
-    msg = _EXIT_MESSAGES.get(command, {}).get(code, "")
-    parts = [f"octorules {command}: exit {code}"]
-    if msg:
-        parts[0] += f" ({msg})"
-    if elapsed is not None:
-        parts.append(f"{elapsed:.1f}s")
-    print(" ".join(parts), file=sys.stderr)
+    """Print exit summary to stderr and exit.
+
+    Suppressed when ``--quiet`` is active, unless the command failed (code != 0).
+    """
+    from octorules._context import is_quiet
+
+    if not (is_quiet() and code == 0):
+        msg = _EXIT_MESSAGES.get(command, {}).get(code, "")
+        parts = [f"octorules {command}: exit {code}"]
+        if msg:
+            parts[0] += f" ({msg})"
+        if elapsed is not None:
+            parts.append(f"{elapsed:.1f}s")
+        print(" ".join(parts), file=sys.stderr)
     sys.exit(code)
 
 
@@ -436,7 +486,11 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         sys.exit(1)
 
-    _setup_logging(debug=args.debug, quiet=args.quiet)
+    _setup_logging(
+        debug=args.debug,
+        quiet=args.quiet,
+        syslog_address=getattr(args, "syslog", None),
+    )
 
     from octorules._context import set_quiet
 
@@ -447,13 +501,53 @@ def main(argv: list[str] | None = None) -> None:
         args.scope = "zones"
 
     # Commands that don't need config
+    if args.command == "rule":
+        _discover_provider_modules()
+        from octorules.commands._lint import list_rules
+
+        pattern = getattr(args, "pattern", None)
+        show_all = getattr(args, "rule_all", False)
+        if not pattern and not show_all:
+            log.error("Specify a rule ID/prefix, or use --all to list all rules.")
+            sys.exit(1)
+        filters = [pattern] if pattern else None
+        sys.exit(list_rules(fmt=getattr(args, "rule_format", "text"), filters=filters))
     if args.command == "versions":
         sys.exit(cmd_versions())
     if args.command == "completion":
         import shtab
 
-        print(shtab.complete(build_parser(), args.shell))
+        preamble: dict[str, str] = {}
+        try:
+            config = Config.from_file(args.config)
+            zone_str = " ".join(sorted(config.zones.keys()))
+            preamble["bash"] = (
+                f'_octorules_zone_complete() {{\n    compgen -W "{zone_str}" -- "$1"\n}}\n'
+            )
+            preamble["zsh"] = f"_octorules_zone_complete() {{\n    compadd -- {zone_str}\n}}\n"
+        except Exception:
+            pass  # No config available — zone completion won't work
+        print(shtab.complete(build_parser(), args.shell, preamble=preamble))
         sys.exit(0)
+    if args.command == "lint" and args.file:
+        # Single-file lint mode — no config needed
+        import time
+
+        t0 = time.monotonic()
+        if args.zones:
+            log.warning("--zone is ignored when linting a single file")
+        _discover_provider_modules()
+        from octorules.commands._lint import cmd_lint_file
+
+        code = cmd_lint_file(
+            args.file,
+            lint_format=args.lint_format,
+            lint_severity=args.lint_severity,
+            lint_rules=args.lint_rules,
+            output_file=args.lint_output,
+            exit_code=args.lint_exit_code,
+        )
+        _exit("lint", code, time.monotonic() - t0)
 
     t0 = time.monotonic()
     command = args.command
@@ -461,6 +555,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         config = Config.from_file(args.config)
         phase_filter = _validate_phases(args.phases)
+
+        if getattr(args, "config_only", False):
+            log.info("Config valid.")
+            _exit("lint", 0, time.monotonic() - t0)
 
         if command == "plan":
             _exit(
@@ -487,34 +585,11 @@ def main(argv: list[str] | None = None) -> None:
                 sync_format=args.sync_format,
             )
             _exit(command, code, time.monotonic() - t0)
-        elif command == "compare":
-            _exit(
-                command,
-                cmd_compare(
-                    config,
-                    args.zones,
-                    phase_filter=phase_filter,
-                    checksum=args.checksum,
-                    scope_filter=args.scope,
-                ),
-                time.monotonic() - t0,
-            )
-        elif command == "report":
-            _exit(
-                command,
-                cmd_report(
-                    config,
-                    args.zones,
-                    phase_filter=phase_filter,
-                    report_format=args.report_format,
-                    scope_filter=args.scope,
-                ),
-                time.monotonic() - t0,
-            )
         elif command == "lint":
-            # Import provider modules to trigger lint plugin registration,
+            # Load only configured providers for lint plugin registration,
             # without constructing provider instances (no API credentials needed).
-            _discover_provider_modules()
+            for prov_name in config.providers:
+                _ensure_provider_loaded(prov_name)
             zone_plans: dict[str, str] = {}
             _exit(
                 command,
@@ -549,20 +624,6 @@ def main(argv: list[str] | None = None) -> None:
                 ),
                 time.monotonic() - t0,
             )
-        elif command == "validate":
-            if args.config_only:
-                log.info("Config valid.")
-                _exit(command, 0, time.monotonic() - t0)
-            _exit(
-                command,
-                cmd_validate(
-                    config,
-                    args.zones,
-                    phase_filter=phase_filter,
-                    output_file=args.validate_output,
-                ),
-                time.monotonic() - t0,
-            )
         elif command == "dump":
             _exit(
                 command,
@@ -580,4 +641,5 @@ def main(argv: list[str] | None = None) -> None:
         _exit(command, 1, time.monotonic() - t0)
     except ProviderAuthError as e:
         log.error("Authentication failed: %s", _format_api_error(e))
+        log.error("Check that your API credentials are configured correctly.")
         _exit(command, 1, time.monotonic() - t0)

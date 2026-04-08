@@ -22,7 +22,6 @@ from octorules.extensions import (
     call_plan_zone_finalize,
     call_plan_zone_prefetch,
 )
-from octorules.formatter import build_report_data, print_report
 from octorules.phases import PHASE_BY_PROVIDER_ID
 from octorules.planner import (
     ZonePlan,
@@ -207,11 +206,18 @@ def _plan_zones(
 
     log.debug("Planning %d zone(s) with %d workers", len(work_items), config.max_workers)
     t0 = time.monotonic()
+
+    def _progress(done: int, total: int, item: object) -> None:
+        if total > 1:
+            zone_name = item[0] if isinstance(item, tuple) else str(item)
+            log.info("  [%d/%d] planned %s", done, total, zone_name)
+
     results = _helpers_mod._map_ordered(
         _plan_one,
         work_items,
         config.max_workers,
         executor=executor,
+        progress=_progress,
     )
 
     for item, result in zip(work_items, results, strict=True):
@@ -541,42 +547,3 @@ def cmd_plan(
         changes_exit_code=2 if exit_code else 0,
         scope_filter=scope_filter,
     )
-
-
-def cmd_compare(
-    config: Config,
-    zone_filter: list[str] | None,
-    phase_filter: list[str] | None = None,
-    checksum: bool = False,
-    scope_filter: str = "all",
-) -> int:
-    """Run the compare command. Returns 0 if identical, 1 if differences."""
-    return _cmd_plan_or_compare(
-        config,
-        zone_filter,
-        phase_filter,
-        checksum,
-        changes_exit_code=1,
-        scope_filter=scope_filter,
-    )
-
-
-def cmd_report(
-    config: Config,
-    zone_filter: list[str] | None,
-    phase_filter: list[str] | None = None,
-    report_format: str = "csv",
-    scope_filter: str = "all",
-) -> int:
-    """Run the report command. Returns 0 normally, 1 if any zone failed."""
-    config.resolve_secrets()
-    providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
-    processors = _providers_mod._init_processors(config)
-    r = _plan_all_scopes(
-        config, providers, zone_filter, phase_filter, scope_filter, processors=processors
-    )
-
-    report_data = build_report_data(r.zone_plans, r.desired_by_zone, r.current_by_zone)
-    print_report(report_data, fmt=report_format)
-
-    return 1 if r.failed else 0

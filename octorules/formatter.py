@@ -212,6 +212,20 @@ def format_zone_plan(zone_plan: ZonePlan, use_color: bool = True) -> str:
         p.header(f"Zone {zone_plan.display_name}: ") + f"{zone_plan.total_changes} change(s)"
     )
 
+    # Warn when ALL changes are removals (potential accidental mass deletion)
+    from octorules.planner import ChangeType
+
+    all_changes = []
+    for pp in zone_plan.phase_plans:
+        all_changes.extend(pp.changes)
+    if all_changes and all(c.change_type == ChangeType.REMOVE for c in all_changes):
+        lines.append(
+            p.error(
+                f"  WARNING: all {len(all_changes)} change(s) are deletions"
+                f" — verify this is intentional"
+            )
+        )
+
     for phase_plan in zone_plan.phase_plans:
         lines.extend(format_phase_plan(phase_plan, use_color))
 

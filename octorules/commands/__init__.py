@@ -20,7 +20,7 @@ from octorules.commands._helpers import (
     _validate_phases,
     _write_output_file,
 )
-from octorules.commands._lint import cmd_lint
+from octorules.commands._lint import cmd_lint, cmd_lint_file
 from octorules.commands._plan import (
     _cmd_plan_or_compare,
     _plan_account,
@@ -29,13 +29,12 @@ from octorules.commands._plan import (
     _plan_single_zone_safe,
     _plan_zones,
     _PlanAllResult,
-    cmd_compare,
     cmd_plan,
-    cmd_report,
 )
 from octorules.commands._providers import (
     _discover_provider_modules,
     _discover_zones,
+    _ensure_provider_loaded,
     _get_zone_provider,
     _get_zone_providers,
     _init_processors,
@@ -58,7 +57,6 @@ from octorules.commands._sync import (
     _write_audit_log,
     cmd_sync,
 )
-from octorules.commands._validate import cmd_validate
 from octorules.commands._versions import cmd_versions
 
 __all__ = [
@@ -77,6 +75,7 @@ __all__ = [
     "_discover_provider_modules",
     "_discover_zones",
     "_emit_plan_outputs",
+    "_ensure_provider_loaded",
     "_filter_current_by_phase",
     "_filter_desired_by_phase",
     "_format_api_error",
@@ -102,12 +101,10 @@ __all__ = [
     "_write_audit_log",
     "_write_output_file",
     "cmd_audit",
-    "cmd_compare",
     "cmd_dump",
     "cmd_lint",
+    "cmd_lint_file",
     "cmd_plan",
-    "cmd_report",
     "cmd_sync",
-    "cmd_validate",
     "cmd_versions",
 ]

@@ -32,7 +32,7 @@ pip install octorules-azure         # Azure WAF (Front Door / Application Gatewa
 pip install octorules-bunny         # Bunny.net Shield WAF
 ```
 
-Core only (offline lint/validate, no provider):
+Core only (offline lint, no provider):
 
 ```bash
 pip install octorules
@@ -267,8 +267,8 @@ octorules plan --config config.yaml
 # Apply changes
 octorules sync --doit --config config.yaml
 
-# Validate offline (no API calls, useful in CI)
-octorules validate --config config.yaml
+# Validate config only (no API calls, useful in CI)
+octorules lint --config-only --config config.yaml
 
 # Export existing rules to YAML
 octorules dump --config config.yaml
@@ -508,31 +508,15 @@ octorules sync --doit [--zone example.com] [--phase redirect_rules] [--checksum 
 | `--audit-log PATH` | Write JSON lines audit log of sync results |
 | `--format json` | Print structured JSON results to stdout (zone, status, synced phases, errors) |
 
-### `octorules compare`
+### `octorules rule`
 
-Compare local rules against live provider state. Exit code 1 when differences exist.
-
-```bash
-octorules compare [--zone example.com] [--checksum]
-```
-
-### `octorules report`
-
-Drift report showing deployed vs YAML source of truth.
+Browse and search the lint rule catalog.
 
 ```bash
-octorules report [--zone example.com] [--output-format csv|json]
-```
-
-### `octorules validate`
-
-Validates config and rules files offline (no API calls). Useful in CI to catch errors early.
-
-```bash
-octorules validate [--zone example.com] [--phase redirect_rules]
-
-# Config file only (skip rules files)
-octorules validate --config-only
+octorules rule --all                  # List all rules
+octorules rule CF                     # Filter by prefix
+octorules rule CF201                  # Show one rule
+octorules rule --all --format json    # JSON output
 ```
 
 ### `octorules dump`
