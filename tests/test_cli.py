@@ -3524,6 +3524,83 @@ class TestLintPluginUsage:
         assert len(plugin_lines) == 0
 
 
+class TestLintZonePlans:
+    """Lint uses zone_plans for per-zone plan tier resolution."""
+
+    @patch("octorules.linter.plugin.get_registered_plugins")
+    def test_zone_plans_overrides_default_tier(self, mock_get_plugins, sample_config):
+        """zone_plans dict sets plan_tier for matching zones."""
+        from octorules.linter.engine import LintContext
+        from octorules.linter.plugin import LintPlugin
+
+        captured_tiers: dict[str, str] = {}
+
+        def spy_lint(rules_data, ctx: LintContext):
+            captured_tiers[ctx.zone_name] = ctx.plan_tier
+
+        mock_get_plugins.return_value = [
+            LintPlugin(name="spy", lint_fn=spy_lint, rule_ids=frozenset())
+        ]
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        cmd_lint(
+            sample_config,
+            ["example.com"],
+            zone_plans={"example.com": "free"},
+        )
+        assert captured_tiers["example.com"] == "free"
+
+    @patch("octorules.linter.plugin.get_registered_plugins")
+    def test_explicit_plan_flag_overrides_zone_plans(self, mock_get_plugins, sample_config):
+        """--plan flag wins over zone_plans cache."""
+        from octorules.linter.engine import LintContext
+        from octorules.linter.plugin import LintPlugin
+
+        captured_tiers: dict[str, str] = {}
+
+        def spy_lint(rules_data, ctx: LintContext):
+            captured_tiers[ctx.zone_name] = ctx.plan_tier
+
+        mock_get_plugins.return_value = [
+            LintPlugin(name="spy", lint_fn=spy_lint, rule_ids=frozenset())
+        ]
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        cmd_lint(
+            sample_config,
+            ["example.com"],
+            lint_plan="business",
+            zone_plans={"example.com": "free"},
+        )
+        assert captured_tiers["example.com"] == "business"
+
+    @patch("octorules.linter.plugin.get_registered_plugins")
+    def test_missing_zone_in_cache_defaults_to_enterprise(self, mock_get_plugins, sample_config):
+        """Zones not in zone_plans fall back to 'enterprise'."""
+        from octorules.linter.engine import LintContext
+        from octorules.linter.plugin import LintPlugin
+
+        captured_tiers: dict[str, str] = {}
+
+        def spy_lint(rules_data, ctx: LintContext):
+            captured_tiers[ctx.zone_name] = ctx.plan_tier
+
+        mock_get_plugins.return_value = [
+            LintPlugin(name="spy", lint_fn=spy_lint, rule_ids=frozenset())
+        ]
+        (sample_config.rules_dir / "example.com.yaml").write_text(
+            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        cmd_lint(
+            sample_config,
+            ["example.com"],
+            zone_plans={"other-zone": "free"},
+        )
+        assert captured_tiers["example.com"] == "enterprise"
+
+
 # ---------------------------------------------------------------------------
 # --config-only validate (#8)
 # ---------------------------------------------------------------------------

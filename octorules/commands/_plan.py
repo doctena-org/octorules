@@ -496,6 +496,7 @@ def _cmd_plan_or_compare(
     """Shared implementation for plan and compare commands."""
     config.resolve_secrets()
     providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
+    _providers_mod.write_zone_plans_cache(config, providers)
     processors = _providers_mod._init_processors(config)
     r = _plan_all_scopes(
         config, providers, zone_filter, phase_filter, scope_filter, processors=processors

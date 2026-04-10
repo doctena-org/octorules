@@ -741,7 +741,13 @@ class Config:
         if not isinstance(manager_section, dict):
             raise ConfigError(f"'manager' must be a mapping{_ctx(manager_section)}")
         mgr_ctx = _ctx(manager_section)
-        max_workers = int(manager_section.get("max_workers", 1))
+        try:
+            max_workers = int(manager_section.get("max_workers", 1))
+        except (ValueError, TypeError) as exc:
+            raise ConfigError(
+                f"'manager.max_workers' must be an integer"
+                f" (got {manager_section['max_workers']!r}){mgr_ctx}"
+            ) from exc
         if max_workers < 1:
             raise ConfigError(f"'manager.max_workers' must be >= 1{mgr_ctx}")
 

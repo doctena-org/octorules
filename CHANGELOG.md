@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] - 2026-04-10
+
+### Added
+- Zone plans cache — `plan`, `sync`, and `dump` commands write
+  `.zone_plans_cache.json` next to the config file after provider
+  initialization. The `lint` command reads this cache for automatic per-zone
+  plan tier detection without requiring API credentials or the `--plan` flag.
+
+### Fixed
+- CDN range overlap detection (`check_cdn_ranges`) could miss broad CDN
+  prefixes (e.g. `/8`) when a narrower range with a later start address didn't
+  overlap — the sweep optimization broke out of the loop prematurely.
+- `manager.max_workers` with non-integer values (e.g. `abc`, `[1, 2]`) now
+  raises a descriptive `ConfigError` instead of an unhandled
+  `ValueError`/`TypeError`.
+
+### Changed
+- CORE006 ("Rules file has no actual rules") severity changed from WARNING to
+  INFO to match actual emission behavior.
+- Core linter rule registration is now thread-safe (`threading.Lock`).
+
 ## [0.24.0] - 2026-04-08
 
 ### Added

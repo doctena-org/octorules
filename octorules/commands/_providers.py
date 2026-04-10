@@ -1,7 +1,9 @@
 """Provider and processor initialization."""
 
 import importlib
+import json
 import logging
+from pathlib import Path
 
 from octorules.config import (
     Config,
@@ -19,6 +21,8 @@ from octorules.provider.base import (
 from octorules.provider.exceptions import ProviderError
 
 log = logging.getLogger(__name__)
+
+_ZONE_PLANS_CACHE = ".zone_plans_cache.json"
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +190,54 @@ def _init_providers(
     resolve_zone_ids(config, resolve_fns, zone_filter=zone_filter)
 
     return providers
+
+
+def _collect_zone_plans(providers: dict[str, BaseProvider]) -> dict[str, str]:
+    """Merge zone_plans from all providers into a single dict."""
+    merged: dict[str, str] = {}
+    for prov in providers.values():
+        merged.update(prov.zone_plans)
+    return merged
+
+
+def _zone_plans_cache_path(config: Config) -> Path | None:
+    """Return the cache file path, or None if config has no file path."""
+    if config._config_path is None:
+        return None
+    return config._config_path.parent / _ZONE_PLANS_CACHE
+
+
+def write_zone_plans_cache(config: Config, providers: dict[str, BaseProvider]) -> None:
+    """Write merged zone_plans to a cache file next to the config.
+
+    Best-effort — errors are logged and swallowed.
+    """
+    cache_path = _zone_plans_cache_path(config)
+    if cache_path is None:
+        return
+    merged = _collect_zone_plans(providers)
+    if not merged:
+        return
+    try:
+        cache_path.write_text(json.dumps(merged, sort_keys=True, indent=2) + "\n")
+        log.debug("Wrote zone plans cache: %s", cache_path)
+    except OSError as e:
+        log.debug("Could not write zone plans cache: %s", e)
+
+
+def read_zone_plans_cache(config: Config) -> dict[str, str]:
+    """Read zone_plans from cache, returning empty dict on any failure."""
+    cache_path = _zone_plans_cache_path(config)
+    if cache_path is None or not cache_path.is_file():
+        return {}
+    try:
+        data = json.loads(cache_path.read_text())
+        if isinstance(data, dict) and all(isinstance(v, str) for v in data.values()):
+            log.debug("Loaded zone plans cache: %s (%d zones)", cache_path, len(data))
+            return data
+    except (OSError, json.JSONDecodeError, ValueError) as e:
+        log.debug("Could not read zone plans cache: %s", e)
+    return {}
 
 
 def _get_zone_provider(zone_cfg: ZoneConfig, providers: dict[str, BaseProvider]) -> BaseProvider:

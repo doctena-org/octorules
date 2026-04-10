@@ -668,6 +668,18 @@ class TestMaxWorkers:
         assert config.max_workers == 2
         assert isinstance(config.max_workers, int)
 
+    def test_invalid_max_workers_non_numeric(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  max_workers: abc\n")
+        with pytest.raises(ConfigError, match="max_workers.*must be an integer"):
+            Config.from_file(config_file)
+
+    def test_invalid_max_workers_list(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  max_workers:\n    - 1\n    - 2\n")
+        with pytest.raises(ConfigError, match="max_workers.*must be an integer"):
+            Config.from_file(config_file)
+
 
 class TestMaxRetries:
     """Tests for provider max_retries config parsing."""

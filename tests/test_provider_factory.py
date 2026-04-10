@@ -227,3 +227,99 @@ class TestResolveProviderClass:
         mock_eps.return_value = []
         with pytest.raises(ConfigError, match="No provider class found"):
             _resolve_provider_class("unknown", None)
+
+
+class TestZonePlansCache:
+    """Tests for zone_plans cache write/read cycle."""
+
+    def test_write_and_read_roundtrip(self, tmp_path):
+        config_file = tmp_path / "octorules.yaml"
+        config_file.touch()
+        config = MagicMock()
+        config._config_path = config_file
+
+        prov_a = MagicMock()
+        prov_a.zone_plans = {"zone-a": "enterprise", "zone-b": "free"}
+        prov_b = MagicMock()
+        prov_b.zone_plans = {"zone-c": "standard"}
+
+        from octorules.commands._providers import read_zone_plans_cache, write_zone_plans_cache
+
+        write_zone_plans_cache(config, {"cf": prov_a, "gcp": prov_b})
+        result = read_zone_plans_cache(config)
+        assert result == {"zone-a": "enterprise", "zone-b": "free", "zone-c": "standard"}
+
+    def test_read_returns_empty_when_no_cache(self, tmp_path):
+        config_file = tmp_path / "octorules.yaml"
+        config_file.touch()
+        config = MagicMock()
+        config._config_path = config_file
+
+        from octorules.commands._providers import read_zone_plans_cache
+
+        assert read_zone_plans_cache(config) == {}
+
+    def test_read_returns_empty_on_corrupt_json(self, tmp_path):
+        config_file = tmp_path / "octorules.yaml"
+        config_file.touch()
+        cache_file = tmp_path / ".zone_plans_cache.json"
+        cache_file.write_text("NOT JSON")
+        config = MagicMock()
+        config._config_path = config_file
+
+        from octorules.commands._providers import read_zone_plans_cache
+
+        assert read_zone_plans_cache(config) == {}
+
+    def test_read_returns_empty_on_wrong_structure(self, tmp_path):
+        config_file = tmp_path / "octorules.yaml"
+        config_file.touch()
+        cache_file = tmp_path / ".zone_plans_cache.json"
+        cache_file.write_text('{"zone-a": 123}')
+        config = MagicMock()
+        config._config_path = config_file
+
+        from octorules.commands._providers import read_zone_plans_cache
+
+        assert read_zone_plans_cache(config) == {}
+
+    def test_write_skips_when_no_config_path(self):
+        config = MagicMock()
+        config._config_path = None
+        prov = MagicMock()
+        prov.zone_plans = {"z": "free"}
+
+        from octorules.commands._providers import write_zone_plans_cache
+
+        # Should not raise
+        write_zone_plans_cache(config, {"prov": prov})
+
+    def test_write_skips_when_all_providers_empty(self, tmp_path):
+        config_file = tmp_path / "octorules.yaml"
+        config_file.touch()
+        config = MagicMock()
+        config._config_path = config_file
+        prov = MagicMock()
+        prov.zone_plans = {}
+
+        from octorules.commands._providers import write_zone_plans_cache
+
+        write_zone_plans_cache(config, {"prov": prov})
+        assert not (tmp_path / ".zone_plans_cache.json").exists()
+
+    def test_later_provider_wins_on_conflict(self, tmp_path):
+        config_file = tmp_path / "octorules.yaml"
+        config_file.touch()
+        config = MagicMock()
+        config._config_path = config_file
+        prov_a = MagicMock()
+        prov_a.zone_plans = {"zone-x": "free"}
+        prov_b = MagicMock()
+        prov_b.zone_plans = {"zone-x": "enterprise"}
+
+        from octorules.commands._providers import read_zone_plans_cache, write_zone_plans_cache
+
+        # Python dict iteration order is insertion order; prov_b wins
+        write_zone_plans_cache(config, {"a": prov_a, "b": prov_b})
+        result = read_zone_plans_cache(config)
+        assert result["zone-x"] == "enterprise"

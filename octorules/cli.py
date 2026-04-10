@@ -590,7 +590,9 @@ def main(argv: list[str] | None = None) -> None:
             # without constructing provider instances (no API credentials needed).
             for prov_name in config.providers:
                 _ensure_provider_loaded(prov_name)
-            zone_plans: dict[str, str] = {}
+            from octorules.commands._providers import read_zone_plans_cache
+
+            zone_plans = read_zone_plans_cache(config)
             _exit(
                 command,
                 cmd_lint(

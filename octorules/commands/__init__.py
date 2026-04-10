@@ -32,6 +32,7 @@ from octorules.commands._plan import (
     cmd_plan,
 )
 from octorules.commands._providers import (
+    _collect_zone_plans,
     _discover_provider_modules,
     _discover_zones,
     _ensure_provider_loaded,
@@ -42,6 +43,8 @@ from octorules.commands._providers import (
     _load_provider_class,
     _resolve_provider_class,
     _validate_multi_target,
+    read_zone_plans_cache,
+    write_zone_plans_cache,
 )
 from octorules.commands._sync import (
     _CHECKSUM_RE,
@@ -72,6 +75,7 @@ __all__ = [
     "_check_safety_violations",
     "_cmd_plan_or_compare",
     "_cmd_sync_inner",
+    "_collect_zone_plans",
     "_discover_provider_modules",
     "_discover_zones",
     "_emit_plan_outputs",
@@ -107,4 +111,6 @@ __all__ = [
     "cmd_plan",
     "cmd_sync",
     "cmd_versions",
+    "read_zone_plans_cache",
+    "write_zone_plans_cache",
 ]

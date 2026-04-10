@@ -31,6 +31,9 @@ htmlcov/
 .ruff_cache/
 .mypy_cache/
 
+# octorules
+.zone_plans_cache.json
+
 # IDE
 .idea/
 .vscode/

@@ -40,6 +40,7 @@ def cmd_dump(
     """Run the dump command. Returns exit code."""
     config.resolve_secrets()
     providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
+    _providers_mod.write_zone_plans_cache(config, providers)
     out_dir = Path(output_dir) if output_dir else config.rules_dir
     lists_dir = out_dir / "custom_lists" if output_dir else config.lists_dir
     provider_ids = _phase_filter_to_provider_ids(phase_filter)
