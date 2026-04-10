@@ -239,6 +239,23 @@ class TestCheckCDNRanges:
         rules = [_make_rule_ip(ref="r1", ips=["garbage"])]
         assert check_cdn_ranges(rules, self.CDN) == []
 
+    def test_broad_cdn_range_detected_after_narrow_miss(self):
+        """Regression: a broad CDN /8 must be detected even when a narrower
+        CDN range with a later start address doesn't overlap the rule."""
+        cdn = {"BigCDN": ["10.0.0.0/8", "10.1.0.0/16"]}
+        rules = [_make_rule_ip(ref="r1", ips=["10.2.0.0/16"])]
+        findings = check_cdn_ranges(rules, cdn)
+        assert len(findings) == 1
+        assert "BigCDN" in findings[0].message
+
+    def test_broad_cdn_range_ipv6(self):
+        """Same regression scenario for IPv6."""
+        cdn = {"BigCDN": ["2001:db8::/32", "2001:db8:1::/48"]}
+        rules = [_make_rule_ip(ref="r1", ips=["2001:db8:2::/48"])]
+        findings = check_cdn_ranges(rules, cdn)
+        assert len(findings) == 1
+        assert "BigCDN" in findings[0].message
+
 
 # ---------------------------------------------------------------------------
 # check_zone_drift

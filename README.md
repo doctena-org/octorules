@@ -540,6 +540,13 @@ octorules lint [--format text|json|sarif] [--severity error|warning|info] [--pla
 | `--format` | Output format: `text` (default), `json`, `sarif` |
 | `--severity` | Minimum severity to report (default: `info`) |
 | `--plan` | Plan tier for entitlement checks (default: `enterprise`) |
+
+When `--plan` is not specified, `lint` reads `.zone_plans_cache.json` (written
+automatically by `plan`, `sync`, and `dump`) for automatic per-zone tier
+detection. If neither `--plan` nor the cache provides a tier, `enterprise` is
+assumed (most permissive, fewest false positives). Add `.zone_plans_cache.json`
+to your `.gitignore` — it contains no secrets, just zone-to-tier mappings.
+
 | `--rule` | Only check specific rule ID(s); can be repeated |
 | `--output` | Write results to a file instead of stdout |
 | `--exit-code` | Exit with 1 on errors, 2 on warnings (for CI) |

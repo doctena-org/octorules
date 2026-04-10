@@ -553,10 +553,10 @@ def check_cdn_ranges(
             # Overlap: ranges intersect if start_a <= end_b AND start_b <= end_a.
             if cdn_start <= addr_end and addr_start <= cdn_end:
                 return (cdn_provider, cdn_net)
-            # Optimisation: if this CDN range ends before our start, all
-            # earlier ranges also end before our start (sorted order).
-            if cdn_end < addr_start:
-                break
+            # NOTE: we cannot break early here.  CDN ranges are sorted by
+            # start address, but a broader prefix (e.g. /8) at a lower
+            # index can have a *higher* end than a narrower prefix at a
+            # higher index, so we must check every candidate.
         return None
 
     for info in rule_ips:

@@ -598,6 +598,7 @@ def cmd_sync(
         )
     config.resolve_secrets()
     providers = _providers_mod._init_providers(config, zone_filter=zone_filter)
+    _providers_mod.write_zone_plans_cache(config, providers)
     processors = _providers_mod._init_processors(config)
     # Shared executor reused across plan + apply phases
     shared_ex: ThreadPoolExecutor | None = None

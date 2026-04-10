@@ -1,6 +1,7 @@
 """Lint engine — orchestrates all linter modules and produces a unified report."""
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
@@ -210,29 +211,31 @@ CORE_RULE_IDS: frozenset[str] = frozenset({"CORE002", "CORE003", "CORE004", "COR
 # Deferred to a function to avoid circular import (registry.py imports Severity
 # from this module).  Called by get_known_rule_ids() and list_rules().
 _core_rules_registered = False
+_core_rules_lock = threading.Lock()
 
 
 def _register_core_rules() -> None:
     global _core_rules_registered
-    if _core_rules_registered:
-        return
-    _core_rules_registered = True
+    with _core_rules_lock:
+        if _core_rules_registered:
+            return
 
-    from octorules.linter.rules.registry import RuleMeta, register_rules
+        from octorules.linter.rules.registry import RuleMeta, register_rules
 
-    register_rules(
-        [
-            RuleMeta(
-                "CORE002",
-                "core",
-                "Orphaned rules file (no matching zone in config)",
-                Severity.WARNING,
-            ),
-            RuleMeta("CORE003", "core", "All rules in phase are disabled", Severity.WARNING),
-            RuleMeta("CORE004", "core", "Same ref used in multiple phases", Severity.WARNING),
-            RuleMeta("CORE006", "core", "Rules file has no actual rules", Severity.WARNING),
-        ]
-    )
+        register_rules(
+            [
+                RuleMeta(
+                    "CORE002",
+                    "core",
+                    "Orphaned rules file (no matching zone in config)",
+                    Severity.WARNING,
+                ),
+                RuleMeta("CORE003", "core", "All rules in phase are disabled", Severity.WARNING),
+                RuleMeta("CORE004", "core", "Same ref used in multiple phases", Severity.WARNING),
+                RuleMeta("CORE006", "core", "Rules file has no actual rules", Severity.INFO),
+            ]
+        )
+        _core_rules_registered = True
 
 
 def get_known_rule_ids() -> frozenset[str]:
