@@ -1837,3 +1837,68 @@ class TestFetchJsonErrors:
         with patch("octorules.audit.urlopen", return_value=mock_resp):
             result = _fetch_json("https://example.com/data.json")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Performance guard tests
+# ---------------------------------------------------------------------------
+class TestAuditPerformance:
+    """Guard against O(n²) regressions in audit checks.
+
+    Audit checks process IP ranges across rules. The sweep-line algorithm
+    (O(n log n)) replaced an earlier O(n²) approach in v0.23.4. These
+    tests create large synthetic datasets and assert completion within a
+    time budget.
+    """
+
+    @staticmethod
+    def _make_rules(count: int) -> list[RuleIPInfo]:
+        """Create *count* rules, each with a unique /32 IP."""
+        return [
+            _make_rule_ip(
+                ref=f"rule-{i}",
+                phase="waf_custom_rules",
+                action="block",
+                ips=[f"198.51.{i // 256}.{i % 256}/32"],
+            )
+            for i in range(count)
+        ]
+
+    def test_ip_overlap_5000_rules_under_2s(self):
+        """5,000 rules with unique IPs must complete overlap check in < 2s."""
+        import time
+
+        rules = self._make_rules(5000)
+        t0 = time.monotonic()
+        check_ip_overlap(rules)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, f"ip-overlap on 5000 rules took {elapsed:.1f}s (limit 2s)"
+
+    def test_ip_shadow_5000_rules_under_2s(self):
+        """5,000 rules must complete shadow check in < 2s."""
+        import time
+
+        rules = self._make_rules(5000)
+        t0 = time.monotonic()
+        check_ip_shadow(rules, phase_order=["waf_custom_rules"])
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, f"ip-shadow on 5000 rules took {elapsed:.1f}s (limit 2s)"
+
+    def test_zone_drift_5000_rules_under_2s(self):
+        """5,000 rules across 10 zones must complete drift check in < 2s."""
+        import time
+
+        rules = [
+            _make_rule_ip(
+                zone=f"zone-{i % 10}.example.com",
+                ref=f"rule-{i}",
+                phase="waf_custom_rules",
+                action="block",
+                ips=[f"198.51.{i // 256}.{i % 256}/32"],
+            )
+            for i in range(5000)
+        ]
+        t0 = time.monotonic()
+        check_zone_drift(rules)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, f"zone-drift on 5000 rules took {elapsed:.1f}s (limit 2s)"

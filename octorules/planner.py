@@ -806,9 +806,27 @@ def compute_checksum(zone_plans: list[ZonePlan]) -> str:
                 if hasattr(ep, "delete"):
                     entry["delete"] = ep.delete
                 if hasattr(ep, "changes") and ep.changes:
+                    serialized_changes = []
+                    for c in ep.changes:
+                        if hasattr(c, "change_type"):
+                            serialized_changes.append(_serialize_change(c))
+                        else:
+                            # Extension-specific change (e.g. ZoneSecurityChange,
+                            # BotManagementChange) — serialize available fields.
+                            sc: dict = {}
+                            for attr in ("field", "current", "desired"):
+                                if hasattr(c, attr):
+                                    val = getattr(c, attr)
+                                    sc[attr] = str(val) if val is not None else None
+                            serialized_changes.append(sc)
+                    sort_key = (
+                        "change_type"
+                        if serialized_changes and "change_type" in serialized_changes[0]
+                        else "field"
+                    )
                     entry["changes"] = sorted(
-                        [_serialize_change(c) for c in ep.changes],
-                        key=itemgetter("change_type", "ref"),
+                        serialized_changes,
+                        key=lambda x: x.get(sort_key, ""),
                     )
                 ext_data.append(entry)
             zone_data[f"{ext_name}_policy_plans"] = ext_data
