@@ -196,3 +196,64 @@ aws_waf_rule_group_rules:
       SampledRequestsEnabled: true
       CloudWatchMetricsEnabled: true
       MetricName: shared-ip-blocklist-group
+
+# ---------------------------------------------------------------------------
+# Custom Rulesets (Rule Groups) — create and manage rule groups inline
+# ---------------------------------------------------------------------------
+# Rule groups are AWS WAF's way of bundling rules for reuse across Web ACLs.
+# "capacity" is immutable after creation — plan carefully.
+# Replace account IDs and resource IDs with your own.
+custom_rulesets:
+  - name: bot-protection
+    capacity: 100
+    description: "Bot detection and blocking rules"
+    phase: aws_waf_custom
+    rules:
+      - ref: block-scanner-uas
+        Priority: 1
+        Action:
+          Block: {}
+        Statement:
+          ByteMatchStatement:
+            FieldToMatch:
+              SingleHeader:
+                Name: user-agent
+            PositionalConstraint: CONTAINS
+            SearchString: sqlmap
+            TextTransformations:
+              - Priority: 0
+                Type: LOWERCASE
+        VisibilityConfig:
+          SampledRequestsEnabled: true
+          CloudWatchMetricsEnabled: true
+          MetricName: block-scanner-uas
+
+# ---------------------------------------------------------------------------
+# Lists — IP Sets and Regex Pattern Sets
+# ---------------------------------------------------------------------------
+# Lists are standalone AWS WAF resources referenced by rules via ARN.
+# octorules manages their contents; the provider creates/deletes the
+# resources as needed.
+lists:
+  - name: blocked-ips
+    kind: ip
+    description: "Known bad IPs"
+    items:
+      - ip: "198.51.100.0/24"
+      - ip: "203.0.113.0/24"
+      - ip: "192.0.2.0/24"
+
+  - name: internal-ips
+    kind: ip
+    description: "Internal monitoring and health-check IPs"
+    items:
+      - ip: "10.0.0.0/8"
+      - ip: "172.16.0.0/12"
+
+  - name: bad-ua-patterns
+    kind: regex
+    description: "Bad user-agent regex patterns"
+    items:
+      - regex: "(?i)sqlmap"
+      - regex: "(?i)nikto"
+      - regex: "(?i)nessus"

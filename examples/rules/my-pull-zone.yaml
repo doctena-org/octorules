@@ -5,7 +5,7 @@
 # DDoS sensitivity).
 #
 # Phases: bunny_waf_custom_rules, bunny_waf_rate_limit_rules,
-#         bunny_waf_access_list_rules
+#         bunny_waf_access_list_rules, bunny_edge_rules
 # Non-phase keys: bunny_waf_managed_rules, bunny_shield_config
 
 # ---------------------------------------------------------------------------
@@ -141,6 +141,68 @@ bunny_waf_managed_rules:
     - "942100"                # SQLi via libinjection
   log_only:
     - "941110"                # XSS filter (log but don't block)
+
+# ---------------------------------------------------------------------------
+# Edge Rules — CDN-level request/response manipulation
+# ---------------------------------------------------------------------------
+# Edge rules use trigger-based matching (not expressions).  Each trigger has
+# a type, pattern matching mode, and list of patterns.
+bunny_edge_rules:
+  - ref: Force HTTPS
+    enabled: true
+    description: "Redirect all HTTP traffic to HTTPS"
+    action_type: force_ssl
+    action_parameter_1: ""
+    action_parameter_2: ""
+    trigger_matching_type: any
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "http://*"
+
+  - ref: Redirect old path
+    enabled: true
+    description: "Redirect /old-path to /new-path with 301"
+    action_type: redirect
+    action_parameter_1: "https://example.com/new-path"
+    action_parameter_2: "301"
+    trigger_matching_type: all
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "/old-path*"
+
+  - ref: Add security headers
+    enabled: true
+    description: "Add X-Frame-Options header to all responses"
+    action_type: set_response_header
+    action_parameter_1: "X-Frame-Options"
+    action_parameter_2: "DENY"
+    trigger_matching_type: any
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "*"
+
+  - ref: Cache API responses
+    enabled: true
+    description: "Override cache time for API GET requests"
+    action_type: override_cache_time
+    action_parameter_1: "3600"
+    action_parameter_2: ""
+    trigger_matching_type: all
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "/api/*"
+      - type: request_method
+        pattern_matching_type: any
+        pattern_matches:
+          - "GET"
 
 # ---------------------------------------------------------------------------
 # Shield Config — bot detection and DDoS knobs

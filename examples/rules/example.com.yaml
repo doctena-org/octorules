@@ -155,6 +155,24 @@ waf_custom_rules:
     octorules:
       ignored: true
 
+  # Target-specific rules — in multi-target setups, restrict to specific
+  # provider instances.  "included" and "excluded" are mutually exclusive.
+  - ref: prod-only-waf
+    description: "Only deploy to cf-prod target, skip cf-staging"
+    expression: 'ip.src in $blocklist'
+    action: block
+    octorules:
+      included:
+        - cf-prod
+
+  - ref: skip-staging-challenge
+    description: "Deploy everywhere except cf-staging"
+    expression: 'ip.geoip.country in {"RU" "CN"}'
+    action: managed_challenge
+    octorules:
+      excluded:
+        - cf-staging
+
 # ---------------------------------------------------------------------------
 # Rate Limiting Rules
 # ---------------------------------------------------------------------------
