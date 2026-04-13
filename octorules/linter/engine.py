@@ -10,10 +10,6 @@ from octorules.linter.suppressions import is_suppressed
 
 log = logging.getLogger(__name__)
 
-# Expressions that are always true or always false (shared by yaml_validator and page_shield_linter)
-ALWAYS_TRUE_EXPRESSIONS = frozenset({"true", "(true)", "((true))"})
-ALWAYS_FALSE_EXPRESSIONS = frozenset({"false", "(false)", "((false))"})
-
 
 def _strip_outer_parens(expr: str) -> str:
     """Strip balanced outer parentheses: '(((true)))' → 'true'."""

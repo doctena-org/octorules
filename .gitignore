@@ -41,3 +41,4 @@ htmlcov/
 *.swo
 *~
 .DS_Store
+test
