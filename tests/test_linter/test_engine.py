@@ -498,3 +498,48 @@ class TestIsAlwaysFalse:
 
     def test_expression_not_always_false(self):
         assert not is_always_false('http.host eq "example.com"')
+
+
+class TestLintPerformance:
+    """Guard against O(n²) regressions in lint plugins.
+
+    Any provider's linter that processes large rule sets (IP lists, access
+    lists, etc.) must use O(n log n) algorithms, not brute-force pairwise
+    comparison.  These tests create large synthetic data and assert that
+    lint completes within a time budget.
+    """
+
+    def test_large_ip_list_lint_under_2s(self):
+        """A 5,000-item IP list must lint in under 2 seconds.
+
+        The O(n²) brute-force overlap check that shipped in
+        octorules-cloudflare v0.7.7 took 26s+ on a ~10,000-item list;
+        the sweep-line replacement (v0.7.8) takes < 0.1s.
+        """
+        import time
+
+        items = [{"ip": f"198.51.{i // 256}.{i % 256}"} for i in range(5000)]
+        rules_data = {"lists": [{"name": "perf-test", "kind": "ip", "items": items}]}
+        t0 = time.monotonic()
+        lint_zone_file(rules_data)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, f"Lint with 5000-item IP list took {elapsed:.1f}s (limit 2s)"
+
+    def test_large_rule_set_lint_under_2s(self):
+        """500 rules in a single phase must lint in under 2 seconds."""
+        import time
+
+        rules = [
+            {
+                "ref": f"rule-{i}",
+                "expression": f'http.host eq "test-{i}.example.com"',
+                "action": "block",
+                "enabled": True,
+            }
+            for i in range(500)
+        ]
+        rules_data = {"waf_custom_rules": rules}
+        t0 = time.monotonic()
+        lint_zone_file(rules_data)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, f"Lint with 500 rules took {elapsed:.1f}s (limit 2s)"
