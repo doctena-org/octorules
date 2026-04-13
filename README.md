@@ -64,58 +64,11 @@ All keys under a provider section (except `class` and `safety`) are forwarded as
 
 #### Multi-provider setup
 
-To manage rules across multiple providers, add each provider as a named section under `providers:` and assign zones to providers via `targets:`:
-
-```yaml
-providers:
-  cloudflare:
-    token: env/CLOUDFLARE_API_TOKEN
-  aws:
-    region: us-west-2
-    waf_scope: REGIONAL
-  rules:
-    directory: ./rules
-
-zones:
-  example.com:
-    sources:
-      - rules
-    targets:
-      - cloudflare
-  my-web-acl:
-    sources:
-      - rules
-    targets:
-      - aws
-```
-
-When only one provider is configured, `targets` is auto-assigned and can be omitted.
+To manage rules across multiple providers, add each provider as a named section under `providers:` and assign zones to providers via `targets:`. When only one provider is configured, `targets` is auto-assigned and can be omitted. See [`examples/config.yaml`](examples/config.yaml) for a full multi-provider config with all five providers.
 
 #### Multi-target zones
 
-A zone can target multiple providers of the **same class** (e.g. two Cloudflare accounts, or prod + staging). octorules plans and applies independently for each target:
-
-```yaml
-providers:
-  cf-prod:
-    class: octorules_cloudflare.CloudflareProvider
-    token: env/CF_PROD_TOKEN
-  cf-staging:
-    class: octorules_cloudflare.CloudflareProvider
-    token: env/CF_STAGING_TOKEN
-  rules:
-    directory: ./rules
-
-zones:
-  example.com:
-    sources:
-      - rules
-    targets:
-      - cf-prod
-      - cf-staging
-```
-
-Each target produces its own plan. Safety thresholds default from the first target's provider.
+A zone can target multiple providers of the **same class** (e.g. two Cloudflare accounts, or prod + staging). List multiple names under `targets:` — octorules plans and applies independently for each. Requires explicit `class:` since auto-discovery can't distinguish two instances of the same provider. See [`examples/config.yaml`](examples/config.yaml) for a commented example.
 
 #### Provider auto-discovery
 
@@ -158,32 +111,7 @@ Create a rules file for each zone. The filename must match the zone name used as
 
 The mapping is: `zones.<name>` in `config.yaml` → `rules/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID.
 
-```yaml
-# rules/example.com.yaml
-redirect_rules:
-  - ref: blog-redirect
-    description: "Redirect /blog to blog subdomain"
-    expression: 'starts_with(http.request.uri.path, "/blog/")'
-    action_parameters:
-      from_value:
-        target_url:
-          expression: 'concat("https://blog.example.com", http.request.uri.path)'
-        status_code: 301
-
-cache_rules:
-  - ref: cache-static-assets
-    description: "Cache static assets for 24h"
-    expression: 'http.request.uri.path.extension in {"jpg" "png" "css" "js"}'
-    action_parameters:
-      cache: true
-      edge_ttl:
-        mode: override_origin
-        default: 86400
-```
-
-Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`.
-
-Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation for details.
+Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`. Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation and the [`examples/rules/`](examples/rules/) directory for complete per-provider examples.
 
 #### Rule-level metadata
 
@@ -365,61 +293,17 @@ Both default to no-op (pass-through). Processors run in the order listed. The `c
 
 octorules ships three ready-to-use processors in `octorules.processor.filters`:
 
-**PhaseFilter** — include or exclude phases by name:
+| Filter | Description |
+|--------|-------------|
+| **PhaseFilter** | Include or exclude phases by name (`include`/`exclude` lists) |
+| **RefFilter** | Include or exclude rules by regex on the `ref` field |
+| **ChangeTypeFilter** | Block specific change types: `ADD`, `REMOVE`, `MODIFY`, `REORDER` |
 
-```yaml
-processors:
-  waf_only:
-    class: octorules.processor.filters.PhaseFilter
-    include:
-      - waf_custom_rules
-      - waf_managed_rules
-      - rate_limiting_rules
-```
-
-**RefFilter** — include or exclude rules by regex on the `ref` field:
-
-```yaml
-processors:
-  skip_test_rules:
-    class: octorules.processor.filters.RefFilter
-    exclude: "^test-"
-```
-
-**ChangeTypeFilter** — block specific change types (safety guard):
-
-```yaml
-processors:
-  no_deletes:
-    class: octorules.processor.filters.ChangeTypeFilter
-    exclude:
-      - REMOVE
-```
-
-Valid change types: `ADD`, `REMOVE`, `MODIFY`, `REORDER`.
+See [`examples/config.yaml`](examples/config.yaml) for working examples of all three.
 
 ## Zone discovery
 
-Zones can be discovered automatically from providers that support it (declared via `SUPPORTS_ZONE_DISCOVERY`). Use the `'*'` wildcard as a zone template:
-
-```yaml
-zones:
-  '*':
-    sources:
-      - rules
-    targets:
-      - cloudflare
-
-  # Explicit zones override discovered ones
-  special.com:
-    sources:
-      - rules
-    targets:
-      - cloudflare
-    always_dry_run: true
-```
-
-At init time, octorules calls `list_zones()` on target providers that support discovery, then expands the template for each discovered zone that has a matching YAML rules file in the rules directory. Explicit zone configs always take precedence.
+Zones can be discovered automatically from providers that support it. Use `'*'` as a zone template in your config — octorules calls `list_zones()` on target providers at init time and expands the template for each discovered zone that has a matching YAML rules file. Explicit zone configs always take precedence. See the wildcard entry in [`examples/config.yaml`](examples/config.yaml).
 
 ## Optional features
 
@@ -436,51 +320,29 @@ See each provider's documentation for feature details and YAML syntax.
 
 ## Linting
 
-`octorules lint` runs offline static analysis on your rules files — no API calls, no credentials needed. Lint rules are provider-registered; install a provider package to get its rules.
+`octorules lint` runs offline static analysis on your rules files — no API calls, no credentials needed. Lint rules are provider-registered; install a provider package to get its rules. See [`octorules lint`](#octorules-lint) in the CLI reference for flags and options.
 
-```bash
-# Lint all zones (text output)
-octorules lint
-
-# JSON output, only errors and warnings
-octorules lint --format json --severity warning
-
-# SARIF for GitHub Code Scanning
-octorules lint --format sarif --output results.sarif
-
-# CI mode: exit 1 on errors, 2 on warnings
-octorules lint --exit-code
-
-# Counts only (no details, CI-friendly)
-octorules lint --format summary
-```
-
-Suppression comments work like shellcheck. Both lint and audit directives use the `octorules:` prefix and are case-sensitive:
-
-```yaml
-  # octorules:disable=CF015
-  - ref: add-security-headers
-    expression: (true)
-```
-
-Multiple rule IDs can be comma-separated: `# octorules:disable=CF018, CF423`
+Suppression comments work like shellcheck — add `# octorules:disable=CF015` (comma-separated for multiple rules) before a rule to suppress specific findings. Audit findings use `# octorules:accept=ip-overlap`.
 
 ### Core lint rules
 
-These provider-agnostic rules always run, regardless of which provider packages are installed:
-
 | Rule | Severity | Description |
 |------|----------|-------------|
-| CORE001 | ERROR | Duplicate YAML key (silent data loss — last value wins) |
-| CORE002 | WARNING | Rules file in rules directory doesn't match any configured zone |
+| CORE002 | WARNING | Orphaned rules file (no matching zone in config) |
 | CORE003 | WARNING | All rules in a phase are disabled (2+ rules, all `enabled: false`) |
 | CORE004 | WARNING | Same `ref` string used in multiple phases within a zone |
-| CORE005 | WARNING | Safety `delete_threshold` is lower than `update_threshold` (config load) |
 | CORE006 | INFO | Rules file contains no actual rules (all phases empty) |
 
-CORE001 and CORE005 fire at config load time (before lint). The rest fire during `octorules lint`.
+Provider-specific rules (CF, WA, GA, AZ, BN prefixes) are documented in each provider's `docs/lint.md`.
 
-Provider-specific rules (CF, WA, GA prefixes) are documented in each provider's `docs/lint.md`.
+### Config validation (not lint rules)
+
+These checks run at config load time and emit log warnings or raise errors. They are **not** lint diagnostics — they cannot be suppressed with `# octorules:disable=...` and do not appear in lint output.
+
+| Check | Level | Description |
+|-------|-------|-------------|
+| Duplicate YAML key | ERROR | Raises `ConfigError` on duplicate keys (silent data loss — last value wins) |
+| Inverted safety thresholds | WARNING | Logs a warning when `delete_threshold` < `update_threshold` (deletes less restricted than updates) |
 
 ## CLI reference
 
@@ -529,15 +391,17 @@ octorules dump [--zone example.com] [--output-dir ./rules]
 
 ### `octorules lint`
 
-Lint rules files offline for errors, warnings, and style issues. Supports text, JSON, and SARIF output.
+Lint rules files offline for errors, warnings, and style issues. Supports text, JSON, SARIF, and summary output.
 
 ```bash
-octorules lint [--format text|json|sarif] [--severity error|warning|info] [--plan free|pro|business|enterprise] [--rule RULE_ID] [--output PATH] [--exit-code]
+octorules lint [FILE] [--config-only] [--format text|json|sarif] [--severity error|warning|info] [--plan free|pro|business|enterprise] [--rule RULE_ID] [--output PATH] [--exit-code]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--format` | Output format: `text` (default), `json`, `sarif` |
+| `FILE` | Lint a single rules file (no config needed). When omitted, uses the config file to discover all zones |
+| `--config-only` | Only validate config file structure (skip rules files) |
+| `--format` | Output format: `text` (default), `json`, `sarif`, `summary` |
 | `--severity` | Minimum severity to report (default: `info`) |
 | `--plan` | Plan tier for entitlement checks (default: `enterprise`) |
 
@@ -563,7 +427,7 @@ octorules audit [--check ...] [--severity error|warning|info] [--format text|jso
 |------|-------------|
 | `--check` | Only run specific check(s); can be repeated (default: all) |
 | `--severity` | Minimum severity to report (default: `info`) |
-| `--format` | Output format: `text` (default), `json` |
+| `--format` | Output format: `text` (default), `json`, `summary` |
 | `--output` | Write results to a file instead of stdout |
 | `--exit-code` | Exit with 1 on errors, 2 on warnings (for CI) |
 | `--cdn-timeout` | Timeout in seconds for CDN range API fetches (default: 15) |
@@ -596,11 +460,12 @@ octorules versions
 | Flag | Description |
 |------|-------------|
 | `--config PATH` | Path to config file (default: `config.yaml`) |
-| `--zone NAME` | Process a single zone (default: all) |
+| `--zone NAME` | Process only specified zone(s); can be repeated (default: all) |
 | `--phase NAME` | Limit to specific phase(s); can be repeated |
 | `--scope SCOPE` | Scope: `all` (default), `zones`, or `account` |
 | `--debug` | Enable debug logging |
 | `--quiet` | Suppress all informational stdout output (plan tables, lint results, audit findings). Only errors and the exit code are reported. File output (`--output`) is unaffected |
+| `--syslog ADDRESS` | Send logs to syslog (`host:port` for UDP, or `/path/to/socket`) |
 
 ### Environment variables
 
@@ -744,37 +609,7 @@ Safety features:
 
 #### How safety thresholds work
 
-Safety thresholds prevent accidental mass changes. When a plan would delete
-or update more than a configurable percentage of existing rules in any phase,
-the sync is blocked.
-
-- **`delete_threshold`** (default `30.0`) — maximum percentage of rules that
-  can be deleted in a single sync.  If a phase has 10 rules and the plan
-  deletes 4, that's 40% — above the default threshold.
-- **`update_threshold`** (default `30.0`) — same, for rule updates.
-- **`min_existing`** (default `3`) — thresholds only apply once a phase has
-  at least this many rules.  With fewer rules, any number of changes is
-  allowed (avoids blocking initial setup).
-
-Thresholds can be set per-provider or per-zone:
-
-```yaml
-providers:
-  cloudflare:
-    safety:
-      delete_threshold: 50.0   # allow up to 50% deletions
-      update_threshold: 30.0
-      min_existing: 5
-
-zones:
-  example.com:
-    safety:
-      delete_threshold: 10.0   # stricter for this zone
-```
-
-When a threshold is exceeded, octorules exits with an error explaining which
-phase exceeded the limit and by how much.  To override, either raise the
-threshold or use `--force`.
+Safety thresholds prevent accidental mass changes. When a plan would delete or update more than a configurable percentage of existing rules in any phase, the sync is blocked. Defaults: `delete_threshold: 30.0`, `update_threshold: 30.0`, `min_existing: 3` (thresholds only apply once a phase has at least this many rules). Can be set per-provider or per-zone — see [Config reference](#config-reference). Override with `--force`.
 
 ### Troubleshooting
 
@@ -791,7 +626,7 @@ threshold or use `--force`.
 
 A provider is a Python package that:
 
-1. **Implements `BaseProvider`** — the `@runtime_checkable` Protocol in `octorules.provider.base` defining 26 methods + 4 properties.
+1. **Implements `BaseProvider`** — the `@runtime_checkable` Protocol in `octorules.provider.base` defining 19 methods + 4 properties.
 2. **Declares `SUPPORTS`** — a `frozenset[str]` of optional features (`custom_rulesets`, `lists`, `page_shield`, `zone_discovery`).
 3. **Registers phases** — calls `register_phases()` at import time with the provider's phase definitions. Each `Phase` can include a `prepare_rule` callable for provider-specific rule preparation (expression normalization, default fields, action injection). The core planner calls this hook — it contains no provider-specific logic itself.
 4. **Registers a linter plugin** — optional; provides provider-specific lint rules. Linters should only check their own phases (not phases owned by other providers).

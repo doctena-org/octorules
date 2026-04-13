@@ -972,7 +972,7 @@ class TestDuplicateYamlKeys:
 
 
 class TestSafetyThresholdSanity:
-    """CORE005: Warn when delete_threshold < update_threshold."""
+    """Warn when delete_threshold < update_threshold."""
 
     def test_inverted_thresholds_warns(self, tmp_path, caplog):
         config_file = tmp_path / "config.yaml"
@@ -984,7 +984,7 @@ class TestSafetyThresholdSanity:
         assert "less restricted" in caplog.text
 
     def test_zone_level_inverted_thresholds_warns(self, tmp_path, caplog):
-        """CORE005 also fires for zone-level safety thresholds."""
+        """Also fires for zone-level safety thresholds."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             _cfg(extra_zone="    safety:\n      delete_threshold: 5\n      update_threshold: 40\n")

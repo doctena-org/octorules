@@ -165,6 +165,16 @@ zones:
     targets:
       - bunny
 
+  # Multi-target — same zone deployed to two Cloudflare accounts.
+  # Each target produces its own plan.  Requires explicit "class:" since
+  # auto-discovery can't distinguish two instances of the same provider.
+  # staging.example.com:
+  #   sources:
+  #     - rules
+  #   targets:
+  #     - cf-prod
+  #     - cf-staging
+
   # Wildcard — auto-discover zones from providers that support it.
   # Creates a zone for every provider-discovered zone that has a matching
   # rules/<zone>.yaml file.
@@ -172,3 +182,16 @@ zones:
     sources:
       - rules
     allow_unmanaged: false
+
+# ---------------------------------------------------------------------------
+# YAML includes — split large configs with !include directives
+# ---------------------------------------------------------------------------
+# Includes resolve relative to the file containing the directive.
+# Nested includes and circular include detection are supported.
+#
+#   zones:
+#     example.com: !include zones/example.yaml
+#
+# In rule files:
+#
+#   redirect_rules: !include shared/redirects.yaml
