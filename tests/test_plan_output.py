@@ -42,15 +42,15 @@ class TestPlanOutput:
     def test_run_calls_print_plan(self, capsys):
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
         PlanOutput("test", fmt="text").run([zp])
-        assert "No changes detected" in capsys.readouterr().out
+        assert "No changes detected" in capsys.readouterr().err
 
 
 class TestPlanText:
     def test_writes_stdout_no_changes(self, capsys):
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
         PlanText("text").run([zp])
-        out = capsys.readouterr().out
-        assert "No changes detected" in out
+        captured = capsys.readouterr()
+        assert "No changes detected" in captured.err
 
     def test_writes_stdout_with_changes(self, capsys):
         zp = _zone_with_changes()

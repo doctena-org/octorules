@@ -2421,8 +2421,8 @@ class TestEmitPlanOutputs:
         zp = ZonePlan(zone_name="example.com", phase_plans=[])
         result = _emit_plan_outputs(sample_config, [zp])
         assert result is True
-        out = capsys.readouterr().out
-        assert "No changes detected" in out
+        captured = capsys.readouterr()
+        assert "No changes detected" in captured.err
 
     def test_file_output(self, sample_config, tmp_path):
         """PlanOutput with path → file written."""

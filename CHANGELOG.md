@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.3] - 2026-04-14
+
+### Fixed
+- Audit summary: removed spurious blank line before summary, standardized
+  zero-case wording to "0 issue(s) found" (was "no issues found").
+- Plan summary: moved to stderr (consistent with lint/audit), removed
+  trailing blank line after last zone diff.
+
 ## [0.25.2] - 2026-04-13
 
 ### Fixed

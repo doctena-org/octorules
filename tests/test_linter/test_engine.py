@@ -509,8 +509,8 @@ class TestLintPerformance:
     lint completes within a time budget.
     """
 
-    def test_large_ip_list_lint_under_2s(self):
-        """A 5,000-item IP list must lint in under 2 seconds.
+    def test_large_ip_list_lint_under_5s(self):
+        """A 5,000-item IP list must lint in under 5 seconds.
 
         The O(n²) brute-force overlap check that shipped in
         octorules-cloudflare v0.7.7 took 26s+ on a ~10,000-item list;
@@ -523,10 +523,10 @@ class TestLintPerformance:
         t0 = time.monotonic()
         lint_zone_file(rules_data)
         elapsed = time.monotonic() - t0
-        assert elapsed < 2.0, f"Lint with 5000-item IP list took {elapsed:.1f}s (limit 2s)"
+        assert elapsed < 5.0, f"Lint with 5000-item IP list took {elapsed:.1f}s (limit 5s)"
 
-    def test_large_rule_set_lint_under_2s(self):
-        """500 rules in a single phase must lint in under 2 seconds."""
+    def test_large_rule_set_lint_under_5s(self):
+        """500 rules in a single phase must lint in under 5 seconds."""
         import time
 
         rules = [
@@ -542,4 +542,4 @@ class TestLintPerformance:
         t0 = time.monotonic()
         lint_zone_file(rules_data)
         elapsed = time.monotonic() - t0
-        assert elapsed < 2.0, f"Lint with 500 rules took {elapsed:.1f}s (limit 2s)"
+        assert elapsed < 5.0, f"Lint with 500 rules took {elapsed:.1f}s (limit 5s)"

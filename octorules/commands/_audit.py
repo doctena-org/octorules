@@ -155,14 +155,10 @@ def cmd_audit(
     )
     if not is_quiet():
         summary_parts: list[str] = []
-        if visible_count:
-            summary_parts.append(f"{visible_count} issue(s) found")
+        summary_parts.append(f"{visible_count} issue(s) found")
         if total_suppressed:
             summary_parts.append(f"{total_suppressed} suppressed")
-        if summary_parts:
-            print(f"\nAudit: {', '.join(summary_parts)}.", file=sys.stderr)
-        else:
-            print("\nAudit: no issues found.", file=sys.stderr)
+        print(f"Audit: {', '.join(summary_parts)}.", file=sys.stderr)
 
     # Exit code logic (mirrors linter).
     if exit_code:

@@ -693,17 +693,23 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
     p = Pen(use_color)
     total_changes = _total_changes(zone_plans)
 
-    for zp in zone_plans:
-        if not zp.has_changes:
-            continue
+    changed = [zp for zp in zone_plans if zp.has_changes]
+    for i, zp in enumerate(changed):
         print(format_zone_plan(zp, use_color), file=file)
-        print(file=file)
+        # Blank line between zones, but not after the last one.
+        if i < len(changed) - 1:
+            print(file=file)
 
+    # Summary goes to stderr when printing to terminal (consistent with
+    # lint/audit), but stays in the file when writing to a plan output.
+    summary_file = sys.stderr if file is sys.stdout else file
+    if summary_file is sys.stderr:
+        file.flush()  # Ensure zone diffs appear before summary
     if total_changes == 0:
-        print(p.muted("No changes detected."), file=file)
+        print(p.muted("No changes detected."), file=summary_file)
     else:
         summary = f"Total: {total_changes} change(s) across {len(zone_plans)} zone(s)."
-        print(p.header(summary), file=file)
+        print(p.header(summary), file=summary_file)
 
 
 def build_report_data(
