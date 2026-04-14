@@ -394,41 +394,71 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# Shared logging state — stored by _setup_logging, used by
+# configure_provider_logging to extend to late-imported providers.
+_log_handler: logging.Handler | None = None
+_log_level: int = logging.INFO
+_configured_names: set[str] = set()
+
+
+def configure_provider_logging() -> None:
+    """Configure loggers for any octorules_* packages imported since the last call.
+
+    Called after provider modules are imported (e.g. after
+    ``_init_providers`` or ``_discover_provider_modules``) to ensure
+    their loggers inherit the level and handler set by ``_setup_logging``.
+    """
+    if _log_handler is None:
+        return
+    for mod_name in sys.modules:
+        if (
+            mod_name.startswith("octorules")
+            and "." not in mod_name
+            and mod_name not in _configured_names
+        ):
+            logger = logging.getLogger(mod_name)
+            logger.setLevel(_log_level)
+            if _log_handler not in logger.handlers:
+                logger.addHandler(_log_handler)
+            _configured_names.add(mod_name)
+
+
 def _setup_logging(
     *, debug: bool = False, quiet: bool = False, syslog_address: str | None = None
 ) -> None:
-    """Configure the octorules logger."""
+    """Configure logging for octorules.
+
+    Sets up a shared handler on stderr with colored output.  Only
+    configures loggers for packages already in ``sys.modules`` — call
+    ``configure_provider_logging()`` after importing provider modules
+    to extend logging to them.
+    """
+    global _log_handler, _log_level
+
     if debug:
-        level = logging.DEBUG
+        _log_level = logging.DEBUG
     elif quiet:
-        level = logging.WARNING
+        _log_level = logging.WARNING
     else:
-        level = logging.INFO
-    # Configure the core logger with a handler, then set the level on all
-    # octorules_* provider loggers so __name__-based loggers propagate output.
-    # Discovers provider loggers from sys.modules (already imported by entry-
-    # point discovery) instead of scanning installed packages — avoids the
-    # ~130ms cost of importlib.metadata.packages_distributions().
+        _log_level = logging.INFO
+
     from octorules._color import ColoredFormatter, supports_color
 
-    handler = logging.StreamHandler(sys.stderr)
-    handler.setFormatter(ColoredFormatter(use_color=supports_color(sys.stderr)))
+    if _log_handler is None:
+        _log_handler = logging.StreamHandler(sys.stderr)
+        _log_handler.setFormatter(ColoredFormatter(use_color=supports_color(sys.stderr)))
 
-    names = {"octorules"}
-    for mod_name in sys.modules:
-        if mod_name.startswith("octorules_") and "." not in mod_name:
-            names.add(mod_name)
+    # Configure all currently-known octorules loggers.
+    configure_provider_logging()
 
-    for name in sorted(names):
+    # Update levels on already-configured loggers (handles second call).
+    for name in _configured_names:
         logger = logging.getLogger(name)
-        logger.setLevel(level)
-        if not logger.handlers:
-            logger.addHandler(handler)
-        else:
-            for h in logger.handlers:
-                h.setLevel(level)
+        logger.setLevel(_log_level)
+        for h in logger.handlers:
+            h.setLevel(_log_level)
 
-    # Attach syslog handler to the same loggers discovered above.
+    # Attach syslog handler if requested.
     if syslog_address:
         from logging.handlers import SysLogHandler
 
@@ -440,7 +470,7 @@ def _setup_logging(
                 address = syslog_address
             syslog_handler = SysLogHandler(address=address)
             syslog_handler.setFormatter(logging.Formatter("octorules: %(message)s"))
-            for name in sorted(names):
+            for name in _configured_names:
                 logging.getLogger(name).addHandler(syslog_handler)
         except (OSError, ValueError) as e:
             logging.getLogger("octorules").warning(

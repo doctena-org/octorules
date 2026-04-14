@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.25.4] - 2026-04-14
+
+### Fixed
+- Provider loggers (e.g. `octorules_cloudflare._leaked_credentials`) were not
+  configured when providers were imported after `_setup_logging`. Added
+  `configure_provider_logging()` called after provider import to extend
+  logging to late-discovered modules.
+
 ## [0.25.3] - 2026-04-14
 
 ### Fixed

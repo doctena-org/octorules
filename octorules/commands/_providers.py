@@ -70,6 +70,11 @@ def _discover_provider_modules() -> None:
             # is loaded in a process that already registered the same phases.
             log.warning("Failed to load provider entry-point %s: %s", ep.name, e)
 
+    # Extend logging to newly-imported provider packages.
+    from octorules.cli import configure_provider_logging
+
+    configure_provider_logging()
+
 
 def _resolve_provider_class(name: str, class_path: str | None) -> type:
     """Determine the provider class for a named provider.
@@ -181,6 +186,11 @@ def _init_providers(
             pkg = cls.__module__.split(".")[0]
             importlib.import_module(pkg)
         providers[name] = cls(**pc.kwargs)
+
+    # Extend logging to newly-imported provider packages.
+    from octorules.cli import configure_provider_logging
+
+    configure_provider_logging()
 
     _validate_multi_target(config, providers)
     _discover_zones(config, providers)
