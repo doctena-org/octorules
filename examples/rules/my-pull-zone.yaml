@@ -1,12 +1,13 @@
 # Bunny Shield rules for pull zone "my-pull-zone"
 #
 # Bunny Shield provides custom WAF rules, rate limiting, access lists,
-# managed rule overrides, and shield-level configuration (bot detection,
-# DDoS sensitivity).
+# edge rules, managed rule overrides, shield-level configuration
+# (bot detection, DDoS sensitivity), and pull zone security settings.
 #
 # Phases: bunny_waf_custom_rules, bunny_waf_rate_limit_rules,
 #         bunny_waf_access_list_rules, bunny_edge_rules
-# Non-phase keys: bunny_waf_managed_rules, bunny_shield_config
+# Non-phase keys: bunny_waf_managed_rules, bunny_shield_config,
+#                 bunny_pullzone_security
 
 # ---------------------------------------------------------------------------
 # Custom Rules — condition-based WAF rules
@@ -40,13 +41,11 @@ bunny_waf_custom_rules:
     description: "Block known vulnerability scanners"
     conditions:
       - variable: request_headers
-        variable_value: user-agent
-        operator: contains
-        value: sqlmap
-      - variable: request_headers
-        variable_value: user-agent
-        operator: contains
-        value: nikto
+        variable_value: User-Agent
+        operator: rx
+        value: "(sqlmap|nikto|nmap)"
+    transformations:
+      - lowercase
 
   - ref: "Allow health checks"
     action: allow
@@ -57,21 +56,13 @@ bunny_waf_custom_rules:
         operator: begins_with
         value: /health
 
-  - ref: "Block large uploads"
-    action: block
-    severity: warning
-    description: "Reject requests larger than 10MB"
-    conditions:
-      - variable: request_body_length
-        operator: gt
-        value: 10485760
-
 # ---------------------------------------------------------------------------
 # Rate-Limit Rules — time-window based throttling
 # ---------------------------------------------------------------------------
 bunny_waf_rate_limit_rules:
   - ref: "API rate limit"
     action: block
+    severity: warning
     request_count: 100
     timeframe: 1m             # 1s, 10s, 1m, 5m, 15m, 1h
     block_time: 5m            # 30s, 1m, 5m, 15m, 30m, 1h
@@ -84,6 +75,7 @@ bunny_waf_rate_limit_rules:
 
   - ref: "Login brute force"
     action: block
+    severity: warning
     request_count: 10
     timeframe: 1m
     block_time: 15m
@@ -91,17 +83,15 @@ bunny_waf_rate_limit_rules:
     description: "Block login brute force"
     conditions:
       - variable: request_uri
-        operator: eq
+        operator: str_eq
         value: "/auth/login"
-      - variable: request_method
-        operator: eq
-        value: POST
 
 # ---------------------------------------------------------------------------
 # Access List Rules — IP/CIDR/country/ASN/JA4 allow/block lists
 # ---------------------------------------------------------------------------
+# Access list refs are descriptive names (not numeric IDs).
 bunny_waf_access_list_rules:
-  - ref: "100"
+  - ref: office-ips
     type: ip                  # ip, cidr, asn, country, organization, ja4
     action: allow
     enabled: true
@@ -110,7 +100,7 @@ bunny_waf_access_list_rules:
       10.0.0.2
       172.16.0.1
 
-  - ref: "200"
+  - ref: blocked-ranges
     type: cidr
     action: block
     enabled: true
@@ -118,7 +108,7 @@ bunny_waf_access_list_rules:
       198.51.100.0/24
       203.0.113.0/24
 
-  - ref: "300"
+  - ref: blocked-countries
     type: country
     action: block
     enabled: true
@@ -126,21 +116,11 @@ bunny_waf_access_list_rules:
       KP
       IR
 
-  - ref: "400"
+  - ref: blocked-asns
     type: asn
     action: block
     enabled: true
     content: "12345"
-
-# ---------------------------------------------------------------------------
-# Managed Rule Overrides — disable or set log-only on built-in rules
-# ---------------------------------------------------------------------------
-bunny_waf_managed_rules:
-  disabled:
-    - "941100"                # XSS via libinjection
-    - "942100"                # SQLi via libinjection
-  log_only:
-    - "941110"                # XSS filter (log but don't block)
 
 # ---------------------------------------------------------------------------
 # Edge Rules — CDN-level request/response manipulation
@@ -205,16 +185,87 @@ bunny_edge_rules:
           - "GET"
 
 # ---------------------------------------------------------------------------
-# Shield Config — bot detection and DDoS knobs
+# Managed Rule Overrides — disable or set log-only on built-in rules
+# ---------------------------------------------------------------------------
+bunny_waf_managed_rules:
+  disabled:
+    - "941100"                # XSS via libinjection
+    - "942100"                # SQLi via libinjection
+  log_only:
+    - "941110"                # XSS filter (log but don't block)
+
+# ---------------------------------------------------------------------------
+# Shield Config — bot detection, DDoS, WAF settings, upload scanning
 # ---------------------------------------------------------------------------
 bunny_shield_config:
   bot_detection:
-    execution_mode: block     # off, log, block
+    execution_mode: log       # off, log, block
     request_integrity_sensitivity: medium  # off, low, medium, high
     ip_sensitivity: low
     fingerprint_sensitivity: high
-    complex_fingerprinting: true
+    complex_fingerprinting: false
+    fingerprint_aggression: 1        # Aggression level (int)
   ddos:
     shield_sensitivity: medium
-    execution_mode: block
+    execution_mode: log
     challenge_window: 300
+  waf:
+    enabled: true                    # Master WAF on/off switch
+    execution_mode: block            # log or block (requires learning_mode: false)
+    learning_mode: false
+    request_body_limit_action: 1     # 0=block, 1=log, 2=ignore
+    response_body_limit_action: 2
+    whitelabel_response_pages: true  # Remove bunny.net branding from block pages
+    realtime_threat_intelligence_enabled: false
+    profile_id: 2                    # WAF profile ID (use octorules dump to discover)
+    request_header_logging_enabled: true
+    request_ignored_headers:
+      - Authorization
+      - Cookie
+      - Credential
+      - Signature
+    # engine_config: []              # Advanced: override WAF engine settings
+  upload_scanning:
+    enabled: true
+    csam_scanning_mode: 1          # 0=off, 1=enabled
+    antivirus_scanning_mode: 1     # 0=off, 1=enabled
+
+# ---------------------------------------------------------------------------
+# Curated Threat Lists — Bunny-managed threat intelligence feeds
+# ---------------------------------------------------------------------------
+# Enable/disable and set the action for Bunny's managed access lists.
+# List names come from the Bunny dashboard (use octorules dump to discover).
+# Available lists depend on your Shield tier (Advanced: 6, Business: 15).
+bunny_curated_threat_lists:
+  VPN Providers:
+    enabled: true
+    action: block
+  TOR Exit Nodes:
+    enabled: true
+    action: challenge
+  Common Datacenters:
+    enabled: false
+  AbuseIPDB:
+    enabled: true
+    action: log
+  FireHOL L1:
+    enabled: true
+    action: block
+
+# ---------------------------------------------------------------------------
+# Pull Zone Security — CDN-level security settings
+# ---------------------------------------------------------------------------
+bunny_pullzone_security:
+  blocked_ips:
+    - "198.51.100.99"
+  blocked_countries: []
+  blocked_referrers: []
+  allowed_referrers: []
+  block_post_requests: false
+  block_root_path_access: false
+  enable_token_authentication: false
+  token_auth_include_ip: false
+  block_none_referrer: false
+  cors_enabled: false
+  cors_extensions: []
+  logging_ip_anonymization_type: 1  # 0=none, 1=one octet, 2=two octets

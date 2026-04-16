@@ -1,8 +1,8 @@
 # octorules — Bunny Shield configuration
 #
 # Manages Bunny.net Shield WAF rules (custom rules, rate-limit rules,
-# access lists) plus managed rule overrides and shield config (bot
-# detection, DDoS settings).
+# access lists, edge rules) plus managed rule overrides, shield config
+# (bot detection, DDoS settings), and pull zone security.
 #
 # Install:  pip install octorules-bunny
 #
@@ -11,6 +11,7 @@
 providers:
   bunny:
     api_key: env/BUNNY_API_KEY   # Required (or set $BUNNY_API_KEY)
+    plan: advanced               # free or advanced (for plan-aware lint)
     timeout: 30.0                # HTTP timeout (default: 30)
     max_retries: 2               # HTTP retry count (default: 2)
     safety:
@@ -30,3 +31,5 @@ zones:
   my-pull-zone:
     sources:
       - rules
+    targets:
+      - bunny
