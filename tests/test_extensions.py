@@ -5,7 +5,11 @@ from unittest.mock import MagicMock
 import pytest
 
 from octorules.extensions import (
+    _apply_extensions,
+    _audit_extensions,
+    _dump_extensions,
     _plan_zone_hooks,
+    _validate_extensions,
     _validate_hook_signature,
     call_audit_extensions,
     call_plan_zone_finalize,
@@ -87,7 +91,8 @@ class TestPlanZoneHookPrefetch:
                 unregister_plan_zone_hook(pf, fn)
 
     def test_unregister_nonexistent_hook_is_noop(self):
-        """Unregistering a hook that was never registered doesn't raise."""
+        """Unregistering a hook that was never registered doesn't raise and
+        leaves the registry unchanged."""
 
         # Cannot use lambdas with wrong param names — use proper signatures
         def sentinel_pre(all_desired, scope, provider):
@@ -96,8 +101,10 @@ class TestPlanZoneHookPrefetch:
         def sentinel_fin(zp, all_desired, scope, provider, ctx):
             return None
 
-        # Should not raise
-        unregister_plan_zone_hook(sentinel_pre, sentinel_fin)
+        before = list(_plan_zone_hooks)
+        unregister_plan_zone_hook(sentinel_pre, sentinel_fin)  # Should not raise
+        assert (sentinel_pre, sentinel_fin) not in _plan_zone_hooks
+        assert _plan_zone_hooks == before
 
     def test_finalize_exception_propagates(self):
         """Exception in finalize hook propagates correctly."""
@@ -211,7 +218,7 @@ class TestHookSignatureValidation:
     """Tests for _validate_hook_signature and registration-time validation."""
 
     def test_valid_prefetch_hook_accepted(self):
-        """Prefetch hook with correct signature is accepted."""
+        """Prefetch hook with correct signature is accepted and registered."""
 
         def my_prefetch(all_desired, scope, provider):
             return None
@@ -220,7 +227,9 @@ class TestHookSignatureValidation:
             pass
 
         register_plan_zone_hook(my_prefetch, my_finalize)
+        assert (my_prefetch, my_finalize) in _plan_zone_hooks
         unregister_plan_zone_hook(my_prefetch, my_finalize)
+        assert (my_prefetch, my_finalize) not in _plan_zone_hooks
 
     def test_invalid_prefetch_hook_rejected(self):
         """Prefetch hook with wrong parameter names raises TypeError."""
@@ -247,7 +256,7 @@ class TestHookSignatureValidation:
             register_plan_zone_hook(ok_prefetch, bad_finalize)
 
     def test_extra_kwargs_accepted(self):
-        """Hook with **kwargs is accepted (forward-compatible)."""
+        """Hook with **kwargs is accepted (forward-compatible) and registered."""
 
         def my_prefetch(all_desired, scope, provider, **kwargs):
             return None
@@ -256,10 +265,12 @@ class TestHookSignatureValidation:
             pass
 
         register_plan_zone_hook(my_prefetch, my_finalize)
+        assert (my_prefetch, my_finalize) in _plan_zone_hooks
         unregister_plan_zone_hook(my_prefetch, my_finalize)
+        assert (my_prefetch, my_finalize) not in _plan_zone_hooks
 
     def test_extra_args_accepted(self):
-        """Hook with *args is accepted (ignored in validation)."""
+        """Hook with *args is accepted (ignored in validation) and registered."""
 
         def my_prefetch(all_desired, scope, provider, *args):
             return None
@@ -268,7 +279,9 @@ class TestHookSignatureValidation:
             pass
 
         register_plan_zone_hook(my_prefetch, my_finalize)
+        assert (my_prefetch, my_finalize) in _plan_zone_hooks
         unregister_plan_zone_hook(my_prefetch, my_finalize)
+        assert (my_prefetch, my_finalize) not in _plan_zone_hooks
 
     def test_wrong_param_names_same_count_rejected(self):
         """Hook with wrong param names (even if count matches) is rejected."""
@@ -298,13 +311,15 @@ class TestHookSignatureValidation:
             register_apply_extension("test_bad", bad_apply)
 
     def test_valid_apply_extension_accepted(self):
-        """Apply extension with correct signature is accepted."""
+        """Apply extension with correct signature is accepted and registered."""
 
         def ok_apply(zp, plans, scope, provider):
             return [], None
 
         register_apply_extension("test_ok_apply", ok_apply)
+        assert _apply_extensions.get("test_ok_apply") is ok_apply
         unregister_apply_extension("test_ok_apply")
+        assert "test_ok_apply" not in _apply_extensions
 
     def test_validate_extension_validation(self):
         """Validate extension validates signature at registration."""
@@ -316,13 +331,15 @@ class TestHookSignatureValidation:
             register_validate_extension(bad_validate)
 
     def test_valid_validate_extension_accepted(self):
-        """Validate extension with correct signature is accepted."""
+        """Validate extension with correct signature is accepted and registered."""
 
         def ok_validate(desired, zone_name, errors, lines):
             pass
 
         register_validate_extension(ok_validate)
+        assert ok_validate in _validate_extensions
         unregister_validate_extension(ok_validate)
+        assert ok_validate not in _validate_extensions
 
     def test_dump_extension_validation(self):
         """Dump extension validates signature at registration."""
@@ -334,13 +351,15 @@ class TestHookSignatureValidation:
             register_dump_extension(bad_dump)
 
     def test_valid_dump_extension_accepted(self):
-        """Dump extension with correct signature is accepted."""
+        """Dump extension with correct signature is accepted and registered."""
 
         def ok_dump(scope, provider, out_dir):
             return None
 
         register_dump_extension(ok_dump)
+        assert ok_dump in _dump_extensions
         unregister_dump_extension(ok_dump)
+        assert ok_dump not in _dump_extensions
 
     def test_audit_extension_validation(self):
         """Audit extension validates signature at registration."""
@@ -352,13 +371,15 @@ class TestHookSignatureValidation:
             register_audit_extension("test_bad", bad_audit)
 
     def test_valid_audit_extension_accepted(self):
-        """Audit extension with correct signature is accepted."""
+        """Audit extension with correct signature is accepted and registered."""
 
         def ok_audit(rules_data, phase_name):
             return []
 
         register_audit_extension("test_ok_audit", ok_audit)
+        assert _audit_extensions.get("test_ok_audit") is ok_audit
         unregister_audit_extension("test_ok_audit")
+        assert "test_ok_audit" not in _audit_extensions
 
     def test_error_message_includes_qualname(self):
         """Error message includes the function's qualified name."""

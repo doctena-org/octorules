@@ -954,7 +954,10 @@ class TestDuplicateYamlKeys:
     def test_no_duplicate_keys_ok(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
-        Config.from_file(config_file)  # Should not raise
+        config = Config.from_file(config_file)
+        # Populated: providers and zones should be non-empty given _cfg().
+        assert config.providers
+        assert config.zones
 
     def test_nested_duplicate_key_raises(self, tmp_path):
         """Duplicate keys inside a nested mapping are also caught."""

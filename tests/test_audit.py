@@ -886,8 +886,12 @@ class TestAuditExtensionRegistry:
         assert "test" not in _audit_extensions
 
     def test_unregister_nonexistent(self):
-        """Unregistering non-existent extension doesn't raise."""
+        """Unregistering non-existent extension doesn't raise and leaves
+        the registry unchanged."""
+        before = dict(_audit_extensions)
         unregister_audit_extension("does_not_exist")
+        assert "does_not_exist" not in _audit_extensions
+        assert _audit_extensions == before
 
 
 # ---------------------------------------------------------------------------

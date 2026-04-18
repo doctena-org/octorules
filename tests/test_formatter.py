@@ -368,7 +368,11 @@ class TestFormatPlanJson:
     def test_valid_json(self):
         zp = ZonePlan("example.com")
         result = format_plan_json([zp])
-        json.loads(result)  # Should not raise
+        data = json.loads(result)
+        assert isinstance(data, dict)
+        assert data["zones"] == []  # empty plan → empty zones array
+        assert data["total_changes"] == 0
+        assert data["has_changes"] is False
 
     def test_modify_has_current_and_desired(self):
         pp = PhasePlan(
