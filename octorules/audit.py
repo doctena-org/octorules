@@ -653,6 +653,14 @@ _FINDING_SEVERITY_PEN_METHOD = {
 }
 
 
+def _filter_findings_by_severity(
+    findings: list[AuditFinding], min_severity: FindingSeverity
+) -> list[AuditFinding]:
+    """Return only the findings at or above *min_severity*."""
+    max_rank = _SEVERITY_RANK[min_severity]
+    return [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+
+
 def format_findings(
     findings: list[AuditFinding],
     *,
@@ -668,8 +676,7 @@ def format_findings(
     from octorules._color import Pen
 
     p = Pen(use_color)
-    max_rank = _SEVERITY_RANK[min_severity]
-    filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+    filtered = _filter_findings_by_severity(findings, min_severity)
     if not filtered:
         return ""
 
@@ -703,8 +710,7 @@ def format_findings_json(
     min_severity: FindingSeverity = FindingSeverity.INFO,
 ) -> str:
     """Format findings as JSON."""
-    max_rank = _SEVERITY_RANK[min_severity]
-    filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+    filtered = _filter_findings_by_severity(findings, min_severity)
     data = [
         {
             "check": f.check,
@@ -726,8 +732,7 @@ def format_findings_summary(
     **_kwargs,
 ) -> str:
     """Format findings as a one-line summary (counts only)."""
-    max_rank = _SEVERITY_RANK[min_severity]
-    filtered = [f for f in findings if _SEVERITY_RANK[f.severity] <= max_rank]
+    filtered = _filter_findings_by_severity(findings, min_severity)
     by_check: dict[str, int] = {}
     for f in filtered:
         by_check[f.check] = by_check.get(f.check, 0) + 1
