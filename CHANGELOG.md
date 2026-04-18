@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] - 2026-04-18
+
+### Added
+- New public module `octorules.reserved_ips` with `RESERVED_NETWORKS`
+  (28 entries: RFC 1918 private, loopback, link-local, CGNAT,
+  documentation, multicast, etc.) and `is_reserved(ip_str)`. Providers
+  delegate their reserved/bogon-IP checks here so the list is
+  maintained in one place.
+- New public module `octorules.registration` with
+  `@idempotent_registration` — a thread-safe decorator for zero-arg
+  registration functions that may be invoked multiple times (tests,
+  entry-point discovery, explicit imports). Serializes concurrent
+  first calls under a per-function Lock.
+
 ## [0.25.4] - 2026-04-14
 
 ### Fixed

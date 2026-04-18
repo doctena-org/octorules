@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +27,7 @@ from octorules.cli import (
     cmd_plan,
     cmd_sync,
     cmd_versions,
+    configure_provider_logging,
     main,
 )
 from octorules.config import Config, ConfigError, ProviderConfig, ZoneConfig
@@ -2010,6 +2013,67 @@ class TestSetupLoggingMultipleCalls:
         assert logger.level == logging.WARNING
         for h in logger.handlers:
             assert h.level == logging.WARNING
+
+
+class TestConfigureProviderLogging:
+    # Regression for v0.25.4: provider modules imported *after* _setup_logging
+    # runs had no handler and kept the root logger's default level. The fix
+    # added configure_provider_logging(), called from _discover_provider_modules
+    # and _init_providers after each late import batch.
+
+    @pytest.fixture(autouse=True)
+    def _isolate_late_module(self):
+        # Use a unique name each test so parallel runs / repeat runs don't
+        # collide on the cached _configured_names set.
+        name = f"octorules_regtest_{id(self)}"
+        yield name
+        sys.modules.pop(name, None)
+        # Also purge from the cli module's internal state so later tests
+        # don't see a stale entry.
+        from octorules import cli as cli_mod
+
+        cli_mod._configured_names.discard(name)
+        logger = logging.getLogger(name)
+        logger.handlers.clear()
+        logger.setLevel(logging.NOTSET)
+
+    def test_late_imported_provider_gets_handler_and_level(self, _isolate_late_module):
+        name = _isolate_late_module
+        _setup_logging(debug=True)
+        sys.modules[name] = types.ModuleType(name)
+        configure_provider_logging()
+        logger = logging.getLogger(name)
+        assert logger.level == logging.DEBUG
+        assert len(logger.handlers) >= 1
+
+    def test_configure_is_idempotent(self, _isolate_late_module):
+        name = _isolate_late_module
+        _setup_logging(debug=True)
+        sys.modules[name] = types.ModuleType(name)
+        configure_provider_logging()
+        handler_count = len(logging.getLogger(name).handlers)
+        configure_provider_logging()
+        configure_provider_logging()
+        assert len(logging.getLogger(name).handlers) == handler_count
+
+    def test_configure_without_setup_logging_is_noop(self, _isolate_late_module):
+        # If _setup_logging was never called, configure_provider_logging has
+        # no handler to attach and must not error or half-configure.
+        name = _isolate_late_module
+        from octorules import cli as cli_mod
+
+        cli_mod._log_handler = None  # reset to pre-setup state
+        sys.modules[name] = types.ModuleType(name)
+        configure_provider_logging()
+        logger = logging.getLogger(name)
+        assert logger.handlers == []
+
+    def test_quiet_then_late_import_honors_quiet_level(self, _isolate_late_module):
+        name = _isolate_late_module
+        _setup_logging(quiet=True)
+        sys.modules[name] = types.ModuleType(name)
+        configure_provider_logging()
+        assert logging.getLogger(name).level == logging.WARNING
 
 
 class TestFormatApiError:

@@ -1,6 +1,7 @@
 """Tests for the diff engine (planner)."""
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -883,6 +884,84 @@ class TestComputeChecksum:
         zp1 = self._make_zone_plan("test.com", [c1])
         zp2 = self._make_zone_plan("test.com", [c2])
         assert compute_checksum([zp1]) == compute_checksum([zp2])
+
+
+class TestComputeChecksumExtensionChanges:
+    # Regression for v0.25.2: compute_checksum assumed all plan changes had
+    # change_type/ref/phase (RuleChange shape). Extension change dataclasses
+    # (ZoneSecurityChange, BotManagementChange, UrlNormalizationChange,
+    # LeakedCredentialChange, ContentScanningChange) use field/current/desired
+    # instead and crashed the itemgetter("change_type", "ref") sort.
+
+    @staticmethod
+    def _ext_change(field, current=None, desired=None):
+        return SimpleNamespace(field=field, current=current, desired=desired)
+
+    @staticmethod
+    def _ext_plan(changes):
+        return SimpleNamespace(changes=list(changes))
+
+    def _zone_with_ext(self, zone_name, ext_name, changes):
+        return ZonePlan(
+            zone_name=zone_name,
+            extension_plans={ext_name: [self._ext_plan(changes)]},
+        )
+
+    def test_extension_change_does_not_crash(self):
+        zp = self._zone_with_ext(
+            "example.com",
+            "zone_security",
+            [self._ext_change("security_level", current="medium", desired="high")],
+        )
+        checksum = compute_checksum([zp])
+        assert len(checksum) == 64
+
+    def test_extension_change_deterministic(self):
+        changes = [
+            self._ext_change("security_level", current="medium", desired="high"),
+            self._ext_change("challenge_ttl", current=1800, desired=3600),
+        ]
+        zp = self._zone_with_ext("example.com", "zone_security", changes)
+        assert compute_checksum([zp]) == compute_checksum([zp])
+
+    def test_extension_change_order_irrelevant(self):
+        c_a = self._ext_change("security_level", current="medium", desired="high")
+        c_b = self._ext_change("challenge_ttl", current=1800, desired=3600)
+        zp_ab = self._zone_with_ext("example.com", "zone_security", [c_a, c_b])
+        zp_ba = self._zone_with_ext("example.com", "zone_security", [c_b, c_a])
+        assert compute_checksum([zp_ab]) == compute_checksum([zp_ba])
+
+    def test_different_extension_values_differ(self):
+        zp_low = self._zone_with_ext(
+            "example.com",
+            "zone_security",
+            [self._ext_change("security_level", current="low", desired="medium")],
+        )
+        zp_high = self._zone_with_ext(
+            "example.com",
+            "zone_security",
+            [self._ext_change("security_level", current="low", desired="high")],
+        )
+        assert compute_checksum([zp_low]) != compute_checksum([zp_high])
+
+    def test_mixed_rule_and_extension_plans(self):
+        rule_changes = [
+            RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE, desired={"expression": "true"})
+        ]
+        pp = PhasePlan(phase=REDIRECT_PHASE, changes=rule_changes)
+        zp = ZonePlan(
+            zone_name="example.com",
+            phase_plans=[pp],
+            extension_plans={
+                "zone_security": [
+                    self._ext_plan(
+                        [self._ext_change("security_level", current="low", desired="high")]
+                    )
+                ]
+            },
+        )
+        checksum = compute_checksum([zp])
+        assert len(checksum) == 64
 
 
 class TestCheckSafety:
