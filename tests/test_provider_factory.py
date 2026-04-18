@@ -11,6 +11,7 @@ from octorules.commands import (
     _resolve_provider_class,
 )
 from octorules.config import ConfigError
+from octorules.provider.base import BaseProvider
 
 _cf_installed = importlib.util.find_spec("octorules_cloudflare") is not None
 _aws_installed = importlib.util.find_spec("octorules_aws") is not None
@@ -184,7 +185,7 @@ class TestInitProviders:
         """_init_providers calls resolve_zone_ids with per-provider fns."""
         mock_cls = MagicMock()
         mock_cls.__module__ = "octorules.provider"
-        mock_instance = MagicMock()
+        mock_instance = MagicMock(spec=BaseProvider)
         mock_cls.return_value = mock_instance
         mock_resolve_cls.return_value = mock_cls
 
@@ -238,9 +239,9 @@ class TestZonePlansCache:
         config = MagicMock()
         config._config_path = config_file
 
-        prov_a = MagicMock()
+        prov_a = MagicMock(spec=BaseProvider)
         prov_a.zone_plans = {"zone-a": "enterprise", "zone-b": "free"}
-        prov_b = MagicMock()
+        prov_b = MagicMock(spec=BaseProvider)
         prov_b.zone_plans = {"zone-c": "standard"}
 
         from octorules.commands._providers import read_zone_plans_cache, write_zone_plans_cache
@@ -286,7 +287,7 @@ class TestZonePlansCache:
     def test_write_skips_when_no_config_path(self):
         config = MagicMock()
         config._config_path = None
-        prov = MagicMock()
+        prov = MagicMock(spec=BaseProvider)
         prov.zone_plans = {"z": "free"}
 
         from octorules.commands._providers import write_zone_plans_cache
@@ -299,7 +300,7 @@ class TestZonePlansCache:
         config_file.touch()
         config = MagicMock()
         config._config_path = config_file
-        prov = MagicMock()
+        prov = MagicMock(spec=BaseProvider)
         prov.zone_plans = {}
 
         from octorules.commands._providers import write_zone_plans_cache
@@ -312,9 +313,9 @@ class TestZonePlansCache:
         config_file.touch()
         config = MagicMock()
         config._config_path = config_file
-        prov_a = MagicMock()
+        prov_a = MagicMock(spec=BaseProvider)
         prov_a.zone_plans = {"zone-x": "free"}
-        prov_b = MagicMock()
+        prov_b = MagicMock(spec=BaseProvider)
         prov_b.zone_plans = {"zone-x": "enterprise"}
 
         from octorules.commands._providers import read_zone_plans_cache, write_zone_plans_cache

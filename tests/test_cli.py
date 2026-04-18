@@ -34,6 +34,7 @@ from octorules.config import Config, ConfigError, ProviderConfig, ZoneConfig
 from octorules.phases import get_phase
 from octorules.plan_output import PlanJson, PlanText
 from octorules.provider import Scope
+from octorules.provider.base import BaseProvider
 
 REDIRECT_PHASE = get_phase("redirect_rules")
 
@@ -211,7 +212,7 @@ class TestChecksumValidation:
 class TestCmdPlan:
     @patch("octorules.commands._providers._init_providers")
     def test_no_changes_returns_0(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, None)
@@ -219,7 +220,7 @@ class TestCmdPlan:
 
     @patch("octorules.commands._providers._init_providers")
     def test_with_changes_returns_2(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         # Write a rules file so there are desired rules
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -231,7 +232,7 @@ class TestCmdPlan:
     @patch("octorules.commands._providers._init_providers")
     def test_has_changes_exit_code(self, mock_init_provs, sample_config):
         """--exit-code flag returns 2 when changes are detected."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -242,7 +243,7 @@ class TestCmdPlan:
     @patch("octorules.commands._providers._init_providers")
     def test_no_changes_exit_code(self, mock_init_provs, sample_config):
         """--exit-code flag returns 0 when there are no changes."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"], exit_code=True)
@@ -250,7 +251,7 @@ class TestCmdPlan:
 
     @patch("octorules.commands._providers._init_providers")
     def test_zone_filter(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         cmd_plan(sample_config, ["example.com"])
@@ -262,7 +263,7 @@ class TestCmdPlan:
 
     @patch("octorules.commands._providers._init_providers")
     def test_no_rules_file_means_no_changes(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"])
@@ -271,7 +272,7 @@ class TestCmdPlan:
     @patch("octorules.commands._providers._init_providers")
     def test_no_rules_file_logs_debug(self, mock_init_provs, sample_config, caplog):
         """Zone with no rules file should log at debug level."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.DEBUG, logger="octorules"):
@@ -282,7 +283,7 @@ class TestCmdPlan:
 class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_no_changes_skips_apply(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_sync(sample_config, None)
@@ -291,7 +292,7 @@ class TestCmdSync:
 
     @patch("octorules.commands._providers._init_providers")
     def test_applies_changes(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -309,7 +310,7 @@ class TestCmdSync:
 
     @patch("octorules.commands._providers._init_providers")
     def test_sync_multiple_phases(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -328,7 +329,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_skips_zones_without_changes(self, mock_init_provs, sample_config):
         """When syncing all zones, zones without rules files should be skipped."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         # Only example.com has rules, other.com does not
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -342,7 +343,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_api_error_returns_1(self, mock_init_provs, sample_config, caplog):
         """When the CF API fails during sync, abort immediately and return 1."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -358,7 +359,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_connection_error_returns_1(self, mock_init_provs, sample_config, caplog):
         """Connection error during sync should return 1."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -373,7 +374,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_programming_error_propagates(self, mock_init_provs, sample_config):
         """Programming bugs (TypeError, etc.) should NOT be caught."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -385,7 +386,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_aborts_on_first_failure(self, mock_init_provs, sample_config):
         """Fail-fast: second phase should not be attempted after first fails."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -408,7 +409,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_logs_partial_success_on_failure(self, mock_init_provs, sample_config, caplog):
         """When a phase fails, previously synced phases should be logged."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -439,7 +440,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_progress_logging(self, mock_init_provs, tmp_path, caplog):
         """Sync should log progress for each zone."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -474,7 +475,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_per_phase_logging(self, mock_init_provs, sample_config, caplog):
         """Sync should log per-phase change counts."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -497,7 +498,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_debug_logs_api_call(self, mock_init_provs, sample_config, caplog):
         """Sync should log PUT details at debug level."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -512,7 +513,7 @@ class TestCmdSync:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_reads_rules_once(self, mock_init_provs, sample_config):
         """Sync should read zone rules YAML only once, not re-read during apply."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -529,7 +530,7 @@ class TestCmdSync:
 class TestCmdDump:
     @patch("octorules.commands._providers._init_providers")
     def test_dump_no_rules(self, mock_init_provs, sample_config, caplog):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
@@ -541,7 +542,7 @@ class TestCmdDump:
 
     @patch("octorules.commands._providers._init_providers")
     def test_dump_writes_file(self, mock_init_provs, sample_config, caplog):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {
             "http_request_dynamic_redirect": [
@@ -556,7 +557,7 @@ class TestCmdDump:
 
     @patch("octorules.commands._providers._init_providers")
     def test_dump_custom_output_dir(self, mock_init_provs, sample_config, tmp_path):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         out_dir = tmp_path / "custom_out"
         mock_prov.get_all_phase_rules.return_value = {
@@ -571,7 +572,7 @@ class TestCmdDump:
     @patch("octorules.commands._providers._init_providers")
     def test_dump_api_error_continues(self, mock_init_provs, tmp_path, caplog):
         """API error on one zone should not prevent dumping others."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -611,7 +612,7 @@ class TestCmdDump:
     @patch("octorules.commands._providers._init_providers")
     def test_dump_all_succeed_returns_0(self, mock_init_provs, sample_config):
         """When all zones dump successfully, return 0."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_dump(sample_config, None, None)
@@ -633,7 +634,7 @@ class TestDumpAccount:
         )
 
     def _make_provider(self, **overrides):
-        prov = MagicMock()
+        prov = MagicMock(spec=BaseProvider)
         prov.account_id = overrides.get("account_id", "acct-123")
         prov.account_name = overrides.get("account_name", "Test Account")
         prov.get_all_phase_rules.return_value = overrides.get("phase_rules", {})
@@ -995,7 +996,7 @@ class TestAlwaysDryRun:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_skips_always_dry_run_zone(self, mock_init_provs, tmp_path, caplog):
         """Zones with always_dry_run=True should be skipped during sync."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1027,7 +1028,7 @@ class TestAlwaysDryRun:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_applies_non_dry_run_zone(self, mock_init_provs, tmp_path):
         """Zones without always_dry_run should still be applied."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1056,7 +1057,7 @@ class TestAlwaysDryRun:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_mixed_zones(self, mock_init_provs, tmp_path, caplog):
         """Sync with a mix of dry-run and normal zones."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1229,7 +1230,7 @@ class TestPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_phase_filter_passes_provider_ids_to_provider(self, mock_init_provs, sample_config):
         """Phase filter should pass provider_ids to get_all_phase_rules."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -1241,7 +1242,7 @@ class TestPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_no_phase_filter_fetches_all(self, mock_init_provs, sample_config):
         """Without phase filter, provider_ids should be None (fetch all)."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         cmd_plan(sample_config, ["example.com"])
@@ -1250,7 +1251,7 @@ class TestPhaseFiltering:
 
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_plan_with_phase_filter(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -1268,7 +1269,7 @@ class TestPhaseFiltering:
 
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_sync_with_phase_filter(self, mock_init_provs, sample_config):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
@@ -1309,7 +1310,7 @@ class TestChecksum:
 
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_plan_prints_checksum(self, mock_init_provs, sample_config, caplog):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -1327,7 +1328,7 @@ class TestChecksum:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_sync_checksum_match_proceeds(self, mock_init_provs, sample_config, caplog):
         """When checksum matches, sync should proceed normally."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -1349,7 +1350,7 @@ class TestChecksum:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_sync_checksum_mismatch_aborts(self, mock_init_provs, sample_config):
         """When checksum mismatches, sync should abort with exit 1."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -1375,7 +1376,7 @@ class TestSafetyForce:
     @patch("octorules.commands._providers._init_providers")
     def test_mass_delete_blocked(self, mock_init_provs, tmp_path, caplog):
         """Deleting most rules should be blocked by safety threshold."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1411,7 +1412,7 @@ class TestSafetyForce:
     @patch("octorules.commands._providers._init_providers")
     def test_small_delete_allowed(self, mock_init_provs, tmp_path):
         """Deleting 1 out of 10 rules (10%) should be allowed."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1446,7 +1447,7 @@ class TestSafetyForce:
     @patch("octorules.commands._providers._init_providers")
     def test_force_bypasses_safety(self, mock_init_provs, tmp_path):
         """--force should bypass safety checks."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1478,7 +1479,7 @@ class TestSafetyForce:
     @patch("octorules.commands._providers._init_providers")
     def test_dry_run_zones_excluded_from_safety(self, mock_init_provs, tmp_path):
         """always_dry_run zones should not trigger safety checks."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1510,7 +1511,7 @@ class TestSafetyForce:
     @patch("octorules.commands._providers._init_providers")
     def test_error_message_includes_phase_names(self, mock_init_provs, tmp_path, caplog):
         """Safety error message should include the affected phase names."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1542,7 +1543,7 @@ class TestSafetyForce:
     @patch("octorules.commands._providers._init_providers")
     def test_error_message_content(self, mock_init_provs, tmp_path, caplog):
         """Safety error message should include zone, counts, and percentages."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1646,7 +1647,7 @@ class TestParallelPlanning:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_plan_sequential(self, mock_init_provs, sample_config):
         """max_workers=1: sequential planning works same as before."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         sample_config.max_workers = 1
         rules_file = sample_config.rules_dir / "example.com.yaml"
@@ -1658,7 +1659,7 @@ class TestParallelPlanning:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_plan_parallel(self, mock_init_provs, tmp_path):
         """max_workers=2: parallel planning returns correct results."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1692,7 +1693,7 @@ class TestParallelPlanning:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_plan_parallel_zone_order_preserved(self, mock_init_provs, tmp_path, capsys):
         """Parallel planning preserves zone order in output."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1730,7 +1731,7 @@ class TestParallelPlanning:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_sync_parallel_plan_sequential_apply(self, mock_init_provs, tmp_path):
         """Sync with max_workers=2: planning is parallel, apply is sequential."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1764,7 +1765,7 @@ class TestParallelPlanning:
     @patch("octorules.commands._providers._init_providers")
     def test_cmd_dump_parallel(self, mock_init_provs, tmp_path, caplog):
         """Dump with max_workers=2: parallel dump."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1802,7 +1803,7 @@ class TestAllowUnmanaged:
     @patch("octorules.commands._providers._init_providers")
     def test_unmanaged_rules_not_removed(self, mock_init_provs, tmp_path):
         """With allow_unmanaged, rules in CF but not YAML should be kept."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1838,7 +1839,7 @@ class TestAllowUnmanaged:
     @patch("octorules.commands._providers._init_providers")
     def test_unmanaged_phase_not_removed(self, mock_init_provs, tmp_path):
         """With allow_unmanaged, entire phases in CF but not YAML should be kept."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -1885,7 +1886,7 @@ class TestPlanErrorIsolation:
     @patch("octorules.commands._providers._init_providers")
     def test_sequential_plan_api_error_continues(self, mock_init_provs, tmp_path, caplog):
         """Sequential planning: API error on one zone should not kill others."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -1924,7 +1925,7 @@ class TestPlanErrorIsolation:
     @patch("octorules.commands._providers._init_providers")
     def test_parallel_plan_api_error_continues(self, mock_init_provs, tmp_path, caplog):
         """Parallel planning: API error on one zone should not kill others."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -1963,7 +1964,7 @@ class TestPlanErrorIsolation:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_aborts_on_plan_failure(self, mock_init_provs, tmp_path, caplog):
         """Sync should abort entirely if any zone fails during planning."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -2113,7 +2114,7 @@ class TestAuthErrorPropagation:
     @patch("octorules.commands._providers._init_providers")
     def test_plan_auth_error_propagates(self, mock_init_provs, sample_config):
         """ProviderAuthError during plan should not be silently caught."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderAuthError
 
@@ -2124,7 +2125,7 @@ class TestAuthErrorPropagation:
     @patch("octorules.commands._providers._init_providers")
     def test_plan_permission_error_propagates(self, mock_init_provs, sample_config):
         """ProviderAuthError (permission denied) during plan should not be silently caught."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderAuthError
 
@@ -2135,7 +2136,7 @@ class TestAuthErrorPropagation:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_auth_error_during_apply_returns_1(self, mock_init_provs, sample_config, caplog):
         """ProviderAuthError during sync apply should return 1 with clear message."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderAuthError
 
@@ -2159,7 +2160,7 @@ class TestAuthErrorPropagation:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_auth_error_no_partial_success_msg(self, mock_init_provs, sample_config, caplog):
         """Auth errors should NOT log 'Successfully synced before failure'."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderAuthError
 
@@ -2193,7 +2194,7 @@ class TestAuthErrorPropagation:
         raises ProviderAuthError.  The overall result must be 1 and the
         error must be logged.
         """
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderAuthError
 
@@ -2222,7 +2223,7 @@ class TestAuthErrorPropagation:
     @patch("octorules.commands._providers._init_providers")
     def test_dump_auth_error_propagates(self, mock_init_provs, sample_config):
         """ProviderAuthError during dump should propagate, not be caught per-zone."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderAuthError
 
@@ -2269,7 +2270,7 @@ class TestFailedPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_failed_phase_excluded_from_plan(self, mock_init_provs, sample_config, caplog):
         """Phase that failed to fetch should be excluded from desired rules."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider import PhaseRulesResult
 
@@ -2293,7 +2294,7 @@ class TestFailedPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_no_failed_phases_plans_normally(self, mock_init_provs, sample_config):
         """When no phases fail, planning proceeds as usual."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider import PhaseRulesResult
 
@@ -2306,7 +2307,7 @@ class TestFailedPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_all_phases_failed_means_no_changes(self, mock_init_provs, sample_config, caplog):
         """When all desired phases fail, plan should show no changes."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider import PhaseRulesResult
 
@@ -2323,7 +2324,7 @@ class TestFailedPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_plain_dict_backward_compatible(self, mock_init_provs, sample_config):
         """Plain dict (no failed_phases) should work as before."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
@@ -2334,7 +2335,7 @@ class TestFailedPhaseFiltering:
     @patch("octorules.commands._providers._init_providers")
     def test_failed_phase_not_in_desired_ignored(self, mock_init_provs, sample_config, caplog):
         """Failed phase not in desired rules should not log a warning."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider import PhaseRulesResult
 
@@ -2356,7 +2357,7 @@ class TestApiErrorStatusCodes:
     @patch("octorules.commands._providers._init_providers")
     def test_plan_error_includes_status_code(self, mock_init_provs, sample_config, caplog):
         """Plan failure should include HTTP status code in error message."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -2375,7 +2376,7 @@ class TestApiErrorStatusCodes:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_error_includes_status_code(self, mock_init_provs, sample_config, caplog):
         """Sync API error should include HTTP status code."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -2543,7 +2544,7 @@ class TestParallelPhaseApply:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_parallel_phases_with_max_workers_gt_1(self, mock_init_provs, tmp_path):
         """With max_workers > 1 and multiple phases, phases applied in parallel."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -2576,7 +2577,7 @@ class TestParallelPhaseApply:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_sequential_phases_with_max_workers_1(self, mock_init_provs, tmp_path):
         """With max_workers=1, phases are applied sequentially (no thread pool)."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -2608,7 +2609,7 @@ class TestParallelPhaseApply:
     @patch("octorules.commands._providers._init_providers")
     def test_parallel_phase_api_error_reported(self, mock_init_provs, tmp_path, caplog):
         """API error in one phase during parallel apply should be reported."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         from octorules.provider.exceptions import ProviderError
 
@@ -2786,7 +2787,7 @@ class TestPreparedRulesReuse:
     @patch("octorules.commands._providers._init_providers")
     def test_sync_uses_prepared_rules(self, mock_init_provs, tmp_path):
         """Sync should use prepared_rules from planning, not re-prepare."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -2855,8 +2856,8 @@ class TestMultiProviderPlan:
     def test_plan_calls_correct_provider_per_zone(self, mock_init_provs, tmp_path):
         """Each zone's plan calls get_all_phase_rules on its target provider."""
         config = _multi_cli_config(tmp_path)
-        cf_prov = MagicMock()
-        aws_prov = MagicMock()
+        cf_prov = MagicMock(spec=BaseProvider)
+        aws_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": cf_prov, "aws": aws_prov}
         cf_prov.get_all_phase_rules.return_value = {}
         cf_prov.account_id = None
@@ -2883,8 +2884,8 @@ class TestMultiProviderSync:
     def test_sync_applies_to_correct_provider(self, mock_init_provs, tmp_path):
         """Sync routes put_phase_rules to the right provider per zone."""
         config = _multi_cli_config(tmp_path)
-        cf_prov = MagicMock()
-        aws_prov = MagicMock()
+        cf_prov = MagicMock(spec=BaseProvider)
+        aws_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": cf_prov, "aws": aws_prov}
         cf_prov.account_id = None
         aws_prov.account_id = None
@@ -2912,6 +2913,8 @@ class TestMultiProviderDump:
     def test_dump_calls_correct_provider_per_zone(self, mock_init_provs, tmp_path, caplog):
         """Dump calls get_all_phase_rules on the right provider per zone."""
         config = _multi_cli_config(tmp_path)
+        # Un-specced — test sets get_all_page_shield_policies (CF extension)
+        # which is not on the BaseProvider protocol.
         cf_prov = MagicMock()
         aws_prov = MagicMock()
         mock_init_provs.return_value = {"cloudflare": cf_prov, "aws": aws_prov}
@@ -2938,8 +2941,8 @@ class TestMultiProviderDump:
     def test_dump_account_runs_per_provider(self, mock_init_provs, tmp_path, caplog):
         """Dump runs _dump_account for each provider with account info."""
         config = _multi_cli_config(tmp_path)
-        cf_prov = MagicMock()
-        aws_prov = MagicMock()
+        cf_prov = MagicMock(spec=BaseProvider)
+        aws_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": cf_prov, "aws": aws_prov}
 
         cf_prov.account_id = "cf-acct"
@@ -3477,7 +3480,7 @@ class TestLintSummaryFormat:
 
     @patch("octorules.commands._providers._init_providers")
     def test_summary_format_counts_only(self, mock_init_provs, sample_config, capsys):
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         # Create a rules file with content so lint runs
         (sample_config.rules_dir / "example.com.yaml").write_text(
@@ -4355,7 +4358,7 @@ class TestProgressCallback:
     @patch("octorules.commands._providers._init_providers")
     def test_plan_progress_multi_zone(self, mock_init_provs, tmp_path, caplog):
         """Plan with multiple zones logs [n/total] planned zone_name."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
@@ -4387,7 +4390,7 @@ class TestProgressCallback:
     @patch("octorules.commands._providers._init_providers")
     def test_plan_progress_single_zone_no_noise(self, mock_init_provs, sample_config, caplog):
         """Plan with single zone does NOT log progress (total == 1 guard)."""
-        mock_prov = MagicMock()
+        mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):

@@ -89,7 +89,7 @@ class TestPlanAllResult:
     def test_add_account_with_plan(self):
         r = _PlanAllResult()
         zp = _make_zone_plan("my-account")
-        prov = MagicMock()
+        prov = MagicMock(spec=BaseProvider)
         prov.account_id = "acct-1"
         prov.account_name = "my-account"
         r._add_account(zp, {"my-account": {}}, {"my-account": {}}, prov)
@@ -101,7 +101,7 @@ class TestPlanAllResult:
 
     def test_add_account_none_plan(self):
         r = _PlanAllResult()
-        prov = MagicMock()
+        prov = MagicMock(spec=BaseProvider)
         r._add_account(None, {}, {}, prov)
         assert len(r.zone_plans) == 0
         assert r.account_label is None
