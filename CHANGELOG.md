@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.1] - 2026-04-27
+
+### Added
+- `audit cdn-ranges` now matches Bunny edge-server IPs and Azure Front
+  Door ingress/egress IPs, in addition to the existing Cloudflare,
+  AWS CloudFront, and Google Cloud coverage. Bunny is fetched from its
+  two plain-text endpoints (IPv4 + IPv6); Azure Front Door is resolved
+  by scraping the Microsoft Download Center page for the current
+  rotating `ServiceTags_Public_YYYYMMDD.json` URL.
+- Public `octorules.USER_AGENT` constant (`octorules/<version>`).
+  Used for any HTTP traffic originated by core or maintainer scripts.
+  Provider packages that wrap raw HTTP clients (e.g. Bunny over httpx)
+  may opt in; vendor-SDK-based providers (CF, AWS, Google, Azure) keep
+  their SDK's own User-Agent.
+- New module `octorules.testing.lint` exposing `assert_lint` and
+  `assert_no_lint` — polymorphic assertion helpers for linter tests.
+  Both accept either a `LintContext` (engine-driven flow) or a bare
+  `list[LintResult]` (validator return). Provider test suites import
+  from here directly; previously the same ~75 lines were duplicated
+  across six `tests/test_linter/conftest.py` files.
+
 ## [0.26.0] - 2026-04-18
 
 ### Added

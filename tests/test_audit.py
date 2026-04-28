@@ -5,6 +5,13 @@ from unittest.mock import patch
 
 import yaml
 
+from octorules._cdn_sources import (
+    _parse_aws_cloudfront_ips,
+    _parse_azure_front_door_ips,
+    _parse_bunny_ips,
+    _parse_cloudflare_ips,
+    _parse_google_cloud_ips,
+)
 from octorules.audit import (
     _SEVERITY_RANK,
     ALL_CHECKS,
@@ -13,9 +20,6 @@ from octorules.audit import (
     FindingSeverity,
     RuleIPInfo,
     _load_baked_in_ranges,
-    _parse_aws_cloudfront_ips,
-    _parse_cloudflare_ips,
-    _parse_google_cloud_ips,
     _to_network,
     audit_zone_rules,
     check_cdn_ranges,
@@ -381,6 +385,72 @@ class TestCDNParsers:
         _parse_google_cloud_ips({"prefixes": []})
         assert "no CIDRs found" in caplog.text
 
+    def test_bunny_parser_ipv4_and_ipv6(self):
+        data = "89.187.188.227\n185.93.1.243\n\n2400:52e0:1500::714:1\n"
+        cidrs = _parse_bunny_ips(data)
+        assert "89.187.188.227/32" in cidrs
+        assert "185.93.1.243/32" in cidrs
+        assert "2400:52e0:1500::714:1/128" in cidrs
+
+    def test_bunny_parser_skips_blank_and_malformed(self):
+        data = "1.2.3.4\n\n   \nnot-an-ip\n5.6.7.8\n"
+        cidrs = _parse_bunny_ips(data)
+        assert cidrs == ["1.2.3.4/32", "5.6.7.8/32"]
+
+    def test_bunny_parser_bad_data(self):
+        assert _parse_bunny_ips(b"bytes not str") == []  # type: ignore[arg-type]
+        assert _parse_bunny_ips("") == []
+
+    def test_bunny_parser_warns_on_non_str(self, caplog):
+        _parse_bunny_ips(["list", "not", "str"])  # type: ignore[arg-type]
+        assert "expected str" in caplog.text
+
+    def test_bunny_parser_warns_on_no_ips(self, caplog):
+        _parse_bunny_ips("# just a comment\nnot-an-ip\n")
+        assert "no IPs parsed" in caplog.text
+
+    def test_azure_front_door_parser(self):
+        data = {
+            "changeNumber": 396,
+            "values": [
+                {
+                    "name": "AzureFrontDoor.Frontend",
+                    "properties": {"addressPrefixes": ["4.145.22.160/29", "2603:1030::/48"]},
+                },
+                {
+                    "name": "AzureFrontDoor.Backend",
+                    "properties": {"addressPrefixes": ["13.73.248.16/29"]},
+                },
+                {
+                    "name": "AzureFrontDoor.FirstParty",  # ignored
+                    "properties": {"addressPrefixes": ["1.2.3.0/24"]},
+                },
+                {
+                    "name": "Storage",  # ignored
+                    "properties": {"addressPrefixes": ["9.9.9.0/24"]},
+                },
+            ],
+        }
+        cidrs = _parse_azure_front_door_ips(data)
+        assert "4.145.22.160/29" in cidrs
+        assert "2603:1030::/48" in cidrs
+        assert "13.73.248.16/29" in cidrs
+        assert "1.2.3.0/24" not in cidrs
+        assert "9.9.9.0/24" not in cidrs
+
+    def test_azure_front_door_parser_bad_data(self):
+        assert _parse_azure_front_door_ips({}) == []
+        assert _parse_azure_front_door_ips("not a dict") == []  # type: ignore[arg-type]
+        assert _parse_azure_front_door_ips({"values": [{"name": "AzureFrontDoor.Frontend"}]}) == []
+
+    def test_azure_front_door_parser_warns_on_non_dict(self, caplog):
+        _parse_azure_front_door_ips("not a dict")  # type: ignore[arg-type]
+        assert "expected dict" in caplog.text
+
+    def test_azure_front_door_parser_warns_on_no_prefixes(self, caplog):
+        _parse_azure_front_door_ips({"values": []})
+        assert "no Front Door prefixes" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # fetch_cdn_ranges (with a local HTTP server)
@@ -400,6 +470,7 @@ class TestFetchCDNRanges:
         with (
             patch("octorules.audit._load_baked_in_ranges", return_value=stale),
             patch("octorules.audit._fetch_json", side_effect=mock_fetch),
+            patch("octorules.audit._fetch_text", return_value=None),
         ):
             result = fetch_cdn_ranges()
         assert result.source == "api"
@@ -408,9 +479,13 @@ class TestFetchCDNRanges:
 
     def test_fresh_baked_in_skips_api(self):
         """When baked-in data is fresh, API is not called."""
-        with patch("octorules.audit._fetch_json") as mock_fetch:
+        with (
+            patch("octorules.audit._fetch_json") as mock_fetch,
+            patch("octorules.audit._fetch_text") as mock_fetch_text,
+        ):
             result = fetch_cdn_ranges()
         mock_fetch.assert_not_called()
+        mock_fetch_text.assert_not_called()
         assert result.source == "baked-in"
         assert len(result.ranges) > 0
 
@@ -428,6 +503,7 @@ class TestFetchCDNRanges:
         with (
             patch("octorules.audit._load_baked_in_ranges", return_value=stale),
             patch("octorules.audit._fetch_json", return_value=None),
+            patch("octorules.audit._fetch_text", return_value=None),
         ):
             result = fetch_cdn_ranges(timeout=1)
         assert result.source == "baked-in"

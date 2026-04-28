@@ -437,7 +437,7 @@ octorules audit [--check ...] [--severity error|warning|info] [--format text|jso
 
 - **ip-overlap** -- Cross-rule and cross-list IP range overlaps within a zone.
 - **ip-shadow** -- Rules shadowed by broader rules in earlier phases (e.g. a rate-limit rule whose IPs are already blocked by a WAF rule).
-- **cdn-ranges** -- Rules that match known CDN provider IP ranges (Cloudflare, AWS CloudFront, Google Cloud). Fetches fresh ranges from public APIs; falls back to baked-in data when offline.
+- **cdn-ranges** -- Rules that match known CDN provider IP ranges (Cloudflare, AWS CloudFront, Google Cloud, Bunny, Azure Front Door). Fetches fresh ranges from public APIs; falls back to baked-in data when offline. (Azure's list is scraped from the Microsoft Download Center page — the JSON URL rotates weekly.)
 - **zone-drift** -- Same CIDR treated differently across zones (e.g. blocked in zone A, allowed in zone B).
 
 Acceptance comments suppress known findings (check names must be lowercase):

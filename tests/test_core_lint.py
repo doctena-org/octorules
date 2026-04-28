@@ -3,10 +3,7 @@
 from octorules.commands._lint import _core_lint_orphaned_files, _core_lint_zone
 from octorules.config import Config, ZoneConfig
 from octorules.linter.engine import LintContext, Severity
-
-
-def _ids(ctx: LintContext) -> set[str]:
-    return {r.rule_id for r in ctx.results}
+from octorules.testing.lint import assert_lint, assert_no_lint
 
 
 # ---------------------------------------------------------------------------
@@ -22,7 +19,7 @@ class TestCore003AllDisabled:
             ]
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE003" in _ids(ctx)
+        assert_lint(ctx, "CORE003")
         assert "disabled" in ctx.results[0].message
 
     def test_some_enabled_ok(self):
@@ -34,7 +31,7 @@ class TestCore003AllDisabled:
             ]
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE003" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE003")
 
     def test_no_enabled_field_defaults_true(self):
         """Rules without 'enabled' key are considered enabled."""
@@ -45,7 +42,7 @@ class TestCore003AllDisabled:
             ]
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE003" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE003")
 
     def test_single_disabled_rule_not_flagged(self):
         """A single disabled rule is CF018/WA600's job, not CORE003."""
@@ -56,14 +53,14 @@ class TestCore003AllDisabled:
             ]
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE003" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE003")
 
     def test_empty_phase_not_flagged(self):
         """Phase with no rules doesn't trigger CORE003."""
         ctx = LintContext(zone_name="test.com")
         desired = {"redirect_rules": []}
         _core_lint_zone(desired, ctx)
-        assert "CORE003" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE003")
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +74,7 @@ class TestCore004RefCollision:
             "cache_rules": [{"ref": "block-bots", "expression": "true"}],
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE004" in _ids(ctx)
+        assert_lint(ctx, "CORE004")
         assert "block-bots" in ctx.results[0].message
         assert "redirect_rules" in ctx.results[0].message
         assert "cache_rules" in ctx.results[0].message
@@ -93,7 +90,7 @@ class TestCore004RefCollision:
             ],
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE004" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE004")
 
     def test_same_ref_three_phases(self):
         """CORE004 fires when ref appears in 3+ different phases."""
@@ -104,7 +101,7 @@ class TestCore004RefCollision:
             "waf_custom_rules": [{"ref": "block-bots", "expression": "true"}],
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE004" in _ids(ctx)
+        assert_lint(ctx, "CORE004")
         msg = ctx.results[0].message
         assert "cache_rules" in msg
         assert "redirect_rules" in msg
@@ -117,7 +114,7 @@ class TestCore004RefCollision:
             "cache_rules": [{"ref": "r2", "expression": "true"}],
         }
         _core_lint_zone(desired, ctx)
-        assert "CORE004" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE004")
 
 
 # ---------------------------------------------------------------------------
@@ -137,7 +134,7 @@ class TestCore003EdgeCases:
         }
         _core_lint_zone(desired, ctx)
         # 2 dict rules, both disabled → CORE003 (non-dicts filtered out)
-        assert "CORE003" in _ids(ctx)
+        assert_lint(ctx, "CORE003")
 
     def test_multiple_phases_only_one_all_disabled(self):
         """CORE003 fires only for the phase where ALL rules are disabled."""
@@ -161,7 +158,7 @@ class TestCore003EdgeCases:
         ctx = LintContext(zone_name="test.com")
         desired = {"redirect_rules": "not-a-list"}
         _core_lint_zone(desired, ctx)
-        assert "CORE003" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE003")
 
 
 class TestCore006EmptyFile:
@@ -169,21 +166,20 @@ class TestCore006EmptyFile:
         ctx = LintContext(zone_name="test.com")
         desired = {"redirect_rules": [], "cache_rules": []}
         _core_lint_zone(desired, ctx)
-        assert "CORE006" in _ids(ctx)
-        assert ctx.results[0].severity == Severity.INFO
+        assert_lint(ctx, "CORE006", severity=Severity.INFO)
 
     def test_has_rules_ok(self):
         ctx = LintContext(zone_name="test.com")
         desired = {"redirect_rules": [{"ref": "r1", "expression": "true"}]}
         _core_lint_zone(desired, ctx)
-        assert "CORE006" not in _ids(ctx)
+        assert_no_lint(ctx, "CORE006")
 
     def test_only_non_phase_keys_flags(self):
         """File with only 'lists' section (non-phase key) has no rules."""
         ctx = LintContext(zone_name="test.com")
         desired = {"lists": [{"name": "blocklist", "kind": "ip", "items": []}]}
         _core_lint_zone(desired, ctx)
-        assert "CORE006" in _ids(ctx)
+        assert_lint(ctx, "CORE006")
 
 
 # ---------------------------------------------------------------------------

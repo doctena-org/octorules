@@ -19,6 +19,18 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from octorules import USER_AGENT
+from octorules._cdn_sources import (
+    _AZURE_DETAILS_URL,
+    _AZURE_JSON_URL_RE,
+    _BUNNY_URLS,
+    _parse_aws_cloudfront_ips,
+    _parse_azure_front_door_ips,
+    _parse_bunny_ips,
+    _parse_cloudflare_ips,
+    _parse_google_cloud_ips,
+)
+
 log = logging.getLogger(__name__)
 
 # All available audit check names.
@@ -111,7 +123,7 @@ class AuditFinding:
 # ---------------------------------------------------------------------------
 def _fetch_json(url: str, timeout: int = 15) -> Any:
     """Fetch JSON from a URL. Returns parsed data or None on failure."""
-    req = Request(url, headers={"User-Agent": "octorules-audit/1.0"})
+    req = Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
@@ -123,61 +135,18 @@ def _fetch_json(url: str, timeout: int = 15) -> Any:
         return None
 
 
-def _parse_cloudflare_ips(data: dict) -> list[str]:
-    """Extract CIDRs from Cloudflare /client/v4/ips response."""
-    if not isinstance(data, dict):
-        log.warning("Cloudflare IP response: expected dict, got %s", type(data).__name__)
-        return []
-    result = data.get("result", {})
-    if not isinstance(result, dict):
-        log.warning("Cloudflare IP response: 'result' is %s, expected dict", type(result).__name__)
-        return []
-    cidrs: list[str] = []
-    for key in ("ipv4_cidrs", "ipv6_cidrs"):
-        val = result.get(key)
-        if isinstance(val, list):
-            cidrs.extend(str(c) for c in val)
-    if not cidrs:
-        log.warning("Cloudflare IP response: no CIDRs found in 'result' (keys: %s)", list(result))
-    return cidrs
-
-
-def _parse_aws_cloudfront_ips(data: dict) -> list[str]:
-    """Extract CloudFront CIDRs from AWS ip-ranges.json."""
-    if not isinstance(data, dict):
-        log.warning("AWS IP response: expected dict, got %s", type(data).__name__)
-        return []
-    cidrs: list[str] = []
-    for prefix in data.get("prefixes", []):
-        if isinstance(prefix, dict) and prefix.get("service") == "CLOUDFRONT":
-            ip = prefix.get("ip_prefix")
-            if ip:
-                cidrs.append(str(ip))
-    for prefix in data.get("ipv6_prefixes", []):
-        if isinstance(prefix, dict) and prefix.get("service") == "CLOUDFRONT":
-            ip = prefix.get("ipv6_prefix")
-            if ip:
-                cidrs.append(str(ip))
-    if not cidrs:
-        log.warning("AWS IP response: no CloudFront CIDRs found")
-    return cidrs
-
-
-def _parse_google_cloud_ips(data: dict) -> list[str]:
-    """Extract CIDRs from Google Cloud ip-ranges JSON."""
-    if not isinstance(data, dict):
-        log.warning("Google Cloud IP response: expected dict, got %s", type(data).__name__)
-        return []
-    cidrs: list[str] = []
-    for prefix in data.get("prefixes", []):
-        if isinstance(prefix, dict):
-            for key in ("ipv4Prefix", "ipv6Prefix"):
-                ip = prefix.get(key)
-                if ip:
-                    cidrs.append(str(ip))
-    if not cidrs:
-        log.warning("Google Cloud IP response: no CIDRs found in 'prefixes'")
-    return cidrs
+def _fetch_text(url: str, timeout: int = 15) -> str | None:
+    """Fetch plain text from a URL. Returns decoded body or None on failure."""
+    req = Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                log.warning("HTTP %d from %s", resp.status, url)
+                return None
+            return resp.read().decode("utf-8", errors="replace")
+    except (OSError, TimeoutError) as e:
+        log.warning("Failed to fetch %s: %s", url, e)
+        return None
 
 
 @dataclass
@@ -201,7 +170,33 @@ _CDN_FILES = [
     ("cloudflare.json", "Cloudflare"),
     ("aws_cloudfront.json", "AWS CloudFront"),
     ("google_cloud.json", "Google Cloud"),
+    ("bunny.json", "Bunny"),
+    ("azure_front_door.json", "Azure Front Door"),
 ]
+
+
+def _fetch_bunny_text(timeout: int = 15) -> str | None:
+    """Fetch and concatenate Bunny IPv4 + IPv6 edge server lists."""
+    parts: list[str] = []
+    for url in _BUNNY_URLS:
+        body = _fetch_text(url, timeout=timeout)
+        if body:
+            parts.append(body)
+    return "\n".join(parts) if parts else None
+
+
+def _fetch_azure_service_tags(timeout: int = 15) -> Any:
+    """Scrape the Azure Download Center page and fetch the current ServiceTags JSON."""
+    html = _fetch_text(_AZURE_DETAILS_URL, timeout=timeout)
+    if not html:
+        return None
+    m = _AZURE_JSON_URL_RE.search(html)
+    if not m:
+        log.warning(
+            "Azure details page: no ServiceTags_Public JSON URL found (page layout changed?)"
+        )
+        return None
+    return _fetch_json(m.group(0), timeout=timeout)
 
 
 def _load_baked_in_ranges() -> CdnRangeResult:
@@ -248,7 +243,7 @@ def fetch_cdn_ranges(timeout: int = 15, cdn_stale_days: int = 60) -> CdnRangeRes
     1. Load baked-in ranges from package data files.
     2. If they are fresh (younger than *cdn_stale_days*), return immediately
        — no network calls needed.
-    3. If stale (or missing), fetch from all three CDN APIs concurrently.
+    3. If stale (or missing), fetch from the CDN APIs concurrently.
     4. If all API fetches fail, fall back to stale baked-in data anyway.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -260,21 +255,30 @@ def fetch_cdn_ranges(timeout: int = 15, cdn_stale_days: int = 60) -> CdnRangeRes
 
     # Baked-in data is stale or missing — fetch from APIs concurrently.
     log.debug("Baked-in CDN ranges are stale, fetching from APIs")
+
+    def _cf_fetch(to: int) -> Any:
+        return _fetch_json("https://api.cloudflare.com/client/v4/ips", timeout=to)
+
+    def _aws_fetch(to: int) -> Any:
+        return _fetch_json("https://ip-ranges.amazonaws.com/ip-ranges.json", timeout=to)
+
+    def _google_fetch(to: int) -> Any:
+        return _fetch_json("https://www.gstatic.com/ipranges/cloud.json", timeout=to)
+
+    # (label, fetcher(timeout) -> data, parser(data) -> list[str])
     sources = [
-        ("Cloudflare", "https://api.cloudflare.com/client/v4/ips", _parse_cloudflare_ips),
-        (
-            "AWS CloudFront",
-            "https://ip-ranges.amazonaws.com/ip-ranges.json",
-            _parse_aws_cloudfront_ips,
-        ),
-        ("Google Cloud", "https://www.gstatic.com/ipranges/cloud.json", _parse_google_cloud_ips),
+        ("Cloudflare", _cf_fetch, _parse_cloudflare_ips),
+        ("AWS CloudFront", _aws_fetch, _parse_aws_cloudfront_ips),
+        ("Google Cloud", _google_fetch, _parse_google_cloud_ips),
+        ("Bunny", _fetch_bunny_text, _parse_bunny_ips),
+        ("Azure Front Door", _fetch_azure_service_tags, _parse_azure_front_door_ips),
     ]
 
     result: dict[str, list[str]] = {}
 
     def _fetch_one(source_tuple: tuple) -> tuple[str, list[str]] | None:
-        label, url, parser = source_tuple
-        data = _fetch_json(url, timeout=timeout)
+        label, fetcher, parser = source_tuple
+        data = fetcher(timeout)
         if data is None:
             return None
         cidrs = parser(data)

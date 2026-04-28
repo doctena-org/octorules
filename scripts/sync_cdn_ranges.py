@@ -4,6 +4,13 @@
 Maintainer tool — not installed with the package. Run manually or from CI
 to refresh the baked-in CDN IP ranges shipped with octorules.
 
+Source-of-truth split: URL constants and CIDR-extraction parsers live in
+``octorules._cdn_sources``. The runtime audit (``octorules.audit``) and
+this maintainer script both consume from that module — neither owns the
+parsing layer. This script adds only the maintainer-only concerns:
+raise-on-error HTTP wrappers (so failures are loud) and per-provider
+version-metadata extraction (so file diffs are stable across runs).
+
 Usage:
     python scripts/sync_cdn_ranges.py              # Fetch and write
     python scripts/sync_cdn_ranges.py --check      # Exit 1 if data is stale
@@ -16,76 +23,101 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+from octorules import USER_AGENT
+from octorules._cdn_sources import (
+    _AZURE_DETAILS_URL,
+    _AZURE_JSON_URL_RE,
+    _BUNNY_URLS,
+    _parse_aws_cloudfront_ips,
+    _parse_azure_front_door_ips,
+    _parse_bunny_ips,
+    _parse_cloudflare_ips,
+    _parse_google_cloud_ips,
+)
+
 _DATA_DIR = Path(__file__).resolve().parent.parent / "octorules" / "data" / "cdn_ranges"
 
-_SOURCES: list[tuple[str, str, str]] = [
-    # (filename, provider label, url)
-    ("cloudflare.json", "Cloudflare", "https://api.cloudflare.com/client/v4/ips"),
-    ("aws_cloudfront.json", "AWS CloudFront", "https://ip-ranges.amazonaws.com/ip-ranges.json"),
-    ("google_cloud.json", "Google Cloud", "https://www.gstatic.com/ipranges/cloud.json"),
+# (filename, provider label, source descriptor, format)
+# - "json"        — descriptor is a single URL, parser receives dict
+# - "text"        — descriptor is a tuple of URLs whose bodies are concatenated,
+#                   parser receives str
+# - "azure-scrape"— descriptor is the details-page URL; the script scrapes it
+#                   for the current JSON URL and fetches that. Parser receives dict.
+_SOURCES: list[tuple[str, str, object, str]] = [
+    ("cloudflare.json", "Cloudflare", "https://api.cloudflare.com/client/v4/ips", "json"),
+    (
+        "aws_cloudfront.json",
+        "AWS CloudFront",
+        "https://ip-ranges.amazonaws.com/ip-ranges.json",
+        "json",
+    ),
+    ("google_cloud.json", "Google Cloud", "https://www.gstatic.com/ipranges/cloud.json", "json"),
+    ("bunny.json", "Bunny", _BUNNY_URLS, "text"),
+    ("azure_front_door.json", "Azure Front Door", _AZURE_DETAILS_URL, "azure-scrape"),
 ]
 
 
+# Maintainer-script HTTP: raise on any failure so the run aborts loudly.
+# (Runtime audit uses the audit.py variants which log+return None for graceful
+# degradation. Different contracts; keep separate.)
 def _fetch_json(url: str) -> dict:
-    req = Request(url, headers={"User-Agent": "octorules-sync/1.0"})
+    req = Request(url, headers={"User-Agent": USER_AGENT})
     with urlopen(req, timeout=30) as resp:
         return json.loads(resp.read())
 
 
-def _parse_cloudflare(data: dict) -> tuple[list[str], dict]:
-    result = data.get("result", {})
-    cidrs: list[str] = []
-    for key in ("ipv4_cidrs", "ipv6_cidrs"):
-        val = result.get(key)
-        if isinstance(val, list):
-            cidrs.extend(str(c) for c in val)
-    version = {}
-    etag = result.get("etag")
-    if etag:
-        version["etag"] = etag
-    return sorted(cidrs), version
+def _fetch_text(url: str) -> str:
+    req = Request(url, headers={"User-Agent": USER_AGENT})
+    with urlopen(req, timeout=30) as resp:
+        return resp.read().decode("utf-8", errors="replace")
 
 
-def _parse_aws_cloudfront(data: dict) -> tuple[list[str], dict]:
-    cidrs: list[str] = []
-    for prefix in data.get("prefixes", []):
-        if isinstance(prefix, dict) and prefix.get("service") == "CLOUDFRONT":
-            ip = prefix.get("ip_prefix")
-            if ip:
-                cidrs.append(str(ip))
-    for prefix in data.get("ipv6_prefixes", []):
-        if isinstance(prefix, dict) and prefix.get("service") == "CLOUDFRONT":
-            ip = prefix.get("ipv6_prefix")
-            if ip:
-                cidrs.append(str(ip))
-    version = {}
-    for key in ("createDate", "syncToken"):
-        val = data.get(key)
-        if val:
-            version[key] = str(val)
-    return sorted(cidrs), version
+def _fetch_azure_service_tags(details_url: str) -> dict:
+    """Scrape the Azure download page for the current ServiceTags_Public URL, then fetch it."""
+    html = _fetch_text(details_url)
+    m = _AZURE_JSON_URL_RE.search(html)
+    if not m:
+        raise RuntimeError(f"Azure details page layout changed: no JSON URL found in {details_url}")
+    return _fetch_json(m.group(0))
 
 
-def _parse_google_cloud(data: dict) -> tuple[list[str], dict]:
-    cidrs: list[str] = []
-    for prefix in data.get("prefixes", []):
-        if isinstance(prefix, dict):
-            for key in ("ipv4Prefix", "ipv6Prefix"):
-                ip = prefix.get(key)
-                if ip:
-                    cidrs.append(str(ip))
-    version = {}
-    for key in ("creationTime", "syncToken"):
-        val = data.get(key)
-        if val:
-            version[key] = str(val)
-    return sorted(cidrs), version
+# Per-provider version-metadata extractors. These exist only in the sync
+# script: the runtime audit doesn't care about provenance because the API
+# response itself is authoritative. Baked-in JSON files need it for diff
+# stability and staleness reporting.
+def _cf_version(data: dict) -> dict:
+    etag = data.get("result", {}).get("etag")
+    return {"etag": etag} if etag else {}
 
 
-_PARSERS = {
-    "Cloudflare": _parse_cloudflare,
-    "AWS CloudFront": _parse_aws_cloudfront,
-    "Google Cloud": _parse_google_cloud,
+def _aws_version(data: dict) -> dict:
+    return {key: str(data[key]) for key in ("createDate", "syncToken") if data.get(key)}
+
+
+def _google_version(data: dict) -> dict:
+    return {key: str(data[key]) for key in ("creationTime", "syncToken") if data.get(key)}
+
+
+def _bunny_version(_data: str) -> dict:
+    return {}
+
+
+def _azure_version(data: dict) -> dict:
+    version: dict = {}
+    if data.get("changeNumber") is not None:
+        version["changeNumber"] = data["changeNumber"]
+    if data.get("cloud"):
+        version["cloud"] = data["cloud"]
+    return version
+
+
+# (cidr_parser, version_extractor)
+_HANDLERS: dict[str, tuple] = {
+    "Cloudflare": (_parse_cloudflare_ips, _cf_version),
+    "AWS CloudFront": (_parse_aws_cloudfront_ips, _aws_version),
+    "Google Cloud": (_parse_google_cloud_ips, _google_version),
+    "Bunny": (_parse_bunny_ips, _bunny_version),
+    "Azure Front Door": (_parse_azure_front_door_ips, _azure_version),
 }
 
 
@@ -95,16 +127,24 @@ def sync() -> bool:
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     ok = True
 
-    for filename, provider, url in _SOURCES:
-        print(f"Fetching {provider} from {url}...")
+    for filename, provider, src, fmt in _SOURCES:
+        print(f"Fetching {provider} from {src}...")
         try:
-            data = _fetch_json(url)
+            if fmt == "text":
+                urls = (src,) if isinstance(src, str) else tuple(src)
+                data = "\n".join(_fetch_text(u) for u in urls)
+            elif fmt == "azure-scrape":
+                data = _fetch_azure_service_tags(src)  # type: ignore[arg-type]
+            else:
+                data = _fetch_json(src)  # type: ignore[arg-type]
         except Exception as e:
             print(f"  ERROR: {e}", file=sys.stderr)
             ok = False
             continue
 
-        cidrs, version = _PARSERS[provider](data)
+        parser, version_fn = _HANDLERS[provider]
+        cidrs = sorted(parser(data))
+        version = version_fn(data)
         print(f"  {len(cidrs)} CIDRs, version={version}")
 
         out = {
@@ -129,7 +169,7 @@ def check(max_age_days: int = 60) -> bool:
     now = datetime.now(timezone.utc)
     ok = True
 
-    for filename, provider, _url in _SOURCES:
+    for filename, provider, _src, _fmt in _SOURCES:
         path = _DATA_DIR / filename
         if not path.exists():
             print(f"MISSING: {path}", file=sys.stderr)
