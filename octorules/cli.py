@@ -555,8 +555,10 @@ def main(argv: list[str] | None = None) -> None:
                 f'_octorules_zone_complete() {{\n    compgen -W "{zone_str}" -- "$1"\n}}\n'
             )
             preamble["zsh"] = f"_octorules_zone_complete() {{\n    compadd -- {zone_str}\n}}\n"
-        except Exception:
-            pass  # No config available — zone completion won't work
+        except (ConfigError, FileNotFoundError, OSError) as e:
+            # Couldn't load config — zone completion won't have hints. Tab
+            # completion still works for everything else.
+            log.debug("completion: skipping zone preamble (%s)", e)
         print(shtab.complete(build_parser(), args.shell, preamble=preamble))
         sys.exit(0)
     if args.command == "lint" and args.file:

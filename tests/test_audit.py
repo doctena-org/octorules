@@ -535,6 +535,42 @@ class TestFetchCDNRanges:
         assert "Cloudflare" in result.ranges
         assert "AWS CloudFront" not in result.ranges
 
+    def test_fetch_parser_exception_does_not_crash(self, caplog):
+        """A parser raising must be logged + treated as failed fetch, not propagated.
+
+        Without the defensive ``try/except`` around ``future.result()``, a
+        parser bug would propagate out of ``fetch_cdn_ranges`` and crash the
+        audit command. The contract is: parser failures degrade to baked-in
+        fallback, never abort the run.
+        """
+        from datetime import datetime, timezone
+
+        from octorules.audit import CdnRangeResult
+
+        stale = CdnRangeResult(
+            ranges={"Cloudflare": ["203.0.113.0/24"]},
+            source="baked-in",
+            generated_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+
+        def boom(_data):
+            raise RuntimeError("simulated parser failure")
+
+        with (
+            patch("octorules.audit._load_baked_in_ranges", return_value=stale),
+            patch(
+                "octorules.audit._fetch_json",
+                return_value={"result": {"ipv4_cidrs": ["1.1.1.0/24"], "ipv6_cidrs": []}},
+            ),
+            patch("octorules.audit._fetch_text", return_value=None),
+            patch("octorules.audit._parse_cloudflare_ips", side_effect=boom),
+        ):
+            result = fetch_cdn_ranges()
+
+        # All API parsers fail → fall back to (stale) baked-in data.
+        assert result.source == "baked-in"
+        assert "CDN fetch failed for Cloudflare" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # CdnRangeResult

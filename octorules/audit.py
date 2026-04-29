@@ -290,7 +290,12 @@ def fetch_cdn_ranges(timeout: int = 15, cdn_stale_days: int = 60) -> CdnRangeRes
     with ThreadPoolExecutor(max_workers=len(sources)) as executor:
         futures = {executor.submit(_fetch_one, s): s for s in sources}
         for future in as_completed(futures):
-            pair = future.result()
+            label = futures[future][0]
+            try:
+                pair = future.result()
+            except Exception as e:
+                log.warning("CDN fetch failed for %s: %s", label, e)
+                continue
             if pair is not None:
                 result[pair[0]] = pair[1]
 

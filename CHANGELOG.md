@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.26.2] - 2026-04-29
+
+### Fixed
+- `audit cdn-ranges`: a single failing CDN source no longer aborts the
+  whole fetch. Per-source exceptions are caught and logged at WARNING;
+  successful sources still populate the result. Previously a transient
+  failure on one endpoint would lose every other range fetched in
+  parallel.
+
+### Changed
+- `octorules complete` (shell-completion preamble): replaced a bare
+  `except Exception: pass` with a narrow exception list and a DEBUG
+  log line. Behavior is identical in the happy path; failure modes
+  are now diagnosable.
+
 ## [0.26.1] - 2026-04-27
 
 ### Added

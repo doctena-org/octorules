@@ -56,30 +56,33 @@ class TestBaseProviderProtocol:
         assert isinstance(instance, BaseProvider), f"{cls_name} does not satisfy BaseProvider"
 
 
-class TestScopeImportPaths:
-    def test_scope_importable_from_provider(self):
-        from octorules.provider import Scope as ScopeFromProvider
+class TestPublicSurfaceImportPaths:
+    """Public types must be importable from both ``octorules.provider`` and
+    ``octorules.provider.base``. Re-exports from the package shim are
+    load-bearing for downstream provider authors."""
 
-        assert ScopeFromProvider is Scope
+    @pytest.mark.parametrize(
+        "import_path, attr, target",
+        [
+            ("octorules.provider", "Scope", Scope),
+            ("octorules.provider.base", "Scope", Scope),
+            ("octorules.provider", "PhaseRulesResult", PhaseRulesResult),
+            ("octorules.provider.base", "PhaseRulesResult", PhaseRulesResult),
+            ("octorules.provider", "BaseProvider", BaseProvider),
+            ("octorules.provider.base", "BaseProvider", BaseProvider),
+        ],
+    )
+    def test_re_export(self, import_path, attr, target):
+        import importlib
 
-    def test_scope_importable_from_base(self):
-        from octorules.provider.base import Scope as ScopeFromBase
-
-        assert ScopeFromBase is Scope
-
-    def test_phase_rules_result_importable_from_provider(self):
-        from octorules.provider import PhaseRulesResult as PRRFromProvider
-
-        assert PRRFromProvider is PhaseRulesResult
-
-    def test_phase_rules_result_importable_from_base(self):
-        from octorules.provider.base import PhaseRulesResult as PRRFromBase
-
-        assert PRRFromBase is PhaseRulesResult
+        module = importlib.import_module(import_path)
+        assert getattr(module, attr) is target
 
 
-class TestExceptionsImportPaths:
-    def test_exceptions_importable_from_provider_exceptions(self):
+class TestExceptionHierarchy:
+    """Provider-error subclassing is a documented contract for `except` clauses."""
+
+    def test_subclass_relationships(self):
         from octorules.provider.exceptions import (
             ProviderAuthError,
             ProviderConnectionError,
@@ -88,28 +91,6 @@ class TestExceptionsImportPaths:
 
         assert issubclass(ProviderAuthError, ProviderError)
         assert issubclass(ProviderConnectionError, ProviderError)
-
-    def test_base_exceptions_defined(self):
-        from octorules.provider.exceptions import (
-            ProviderAuthError,
-            ProviderConnectionError,
-            ProviderError,
-        )
-
-        assert issubclass(ProviderAuthError, ProviderError)
-        assert issubclass(ProviderConnectionError, ProviderError)
-
-
-class TestBaseProviderImportPath:
-    def test_base_provider_importable_from_provider(self):
-        from octorules.provider import BaseProvider as BPFromProvider
-
-        assert BPFromProvider is BaseProvider
-
-    def test_base_provider_importable_from_base(self):
-        from octorules.provider.base import BaseProvider as BPFromBase
-
-        assert BPFromBase is BaseProvider
 
 
 class TestProviderSupports:
