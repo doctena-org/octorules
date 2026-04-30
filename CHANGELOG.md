@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   parallel.
 
 ### Changed
-- `octorules complete` (shell-completion preamble): replaced a bare
+- `octorules completion` (shell-completion preamble): replaced a bare
   `except Exception: pass` with a narrow exception list and a DEBUG
   log line. Behavior is identical in the happy path; failure modes
   are now diagnosable.
