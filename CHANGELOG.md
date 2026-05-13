@@ -1186,7 +1186,7 @@ Total lint rules: **127** (was 109).
 - Tests for `_write_output_file` path traversal guard.
 - Markdown MODIFY test coverage for lists, custom rulesets, and page shield.
 
-## [0.10.0] - 2025-04-28
+## [0.10.0] - 2026-02-19
 
 ### Added
 - **Custom rulesets**: full lifecycle management for account-level WAF custom
@@ -1202,7 +1202,7 @@ Total lint rules: **127** (was 109).
 - `validate` command extended with `--output` flag and list/page shield
   validation.
 
-## [0.9.1] - 2025-03-15
+## [0.9.1] - 2026-02-18
 
 ### Fixed
 - CLI global flags (`--config`, `--zone`, etc.) now work after the subcommand.
@@ -1210,7 +1210,7 @@ Total lint rules: **127** (was 109).
 - Handle Cloudflare 400 "unknown phase" errors gracefully (e.g. SBFM on
   zones without the entitlement).
 
-## [0.9.0] - 2025-03-10
+## [0.9.0] - 2026-02-18
 
 ### Added
 - Zone-level WAF support: `zone_level`/`account_level` dual flags on Phase.
@@ -1222,12 +1222,12 @@ Total lint rules: **127** (was 109).
 - Renamed `waf_managed_exceptions` to `waf_managed_rules` (backward-compatible
   alias preserved).
 
-## [0.8.1] - 2025-02-20
+## [0.8.1] - 2026-02-18
 
 ### Fixed
 - Path traversal guards at file open sites (`_yaml_load`, `_write_output_file`).
 
-## [0.8.0] - 2025-02-15
+## [0.8.0] - 2026-02-18
 
 ### Added
 - Rule details shown in plan output for Create/Delete (HTML, Markdown, Text).
@@ -1236,7 +1236,7 @@ Total lint rules: **127** (was 109).
 ### Changed
 - Upgraded path traversal checks to use `Path.relative_to()` consistently.
 
-## [0.7.0] - 2025-01-25
+## [0.7.0] - 2026-02-18
 
 ### Added
 - Parallel phase fetching with `ThreadPoolExecutor` (up to 4 workers per
@@ -1254,26 +1254,26 @@ Total lint rules: **127** (was 109).
 - Unsafe `yaml.load` replaced with `SafeLoader`.
 - Path traversal protection for `!include`, zone rules, and dump output.
 
-## [0.6.0] - 2025-01-10
+## [0.6.0] - 2026-02-17
 
 ### Changed
 - Match octodns `PlanHtml` output style: full operation names, old/new on
   separate rows, summary row inside the table, `str()` instead of `repr()`,
   "Operation" column header.
 
-## [0.5.0] - 2024-12-20
+## [0.5.0] - 2026-02-17
 
 ### Changed
 - All plan output formats (text, markdown, HTML, JSON) skip unchanged zones.
 - `PlanHtml` converted from full HTML document to embeddable fragment.
 
-## [0.4.1] - 2024-12-10
+## [0.4.1] - 2026-02-17
 
 ### Fixed
 - YAML block style for expressions with trailing whitespace (PyYAML rejects
   literal block style when lines have trailing spaces).
 
-## [0.4.0] - 2024-12-05
+## [0.4.0] - 2026-02-17
 
 ### Added
 - `--zone` supports multiple values (`--zone a.com --zone b.com`).
@@ -1285,13 +1285,13 @@ Total lint rules: **127** (was 109).
 ### Changed
 - Log messages show `zone=domain.tld (ID=zone_id)` consistently.
 
-## [0.3.0] - 2024-11-20
+## [0.3.1] - 2026-02-17
 
 ### Changed
 - Improved YAML dump readability: `ref` and `description` first, literal
   block style for multiline expressions.
 
-## [0.1.0] - 2024-11-01
+## [0.3.0] - 2026-02-17
 
 ### Added
 - Initial release: Cloudflare Rules as IaC with plan, sync, dump, and
