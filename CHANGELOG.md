@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] - 2026-05-13
+
+### Changed
+- A rule with no `logging:` block in YAML is now treated as equivalent
+  to `logging: {enabled: true}` (Cloudflare's API default), eliminating
+  spurious MODIFY diffs. Explicit `logging: {enabled: false}` still
+  diffs against current `true` state. Pairs with `octorules-cloudflare 0.8.2`.
+
 ## [0.26.2] - 2026-04-29
 
 ### Fixed

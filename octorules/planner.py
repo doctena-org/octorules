@@ -236,6 +236,15 @@ def normalize_rule(rule: RuleDict) -> RuleDict:
         if k == "action_parameters" and isinstance(v, dict) and ap_excluded:
             v = {ak: av for ak, av in v.items() if ak not in ap_excluded}
         result[k] = _normalize_value(v, key=k)
+    # Apply provider default for `logging.enabled`. Cloudflare's PUT API
+    # stores `logging.enabled: true` when the field is absent from the
+    # request body, and returns the same on GET. To avoid spurious MODIFY
+    # diffs against hand-written YAML that omits the field, treat an
+    # absent `logging` block as equivalent to the API default. Explicit
+    # `logging.enabled: false` (the load-bearing case for quiet skip
+    # rules) is preserved as-is and still diffs against current state.
+    if "logging" not in result:
+        result["logging"] = {"enabled": True}
     return result
 
 

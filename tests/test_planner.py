@@ -54,16 +54,29 @@ class TestNormalizeRule:
         assert "last_updated" not in normalized
         assert "categories" not in normalized
         assert "ref" not in normalized
-        assert "logging" not in normalized
+        # logging is user-controllable; planner must compare it like any
+        # other field so a flip from false → true (or vice versa) shows
+        # up as a real change.
+        assert normalized["logging"] == {"enabled": True}
         assert normalized["expression"] == "true"
         assert normalized["action"] == "redirect"
 
     def test_preserves_user_fields(self):
+        # Note: normalize_rule injects the CF API default
+        # ``logging.enabled: true`` when the field is absent, so the
+        # output is a superset of the input rather than identical.
         rule = {"expression": "true", "action": "redirect", "enabled": True}
-        assert normalize_rule(rule) == rule
+        normalized = normalize_rule(rule)
+        assert normalized["expression"] == "true"
+        assert normalized["action"] == "redirect"
+        assert normalized["enabled"] is True
+        assert normalized["logging"] == {"enabled": True}
 
     def test_empty_rule(self):
-        assert normalize_rule({}) == {}
+        # The injected ``logging`` default applies even to empty input —
+        # there's no provider context here to gate it on, and the symmetry
+        # (both sides of a diff get it) keeps it harmless.
+        assert normalize_rule({}) == {"logging": {"enabled": True}}
 
 
 class TestValidateRules:
@@ -420,6 +433,9 @@ class TestDiffPhase:
         assert ChangeType.MODIFY in types
 
     def test_api_fields_ignored_in_comparison(self):
+        # Server-managed fields (id, version, last_updated, categories) on
+        # the current side must not cause spurious diffs. logging is
+        # *not* in this set — it's user-controllable, see TestLoggingField.
         desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
         current = [
             {
@@ -427,7 +443,6 @@ class TestDiffPhase:
                 "version": "5",
                 "last_updated": "2024-01-01T00:00:00Z",
                 "categories": ["security"],
-                "logging": {"enabled": False},
                 "ref": "r1",
                 "expression": "true",
                 "action": "redirect",
@@ -436,6 +451,89 @@ class TestDiffPhase:
         ]
         plan = diff_phase(REDIRECT_PHASE, desired, current)
         assert not plan.has_changes
+
+    def test_logging_change_is_detected(self):
+        # Regression for the silent-flip bug: a desired rule with
+        # logging.enabled: false vs current logging.enabled: true must
+        # plan as a MODIFY. (Old behaviour stripped logging from both
+        # sides, so this change was invisible and silently re-flipped on
+        # every sync.)
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "logging": {"enabled": False},
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "logging": {"enabled": True},
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert {c.change_type for c in plan.changes} == {ChangeType.MODIFY}
+
+    def test_logging_absent_matches_default_true(self):
+        # YAML that omits the ``logging`` block must compare equal to a
+        # CF-returned rule with ``logging.enabled: true`` — that's the
+        # API default and omission is shorthand for it. Otherwise every
+        # hand-written rule would generate a spurious MODIFY on first
+        # plan against current state.
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                # no logging block — shorthand for default-true
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "redirect",
+                "enabled": True,
+                "logging": {"enabled": True},
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert not plan.has_changes
+
+    def test_logging_absent_diffs_against_false(self):
+        # Symmetry: YAML omitting ``logging`` (= default true) MUST diff
+        # against a current state of ``logging.enabled: false``, because
+        # syncing the YAML would flip the rule back to noisy. This is the
+        # exact shape of the silent-flip bug, just from the other side.
+        desired = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "skip",
+                "action_parameters": {"ruleset": "current"},
+                "enabled": True,
+            }
+        ]
+        current = [
+            {
+                "ref": "r1",
+                "expression": "true",
+                "action": "skip",
+                "action_parameters": {"ruleset": "current"},
+                "enabled": True,
+                "logging": {"enabled": False},
+            }
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.has_changes
+        assert {c.change_type for c in plan.changes} == {ChangeType.MODIFY}
 
     def test_empty_both(self):
         plan = diff_phase(REDIRECT_PHASE, [], [])
@@ -721,7 +819,10 @@ EXAMPLE_ORIGIN_RULE_YAML = {
     },
 }
 
-# What Cloudflare returns for the same rule (with API-injected fields)
+# What Cloudflare returns for the same rule (with API-injected fields).
+# logging is *not* listed here — it's user-controllable and the planner
+# treats it as a real field, so including it asymmetrically would (rightly)
+# show as a diff. Real-world YAML carrying ``logging`` would echo it back.
 EXAMPLE_ORIGIN_RULE_CF = {
     "id": "a1b2c3d4e5f6",
     "version": "3",
@@ -736,7 +837,6 @@ EXAMPLE_ORIGIN_RULE_CF = {
         "host_header": "api.example.com",
     },
     "enabled": True,
-    "logging": {"enabled": False},
 }
 
 
@@ -1347,7 +1447,6 @@ class TestCFApiResilience:
                 "version": "99",
                 "last_updated": "2026-02-01",
                 "categories": ["test"],
-                "logging": {"enabled": True},
                 "expression": "old",
                 "action": "redirect",
             },

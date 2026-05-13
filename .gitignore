@@ -34,6 +34,9 @@ htmlcov/
 # octorules
 .zone_plans_cache.json
 
+# Local knowledge-graph output
+graphify-out/
+
 # IDE
 .idea/
 .vscode/

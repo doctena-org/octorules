@@ -99,15 +99,19 @@ class TestCleanRule:
         for line in dumped_expr.split("\n"):
             assert line == line.rstrip()
 
-    def test_strips_logging(self):
+    def test_preserves_logging(self):
+        # ``logging.enabled`` is user-controllable per rule. Stripping it on
+        # dump and omitting it on sync silently flips Cloudflare's
+        # server-side default to ``true``, turning previously-quiet skip
+        # rules into firewall_event emitters. The field must round-trip.
         rule = {
             "ref": "r1",
-            "logging": {"enabled": True},
+            "logging": {"enabled": False},
             "expression": "true",
             "action": "redirect",
         }
         cleaned = _clean_rule(rule, "redirect")
-        assert "logging" not in cleaned
+        assert cleaned["logging"] == {"enabled": False}
 
     def test_strips_categories(self):
         rule = {
@@ -254,7 +258,8 @@ class TestDumpZoneRules:
         assert "id" not in rule
         assert "version" not in rule
         assert "last_updated" not in rule
-        assert "logging" not in rule
+        # logging is user-controllable and round-trips (not stripped)
+        assert rule["logging"] == {"enabled": False}
         assert rule["ref"] == "api-redirect-dev"  # ref preserved
         # Default action (route) stripped
         assert "action" not in rule
@@ -290,7 +295,7 @@ class TestCFApiResilience:
         assert rule["deployment_id"] == "dep-123"
 
     def test_dump_strip_fields_complete(self, tmp_path):
-        """All DUMP_STRIP_FIELDS are stripped but ref is preserved."""
+        """Server-only fields are stripped; user-controllable fields round-trip."""
         rules = {
             "http_request_dynamic_redirect": [
                 {
@@ -309,11 +314,13 @@ class TestCFApiResilience:
         result = dump_zone_rules("example.com", rules, tmp_path)
         data = yaml.safe_load(result.read_text())
         rule = data["redirect_rules"][0]
+        # Server-managed metadata: stripped
         assert "id" not in rule
         assert "version" not in rule
         assert "last_updated" not in rule
         assert "categories" not in rule
-        assert "logging" not in rule
+        # User-controllable: round-trips
+        assert rule["logging"] == {"enabled": True}
         assert rule["ref"] == "my-rule"
 
     def test_unknown_provider_id_skipped_in_dump(self, tmp_path):

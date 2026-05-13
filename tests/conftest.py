@@ -99,8 +99,11 @@ _TEST_PHASES: list[Phase] = [
 _TEST_NON_PHASE_KEYS = ("custom_rulesets", "lists", "page_shield_policies")
 
 # API fields that core tests depend on (normally registered by providers).
+# Mirror the octorules-cloudflare set. ``logging`` is intentionally **not**
+# here — it's user-controllable and Cloudflare's PUT default is ``true``,
+# so stripping it round-trips quiet rules into firewall_event emitters.
 _TEST_API_FIELDS: dict[str, set[str]] = {
-    "rule": {"id", "version", "last_updated", "categories", "logging"},
+    "rule": {"id", "version", "last_updated", "categories"},
     "list_item": {"id", "created_on", "modified_on"},
     "page_shield_policy": {"id", "last_updated"},
 }
