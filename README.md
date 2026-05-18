@@ -103,15 +103,17 @@ Create a rules file for each zone. The filename must match the zone name used as
 
 | Provider | Zone concept | Example zone name | Rules file |
 |---|---|---|---|
-| Cloudflare | DNS domain | `example.com` | `rules/example.com.yaml` |
-| AWS WAF | Web ACL name | `my-web-acl` | `rules/my-web-acl.yaml` |
-| Google Cloud Armor | Security policy name | `my-security-policy` | `rules/my-security-policy.yaml` |
-| Azure WAF | WAF policy name | `my-waf-policy` | `rules/my-waf-policy.yaml` |
-| Bunny Shield | Pull zone name | `my-pull-zone` | `rules/my-pull-zone.yaml` |
+| Cloudflare | DNS domain | `example.com` | `<rules-dir>/example.com.yaml` |
+| AWS WAF | Web ACL name | `my-web-acl` | `<rules-dir>/my-web-acl.yaml` |
+| Google Cloud Armor | Security policy name | `my-security-policy` | `<rules-dir>/my-security-policy.yaml` |
+| Azure WAF | WAF policy name | `my-waf-policy` | `<rules-dir>/my-waf-policy.yaml` |
+| Bunny Shield | Pull zone name | `my-pull-zone` | `<rules-dir>/my-pull-zone.yaml` |
 
-The mapping is: `zones.<name>` in `config.yaml` → `rules/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID.
+The mapping is: `zones.<name>` in `config.yaml` → `<rules-dir>/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID. `<rules-dir>` defaults to `./rules/` and is set under `providers.rules.directory` — point it wherever each customer's rules live (the [`examples/`](examples/) directory ships per-provider subdirs under `examples/rules/<provider>/` so each `config-<provider>.yaml` lints its own zones in isolation, plus an `examples/rules/multi/` collecting all of them for the multi-provider `config.yaml`).
 
 Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`. Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation and the [`examples/rules/`](examples/rules/) directory for complete per-provider examples.
+
+octorules lints each rule file only against the plugin matching its zone's target provider. With per-provider lint plugins installed in the same venv (e.g. both `octorules-cloudflare` and `octorules-aws`), a Cloudflare zone file never gets validated against the AWS schema and vice versa — eliminating cross-provider false positives on same-named blocks (`custom_rulesets`, `lists`).
 
 #### Rule-level metadata
 

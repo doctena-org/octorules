@@ -1,0 +1,313 @@
+# Bunny Shield rules for pull zone "my-pull-zone"
+#
+# Bunny Shield provides custom WAF rules, rate limiting, access lists,
+# edge rules, managed rule overrides, shield-level configuration
+# (bot detection, DDoS sensitivity), and pull zone security settings.
+#
+# Phases: bunny_waf_custom_rules, bunny_waf_rate_limit_rules,
+#         bunny_waf_access_list_rules, bunny_edge_rules
+# Non-phase keys: bunny_waf_managed_rules, bunny_shield_config,
+#                 bunny_pullzone_security
+
+# ---------------------------------------------------------------------------
+# Custom Rules — condition-based WAF rules
+# ---------------------------------------------------------------------------
+bunny_waf_custom_rules:
+  - ref: "Block SQLi"
+    action: block
+    severity: error
+    description: "Detect and block SQL injection"
+    conditions:
+      - variable: request_body
+        operator: detect_sqli
+    transformations:
+      - lowercase
+      - url_decode
+
+  - ref: "Block XSS"
+    action: block
+    severity: error
+    description: "Detect and block cross-site scripting"
+    conditions:
+      - variable: request_body
+        operator: detect_xss
+    transformations:
+      - url_decode
+      - html_entity_decode
+
+  - ref: "Block scanners"
+    action: block
+    severity: warning
+    description: "Block known vulnerability scanners"
+    conditions:
+      - variable: request_headers
+        variable_value: User-Agent
+        operator: rx
+        value: "(sqlmap|nikto|nmap)"
+    transformations:
+      - lowercase
+
+  - ref: "Allow health checks"
+    action: allow
+    severity: info
+    description: "Whitelist health check endpoints"
+    conditions:
+      - variable: request_uri
+        operator: begins_with
+        value: /health
+
+# ---------------------------------------------------------------------------
+# Rate-Limit Rules — time-window based throttling
+# ---------------------------------------------------------------------------
+bunny_waf_rate_limit_rules:
+  - ref: "API rate limit"
+    action: block
+    severity: warning
+    request_count: 100
+    timeframe: 1m             # 1s, 10s, 1m, 5m, 15m, 1h
+    block_time: 5m            # 30s, 1m, 5m, 15m, 30m, 1h
+    counter_key_type: ip      # ip, path, header, cookie, query, body, fingerprint, global
+    description: "Rate limit API to 100 req/min per IP"
+    conditions:
+      - variable: request_uri
+        operator: begins_with
+        value: "/api/"
+
+  - ref: "Login brute force"
+    action: block
+    severity: warning
+    request_count: 10
+    timeframe: 1m
+    block_time: 15m
+    counter_key_type: ip
+    description: "Block login brute force"
+    conditions:
+      - variable: request_uri
+        operator: str_eq
+        value: "/auth/login"
+
+  - ref: "File upload frequency"
+    action: block
+    severity: warning
+    request_count: 5
+    timeframe: 5m
+    block_time: 15m
+    counter_key_type: fingerprint    # Rate limit by browser fingerprint, not IP
+    description: "Limit file uploads per user fingerprint to 5 per 5 min"
+    conditions:
+      - variable: request_uri
+        operator: begins_with
+        value: "/upload/"
+      - variable: request_method
+        operator: str_eq
+        value: "POST"
+
+# ---------------------------------------------------------------------------
+# Access List Rules — IP/CIDR/country/ASN/JA4 allow/block lists
+# ---------------------------------------------------------------------------
+# Access list refs are descriptive names (not numeric IDs).
+bunny_waf_access_list_rules:
+  - ref: office-ips
+    type: ip                  # ip, cidr, asn, country, organization, ja4
+    action: allow
+    enabled: true
+    content: |-
+      10.0.0.1
+      10.0.0.2
+      172.16.0.1
+
+  - ref: blocked-ranges
+    type: cidr
+    action: block
+    enabled: true
+    content: |-
+      198.51.100.0/24
+      203.0.113.0/24
+
+  - ref: blocked-countries
+    type: country
+    action: block
+    enabled: true
+    content: |-
+      KP
+      IR
+
+  - ref: blocked-asns
+    type: asn
+    action: block
+    enabled: true
+    content: "12345"
+
+# ---------------------------------------------------------------------------
+# Edge Rules — CDN-level request/response manipulation
+# ---------------------------------------------------------------------------
+# Edge rules use trigger-based matching (not expressions).  Each trigger has
+# a type, pattern matching mode, and list of patterns.
+bunny_edge_rules:
+  - ref: Force HTTPS
+    enabled: true
+    description: "Redirect all HTTP traffic to HTTPS"
+    action_type: force_ssl
+    action_parameter_1: ""
+    action_parameter_2: ""
+    trigger_matching_type: any
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "http://*"
+
+  - ref: Redirect old path
+    enabled: true
+    description: "Redirect /old-path to /new-path with 301"
+    action_type: redirect
+    action_parameter_1: "https://example.com/new-path"
+    action_parameter_2: "301"
+    trigger_matching_type: all
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "/old-path*"
+
+  - ref: Add security headers
+    enabled: true
+    description: "Add X-Frame-Options header to all responses"
+    action_type: set_response_header
+    action_parameter_1: "X-Frame-Options"
+    action_parameter_2: "DENY"
+    trigger_matching_type: any
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "*"
+
+  - ref: Cache API responses
+    enabled: true
+    description: "Override cache time for API GET requests"
+    action_type: override_cache_time
+    action_parameter_1: "3600"
+    action_parameter_2: ""
+    trigger_matching_type: all
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "/api/*"
+      - type: request_method
+        pattern_matching_type: any
+        pattern_matches:
+          - "GET"
+
+  - ref: Add custom request header
+    enabled: true
+    description: "Add X-CDN-Cache-Key header to all requests for cache optimization"
+    action_type: set_request_header
+    action_parameter_1: "X-CDN-Cache-Key"
+    action_parameter_2: "bunny-cache"
+    trigger_matching_type: any
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "*"
+
+  - ref: Block slow clients
+    enabled: true
+    description: "Set connection limit to prevent slow-rate DDoS attacks"
+    action_type: set_connection_limit
+    action_parameter_1: "100"
+    action_parameter_2: ""
+    trigger_matching_type: any
+    triggers:
+      - type: url
+        pattern_matching_type: any
+        pattern_matches:
+          - "*"
+
+# ---------------------------------------------------------------------------
+# Managed Rule Overrides — disable or set log-only on built-in rules
+# ---------------------------------------------------------------------------
+bunny_waf_managed_rules:
+  disabled:
+    - "941100"                # XSS via libinjection
+    - "942100"                # SQLi via libinjection
+  log_only:
+    - "941110"                # XSS filter (log but don't block)
+
+# ---------------------------------------------------------------------------
+# Shield Config — bot detection, DDoS, WAF settings, upload scanning
+# ---------------------------------------------------------------------------
+bunny_shield_config:
+  bot_detection:
+    execution_mode: log       # off, log, block
+    request_integrity_sensitivity: medium  # off, low, medium, high
+    ip_sensitivity: low
+    fingerprint_sensitivity: high
+    complex_fingerprinting: false
+    fingerprint_aggression: 1        # Aggression level (int)
+  ddos:
+    shield_sensitivity: medium
+    execution_mode: log
+    challenge_window: 300
+  waf:
+    enabled: true                    # Master WAF on/off switch
+    execution_mode: block            # log or block (requires learning_mode: false)
+    learning_mode: false
+    request_body_limit_action: 1     # 0=block, 1=log, 2=ignore
+    response_body_limit_action: 2
+    whitelabel_response_pages: true  # Remove bunny.net branding from block pages
+    realtime_threat_intelligence_enabled: false
+    profile_id: 2                    # WAF profile ID (use octorules dump to discover)
+    request_header_logging_enabled: true
+    request_ignored_headers:
+      - Authorization
+      - Cookie
+      - Credential
+      - Signature
+    # engine_config: []              # Advanced: override WAF engine settings
+  upload_scanning:
+    enabled: true
+    csam_scanning_mode: 1          # 0=off, 1=enabled
+    antivirus_scanning_mode: 1     # 0=off, 1=enabled
+
+# ---------------------------------------------------------------------------
+# Curated Threat Lists — Bunny-managed threat intelligence feeds
+# ---------------------------------------------------------------------------
+# Enable/disable and set the action for Bunny's managed access lists.
+# List names come from the Bunny dashboard (use octorules dump to discover).
+# Available lists depend on your Shield tier (Advanced: 6, Business: 15).
+bunny_curated_threat_lists:
+  VPN Providers:
+    enabled: true
+    action: block
+  TOR Exit Nodes:
+    enabled: true
+    action: challenge
+  Common Datacenters:
+    enabled: false
+  AbuseIPDB:
+    enabled: true
+    action: log
+  FireHOL L1:
+    enabled: true
+    action: block
+
+# ---------------------------------------------------------------------------
+# Pull Zone Security — CDN-level security settings
+# ---------------------------------------------------------------------------
+bunny_pullzone_security:
+  blocked_ips:
+    - "198.51.100.99"
+  blocked_countries: []
+  blocked_referrers: []
+  allowed_referrers: []
+  block_post_requests: false
+  block_root_path_access: false
+  enable_token_authentication: false
+  token_auth_include_ip: false
+  block_none_referrer: false
+  cors_enabled: false
+  cors_extensions: []
+  logging_ip_anonymization_type: 1  # 0=none, 1=one octet, 2=two octets

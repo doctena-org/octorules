@@ -19,7 +19,11 @@ aws_waf_custom_rules:
       Block: {}
     Statement:
       IPSetReferenceStatement:
-        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/ipset/bad-ips/abcd1234
+        # ARN's logical name (`blocked-ips`) matches the IP set defined in
+        # the `lists:` section, so octorules manages the IP set's full
+        # lifecycle. Referencing an externally-managed IP set by a name
+        # not in `lists:` triggers WA326 (lifecycle hint).
+        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/ipset/blocked-ips/abcd1234
     VisibilityConfig:
       SampledRequestsEnabled: true
       CloudWatchMetricsEnabled: true
@@ -94,6 +98,81 @@ aws_waf_custom_rules:
       CloudWatchMetricsEnabled: true
       MetricName: size-limit
 
+  - ref: block-by-regex-pattern
+    Priority: 6
+    Action:
+      Block: {}
+    Statement:
+      RegexPatternSetReferenceStatement:
+        ARN: arn:aws:wafv2:us-west-2:123456789012:regional/regexpatternset/bad-ua-patterns/ijkl9012
+        FieldToMatch:
+          SingleHeader:
+            Name: user-agent
+        TextTransformations:
+          - Priority: 0
+            Type: LOWERCASE
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: block-by-regex-pattern
+
+  - ref: combined-bot-check
+    Priority: 7
+    Action:
+      Block:
+        CustomResponse:
+          ResponseCode: 403
+    Statement:
+      OrStatement:
+        Statements:
+          - ByteMatchStatement:
+              FieldToMatch:
+                SingleHeader:
+                  Name: user-agent
+              PositionalConstraint: CONTAINS
+              SearchString: bot
+              TextTransformations:
+                - Priority: 0
+                  Type: LOWERCASE
+          - RegexPatternSetReferenceStatement:
+              ARN: arn:aws:wafv2:us-west-2:123456789012:regional/regexpatternset/bad-ua-patterns/ijkl9012
+              FieldToMatch:
+                SingleHeader:
+                  Name: user-agent
+              TextTransformations:
+                - Priority: 0
+                  Type: LOWERCASE
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: combined-bot-check
+
+  - ref: api-path-only-rate-limit
+    Priority: 8
+    Action:
+      Block:
+        CustomResponse:
+          ResponseCode: 429
+    Statement:
+      AndStatement:
+        Statements:
+          - ByteMatchStatement:
+              FieldToMatch:
+                UriPath: {}
+              PositionalConstraint: STARTS_WITH
+              SearchString: /api/
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          - NotStatement:
+              Statement:
+                IPSetReferenceStatement:
+                  ARN: arn:aws:wafv2:us-west-2:123456789012:regional/ipset/internal-ips/efgh5678
+    VisibilityConfig:
+      SampledRequestsEnabled: true
+      CloudWatchMetricsEnabled: true
+      MetricName: api-path-only-rate-limit
+
 # ---------------------------------------------------------------------------
 # Rate-Based Rules — rate limiting with aggregation
 # ---------------------------------------------------------------------------
@@ -132,8 +211,17 @@ aws_waf_managed_rules:
       ManagedRuleGroupStatement:
         VendorName: AWS
         Name: AWSManagedRulesCommonRuleSet
-        ExcludedRules:
+        # Pin a specific managed-rule version — unpinned groups (no
+        # `Version`) auto-update and can change behaviour without notice.
+        Version: Version_2.0
+        # `RuleActionOverrides` is the current AWS API; the older
+        # `ExcludedRules` field was deprecated in late 2023. Use
+        # `ActionToUse: {Count: {}}` to log-only a managed sub-rule
+        # instead of excluding it entirely.
+        RuleActionOverrides:
           - Name: SizeRestrictions_BODY
+            ActionToUse:
+              Count: {}
     OverrideAction:
       None: {}
     VisibilityConfig:
@@ -147,6 +235,7 @@ aws_waf_managed_rules:
       ManagedRuleGroupStatement:
         VendorName: AWS
         Name: AWSManagedRulesSQLiRuleSet
+        Version: Version_3.0
     OverrideAction:
       None: {}
     VisibilityConfig:
@@ -160,8 +249,12 @@ aws_waf_managed_rules:
       ManagedRuleGroupStatement:
         VendorName: AWS
         Name: AWSManagedRulesKnownBadInputsRuleSet
+        Version: Version_1.18
+    # Block (not Count) by default — `Count` without a `ScopeDownStatement`
+    # logs every request that matches the managed group, which inflates
+    # CloudWatch volume and rarely matches operator intent.
     OverrideAction:
-      Count: {}
+      None: {}
     VisibilityConfig:
       SampledRequestsEnabled: true
       CloudWatchMetricsEnabled: true

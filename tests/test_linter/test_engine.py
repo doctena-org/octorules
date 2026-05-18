@@ -140,6 +140,63 @@ class TestPluginDispatch:
             unregister_linter("test-p1")
             unregister_linter("test-p2")
 
+    def test_target_plugins_filter_selects_one(self):
+        """``target_plugins`` filter — only the named plugin is invoked."""
+        p1, calls1 = self._make_plugin(name="cloudflare", rule_ids=["CF001"])
+        p2, calls2 = self._make_plugin(name="aws", rule_ids=["WA001"])
+        register_linter(p1)
+        register_linter(p2)
+        try:
+            data = {"some_phase": []}
+            lint_zone_file(data, target_plugins={"cloudflare"})
+            assert len(calls1) == 1
+            assert len(calls2) == 0
+        finally:
+            unregister_linter("cloudflare")
+            unregister_linter("aws")
+
+    def test_target_plugins_filter_selects_multiple(self):
+        """``target_plugins`` with multiple names invokes only those plugins."""
+        p1, calls1 = self._make_plugin(name="alpha", rule_ids=["A001"])
+        p2, calls2 = self._make_plugin(name="beta", rule_ids=["B001"])
+        p3, calls3 = self._make_plugin(name="gamma", rule_ids=["G001"])
+        register_linter(p1)
+        register_linter(p2)
+        register_linter(p3)
+        try:
+            lint_zone_file({"x": []}, target_plugins={"alpha", "gamma"})
+            assert len(calls1) == 1
+            assert len(calls2) == 0
+            assert len(calls3) == 1
+        finally:
+            unregister_linter("alpha")
+            unregister_linter("beta")
+            unregister_linter("gamma")
+
+    def test_target_plugins_none_runs_all(self):
+        """``target_plugins=None`` keeps legacy behaviour (every plugin)."""
+        p1, calls1 = self._make_plugin(name="x1", rule_ids=["X001"])
+        p2, calls2 = self._make_plugin(name="x2", rule_ids=["X002"])
+        register_linter(p1)
+        register_linter(p2)
+        try:
+            lint_zone_file({"x": []}, target_plugins=None)
+            assert len(calls1) == 1
+            assert len(calls2) == 1
+        finally:
+            unregister_linter("x1")
+            unregister_linter("x2")
+
+    def test_target_plugins_empty_set_runs_nothing(self):
+        """An empty ``target_plugins`` set is honoured — no plugins run."""
+        p1, calls1 = self._make_plugin(name="solo", rule_ids=["S001"])
+        register_linter(p1)
+        try:
+            lint_zone_file({"x": []}, target_plugins=set())
+            assert len(calls1) == 0
+        finally:
+            unregister_linter("solo")
+
     def test_get_known_rule_ids_aggregates_plugins(self):
         """get_known_rule_ids returns union of all plugin rule_ids."""
         from octorules.linter.engine import get_known_rule_ids
@@ -543,3 +600,38 @@ class TestLintPerformance:
         lint_zone_file(rules_data)
         elapsed = time.monotonic() - t0
         assert elapsed < 5.0, f"Lint with 500 rules took {elapsed:.1f}s (limit 5s)"
+
+
+class TestProviderNameForClassPath:
+    """Convention: ``octorules_<plugin_name>.*`` → ``<plugin_name>``."""
+
+    def test_cloudflare_class_path(self):
+        from octorules.linter.plugin import provider_name_for_class_path
+
+        assert (
+            provider_name_for_class_path("octorules_cloudflare.provider.CloudflareProvider")
+            == "cloudflare"
+        )
+
+    def test_aws_class_path(self):
+        from octorules.linter.plugin import provider_name_for_class_path
+
+        assert provider_name_for_class_path("octorules_aws.provider.AwsWafProvider") == "aws"
+
+    def test_non_octorules_class_path_returns_none(self):
+        from octorules.linter.plugin import provider_name_for_class_path
+
+        assert provider_name_for_class_path("acme.provider.AcmeProvider") is None
+        assert provider_name_for_class_path("myorg.cloudflare.Provider") is None
+
+    def test_empty_or_none(self):
+        from octorules.linter.plugin import provider_name_for_class_path
+
+        assert provider_name_for_class_path("") is None
+        assert provider_name_for_class_path(None) is None
+
+    def test_bare_package_name(self):
+        """A class path that's only the package name still resolves."""
+        from octorules.linter.plugin import provider_name_for_class_path
+
+        assert provider_name_for_class_path("octorules_bunny") == "bunny"

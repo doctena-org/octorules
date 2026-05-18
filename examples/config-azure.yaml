@@ -19,6 +19,7 @@ providers:
     resource_group: env/AZURE_RESOURCE_GROUP      # Required
     waf_type: front_door       # front_door (default) or app_gateway
     timeout: 30.0              # HTTP timeout (default: 30)
+    max_workers: 1             # Per-provider parallelism (default: 1)
     safety:
       delete_threshold: 30.0
       update_threshold: 30.0
@@ -41,7 +42,7 @@ providers:
   #   waf_type: app_gateway
 
   rules:
-    directory: ./rules
+    directory: ./rules/azure
 
 manager:
   max_workers: 2

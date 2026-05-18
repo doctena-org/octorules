@@ -52,7 +52,10 @@ request_header_rules:
       headers:
         X-Real-IP:
           operation: set
-          expression: ip.src
+          # Wrapped in concat() so the value renders as a string; Cloudflare's
+          # transform language accepts bare references but wirefilter's filter
+          # parser requires a function-call wrapper for value expressions.
+          expression: concat(ip.src)
 
 # ---------------------------------------------------------------------------
 # Response Header Rules — modify response headers sent to client
@@ -126,20 +129,20 @@ waf_custom_rules:
   - ref: block-bad-bots
     description: "Block known bad user agents"
     expression: |-
-      any(http.request.headers["user-agent"][*],
-        lower(http.request.headers["user-agent"][*]) contains "sqlmap" or
-        lower(http.request.headers["user-agent"][*]) contains "nikto"
-      )
+      lower(http.user_agent) contains "sqlmap" or
+      lower(http.user_agent) contains "nikto"
     action: block
 
   - ref: challenge-high-risk-countries
     description: "Managed challenge for high-risk geolocations"
-    expression: 'ip.geoip.country in {"RU" "CN" "KP"}'
+    expression: 'ip.src.country in {"RU" "CN" "KP"}'
     action: managed_challenge
 
   - ref: allow-internal-ips
     description: "Skip WAF for internal monitoring"
-    expression: 'ip.src in $internal-ips'
+    # Note: list names must be wirefilter-safe identifiers — use underscores,
+    # not dashes. `$internal-ips` would parse as `$internal MINUS ips`.
+    expression: 'ip.src in $internal_ips'
     action: skip
     action_parameters:
       phases:
@@ -150,7 +153,7 @@ waf_custom_rules:
   # This rule is kept in YAML for documentation but not deployed.
   - ref: experimental-geo-block
     description: "Testing geo-block — not ready for production"
-    expression: 'ip.geoip.country in {"XX"}'
+    expression: 'ip.src.country in {"XX"}'
     action: block
     octorules:
       ignored: true
@@ -167,7 +170,7 @@ waf_custom_rules:
 
   - ref: skip-staging-challenge
     description: "Deploy everywhere except cf-staging"
-    expression: 'ip.geoip.country in {"RU" "CN"}'
+    expression: 'ip.src.country in {"RU" "CN"}'
     action: managed_challenge
     octorules:
       excluded:
@@ -199,11 +202,13 @@ rate_limiting_rules:
 compression_rules:
   - ref: compress-api-json
     description: "Enable gzip for API JSON responses"
+    # `[*] contains "x"` is wirefilter's elementwise comparison: it produces
+    # an Array<Bool> from the multi-valued header, which `any()` reduces to
+    # a single Bool. Don't re-reference the array inside a two-arg `any()` —
+    # that's a type error.
     expression: |-
       starts_with(http.request.uri.path, "/api/") and
-      any(http.response.headers["content-type"][*],
-        http.response.headers["content-type"][*] contains "application/json"
-      )
+      any(http.response.headers["content-type"][*] contains "application/json")
     action_parameters:
       algorithms:
         - gzip
@@ -213,7 +218,12 @@ compression_rules:
 # Custom Rulesets — account-level managed rulesets
 # ---------------------------------------------------------------------------
 custom_rulesets:
-  - name: shared-waf-rules
+  # Replace `id` with your actual 32-char hex ruleset UUID. Discover it
+  # with `octorules dump` or via the Cloudflare API. Custom rulesets are
+  # account-level resources with stable IDs that octorules cannot create —
+  # they must be created in the Cloudflare dashboard or via the API first.
+  - id: 00000000000000000000000000000000
+    name: shared-waf-rules
     phase: http_request_firewall_custom
     rules:
       - ref: block-scanners
@@ -224,7 +234,10 @@ custom_rulesets:
 # Lists — account-level IP/ASN/hostname lists
 # ---------------------------------------------------------------------------
 lists:
-  - name: internal-ips
+  # List names must be wirefilter-safe identifiers (letters, digits, underscores).
+  # Dashes parse as the subtraction operator in expression references like
+  # `ip.src in $internal_ips`.
+  - name: internal_ips
     kind: ip
     description: "Internal monitoring IPs"
     items:
@@ -232,7 +245,13 @@ lists:
       - 172.16.0.0/12
       - 192.168.0.0/16
 
-  - name: blocked-asns
+  - name: blocklist
+    kind: ip
+    description: "Blocked IP ranges referenced by prod-only-waf rule"
+    items:
+      - 198.51.100.0/24  # RFC 5737 documentation prefix — placeholder
+
+  - name: blocked_asns
     kind: asn
     description: "Blocked autonomous systems"
     items:

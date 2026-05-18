@@ -46,3 +46,22 @@ def unregister_linter(name: str) -> None:
 def get_registered_plugins() -> list[LintPlugin]:
     """Return a copy of the registered plugin list."""
     return list(_PLUGINS)
+
+
+def provider_name_for_class_path(class_path: str | None) -> str | None:
+    """Map a provider class path to its lint-plugin name by convention.
+
+    The convention across the ``octorules-*`` ecosystem is that every
+    provider package is named ``octorules_<plugin_name>`` and its lint
+    plugin registers under the same ``<plugin_name>`` (e.g.
+    ``octorules_cloudflare.provider.CloudflareProvider`` → ``"cloudflare"``).
+    Returns ``None`` when the class path doesn't follow the convention,
+    which signals callers to fall back to running all registered
+    plugins for that file.
+    """
+    if not class_path:
+        return None
+    pkg = class_path.split(".", 1)[0]
+    if pkg.startswith("octorules_"):
+        return pkg.removeprefix("octorules_")
+    return None

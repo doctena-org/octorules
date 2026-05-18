@@ -42,7 +42,9 @@ gcloud_armor_custom_rules:
 
   - ref: "400"
     description: "Block large request bodies"
-    action: "deny(413)"
+    # Cloud Armor accepts deny(403), deny(404), deny(429), deny(502).
+    # 413 (Payload Too Large) is not in the allowed set — use 403.
+    action: "deny(403)"
     match:
       expr:
         expression: "int(request.headers['content-length']) > 10000"
@@ -69,6 +71,38 @@ gcloud_armor_rate_rules:
       exceed_action: deny-429
       rate_limit_threshold:
         count: 100
+        interval_sec: 60
+
+  - ref: "1050"
+    description: "Rate limit by custom header (API key)"
+    action: throttle
+    match:
+      expr:
+        expression: "has(request.headers['x-api-key'])"
+    rate_limit_options:
+      conform_action: allow
+      exceed_action: deny-429
+      enforce_on_key: HTTP_HEADER
+      enforce_on_key_name: x-api-key
+      rate_limit_threshold:
+        count: 500
+        interval_sec: 60
+
+  - ref: "1075"
+    description: "Rate limit by session cookie or IP (fallback)"
+    action: throttle
+    match:
+      expr:
+        expression: "!has(request.headers['x-api-key'])"
+    rate_limit_options:
+      conform_action: allow
+      exceed_action: deny-429
+      enforce_on_key_configs:
+        - enforce_on_key_type: HTTP_COOKIE
+          enforce_on_key_name: session_id
+        - enforce_on_key_type: IP
+      rate_limit_threshold:
+        count: 200
         interval_sec: 60
 
   - ref: "1100"

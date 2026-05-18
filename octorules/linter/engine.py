@@ -247,10 +247,11 @@ def lint_zone_file(
     phase_filter: list[str] | None = None,
     rule_filter: list[str] | None = None,
     suppressions: dict[str, set[str]] | None = None,
+    target_plugins: set[str] | None = None,
 ) -> LintContext:
     """Run all lint checks on a zone rules file.
 
-    Creates a ``LintContext`` and dispatches to all registered lint plugins.
+    Creates a ``LintContext`` and dispatches to registered lint plugins.
     Each plugin's ``lint_fn(rules_data, ctx)`` mutates the context directly.
 
     When no plugins are registered (i.e. no provider packages installed),
@@ -267,6 +268,13 @@ def lint_zone_file(
         rule_filter: Only check these rule IDs.
         suppressions: Map of ref (or ``"*"``) to suppressed rule IDs,
             typically from ``parse_suppressions()``.
+        target_plugins: Optional set of plugin names to run on this file.
+            When provided, only registered plugins whose ``name`` is in
+            the set are invoked — used by ``cmd_lint`` to route each
+            zone's file to its target provider's plugin only, eliminating
+            cross-provider schema collisions on shared top-level keys
+            (``custom_rulesets``, ``lists``).  ``None`` runs every
+            registered plugin (legacy behaviour).
 
     Returns:
         LintContext with accumulated ``results`` (list of ``LintResult``).
@@ -284,6 +292,8 @@ def lint_zone_file(
     )
 
     for plugin in get_registered_plugins():
+        if target_plugins is not None and plugin.name not in target_plugins:
+            continue
         plugin.lint_fn(rules_data, ctx)
 
     return ctx

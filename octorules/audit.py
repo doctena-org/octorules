@@ -415,93 +415,113 @@ def check_ip_overlap(rule_ips: list[RuleIPInfo]) -> list[AuditFinding]:
     return findings
 
 
+_BLOCKING_ACTIONS = frozenset({"block", "managed_challenge", "js_challenge", "challenge", "deny"})
+
+
+def _is_blocking_action(action: str | None) -> bool:
+    """Return True if *action* is a blocking action.
+
+    Handles Google's ``deny(NNN)`` format (treated as ``deny``) alongside
+    the canonical Cloudflare / AWS / Azure action vocabulary.
+    """
+    a = (action or "").lower()
+    if a.startswith("deny"):
+        return True
+    return a in _BLOCKING_ACTIONS
+
+
 def check_ip_shadow(rule_ips: list[RuleIPInfo], phase_order: list[str]) -> list[AuditFinding]:
     """Detect rules shadowed by broader rules in earlier phases.
 
     A rule is "shadowed" when *all* its IPs are contained within IPs of
-    a rule in an earlier phase with a blocking action (block/deny/challenge).
+    a single rule in an earlier phase with a blocking action
+    (block/deny/challenge).
+
+    Per zone, builds a prefix-keyed index of all blocking rules' CIDRs
+    keyed by ``(prefix_len, network_address, version)``. For each
+    candidate, supernet lookup is at most 33 dict lookups for IPv4 (129
+    for IPv6) regardless of the zone's rule count, replacing the
+    earlier O(N²·M²) pair-by-pair comparison.
     """
     findings: list[AuditFinding] = []
     phase_rank = {p: i for i, p in enumerate(phase_order)}
 
-    # Group by zone
     by_zone: dict[str, list[RuleIPInfo]] = {}
     for info in rule_ips:
         by_zone.setdefault(info.zone_name, []).append(info)
 
-    blocking_actions = frozenset(
-        {"block", "managed_challenge", "js_challenge", "challenge", "deny"}
-    )
-
     for zone_name, infos in by_zone.items():
-        # For each rule, check if all its IPs are covered by an earlier-phase blocking rule
+        # Parse every rule's CIDRs once. Position-indexed so we can refer
+        # to a rule by its position in `infos` (stable + cheap to hash).
+        parsed: list[list[ipaddress.IPv4Network | ipaddress.IPv6Network]] = []
         for info in infos:
-            if not info.ip_ranges:
+            nets = [n for n in (_to_network(c) for c in info.ip_ranges) if n is not None]
+            parsed.append(nets)
+
+        # Index blocking rules' CIDRs by (prefix_len, network_int, version).
+        # Each entry is (rule_position, phase_rank). Reverse the values list
+        # at the end so identically-keyed entries iterate in insertion order
+        # (the iteration walks supernets from /0 upward, and within a single
+        # supernet bucket we want the earliest-inserted rule first).
+        index: dict[tuple[int, int, int], list[tuple[int, int]]] = {}
+        for pos, info in enumerate(infos):
+            rank = phase_rank.get(info.phase_name)
+            if rank is None or not _is_blocking_action(info.action):
                 continue
+            for net in parsed[pos]:
+                key = (net.prefixlen, int(net.network_address), net.version)
+                index.setdefault(key, []).append((pos, rank))
+
+        # Per-rule shadow lookup.
+        for pos, info in enumerate(infos):
             info_rank = phase_rank.get(info.phase_name)
             if info_rank is None:
                 continue
-
-            info_nets = [_to_network(c) for c in info.ip_ranges]
-            info_nets = [n for n in info_nets if n is not None]
+            info_nets = parsed[pos]
             if not info_nets:
                 continue
 
-            for other in infos:
-                if other is info:
-                    continue
-                if not other.ip_ranges:
-                    continue
-                other_rank = phase_rank.get(other.phase_name)
-                if other_rank is None or other_rank >= info_rank:
-                    continue  # Not an earlier phase
+            # For each CIDR of `info`, collect candidate rules that contain it
+            # AND are in an earlier phase. The intersection across all CIDRs
+            # is the set of rules that shadow `info`.
+            per_net_covers: list[set[int]] = []
+            for info_net in info_nets:
+                covers: set[int] = set()
+                ip_int = int(info_net.network_address)
+                version = info_net.version
+                bitlen = 32 if version == 4 else 128
+                for plen in range(info_net.prefixlen + 1):
+                    if plen == 0:
+                        net_int = 0
+                    else:
+                        shift = bitlen - plen
+                        net_int = (ip_int >> shift) << shift
+                    for cand_pos, cand_rank in index.get((plen, net_int, version), ()):
+                        if cand_pos != pos and cand_rank < info_rank:
+                            covers.add(cand_pos)
+                per_net_covers.append(covers)
 
-                # Check if action is blocking
-                action_lower = (other.action or "").lower()
-                # Handle Google deny(NNN) format
-                if action_lower.startswith("deny"):
-                    is_blocking = True
-                else:
-                    is_blocking = action_lower in blocking_actions
+            shadowers = set.intersection(*per_net_covers) if per_net_covers else set()
+            if not shadowers:
+                continue
 
-                if not is_blocking:
-                    continue
-
-                other_nets = [_to_network(c) for c in other.ip_ranges]
-                other_nets = [n for n in other_nets if n is not None]
-                if not other_nets:
-                    continue
-
-                # Check if every IP in info is covered by some IP in other
-                all_shadowed = True
-                for info_net in info_nets:
-                    covered = False
-                    for other_net in other_nets:
-                        if info_net.version != other_net.version:
-                            continue
-                        if info_net.subnet_of(other_net):
-                            covered = True
-                            break
-                    if not covered:
-                        all_shadowed = False
-                        break
-
-                if all_shadowed:
-                    findings.append(
-                        AuditFinding(
-                            check="ip-shadow",
-                            severity=FindingSeverity.WARNING,
-                            message=(
-                                f"Rule {info.ref} ({info.phase_name}) is shadowed by"
-                                f" {other.ref} ({other.phase_name}, action={other.action}):"
-                                f" all IPs are covered by the earlier rule"
-                            ),
-                            zone_name=zone_name,
-                            phase_name=info.phase_name,
-                            ref=info.ref,
-                        )
-                    )
-                    break  # One shadow finding per rule is enough
+            # Pick the first-encountered shadowing rule (lowest position) for
+            # deterministic output that matches the original iteration order.
+            shadower = infos[min(shadowers)]
+            findings.append(
+                AuditFinding(
+                    check="ip-shadow",
+                    severity=FindingSeverity.WARNING,
+                    message=(
+                        f"Rule {info.ref} ({info.phase_name}) is shadowed by"
+                        f" {shadower.ref} ({shadower.phase_name}, action={shadower.action}):"
+                        f" all IPs are covered by the earlier rule"
+                    ),
+                    zone_name=zone_name,
+                    phase_name=info.phase_name,
+                    ref=info.ref,
+                )
+            )
 
     return findings
 

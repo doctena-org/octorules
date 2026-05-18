@@ -27,6 +27,11 @@ providers:
     token: env/CLOUDFLARE_API_TOKEN
     timeout: 30.0
     max_retries: 2
+    max_workers: 1
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
 
   aws:
     region: us-west-2
@@ -34,12 +39,22 @@ providers:
     wcu_limit: 5000            # Web ACL capacity units limit for lint checks
     timeout: 30.0
     max_retries: 2
+    max_workers: 1
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
     # Authentication: standard boto3 credential chain (env vars,
     # ~/.aws/credentials, IAM roles).  No explicit key in config.
 
   google:
     project: env/GCLOUD_PROJECT
     timeout: 30.0
+    max_workers: 1
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
     # Authentication: Google Application Default Credentials (ADC).
     # Run "gcloud auth application-default login" locally, or use
     # Workload Identity in CI.
@@ -49,17 +64,30 @@ providers:
     resource_group: env/AZURE_RESOURCE_GROUP
     waf_type: front_door       # front_door (default) or app_gateway
     timeout: 30.0              # For both types, use two instances — see config-azure.yaml
+    max_workers: 1
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
 
   bunny:
     api_key: env/BUNNY_API_KEY
+    plan: advanced             # free or advanced (for plan-aware lint)
     timeout: 30.0
     max_retries: 2
+    max_workers: 1
+    safety:
+      delete_threshold: 30.0
+      update_threshold: 30.0
+      min_existing: 3
 
-  # Shared rules and lists directories.
+  # Rules directory — every zone's rule file lives here as
+  # `<zone-name>.yaml`. In production each file is the source of truth
+  # for one zone (managed by one provider). The examples directory
+  # uses symlinks under `rules/multi/` back to per-provider subdirs so
+  # there's one canonical source for each zone's rules.
   rules:
-    directory: ./rules
-  lists:
-    directory: ./rules/custom_lists
+    directory: ./rules/multi
 
 # ---------------------------------------------------------------------------
 # Processors — transform or filter rules in the plan/sync pipeline
@@ -175,12 +203,17 @@ zones:
   #     - cf-prod
   #     - cf-staging
 
-  # Wildcard — auto-discover zones from providers that support it.
-  # Creates a zone for every provider-discovered zone that has a matching
+  # Wildcard zone template — auto-discover zones from a specific
+  # provider. The parser requires explicit `targets:` whenever the
+  # config declares more than one provider, so the wildcard expansion
+  # knows which provider to query for the discovered-zone list.
+  # Creates a zone for every provider-discovered zone with a matching
   # rules/<zone>.yaml file.
   '*':
     sources:
       - rules
+    targets:
+      - cloudflare      # zones list pulled from Cloudflare's API
     allow_unmanaged: false
 
 # ---------------------------------------------------------------------------

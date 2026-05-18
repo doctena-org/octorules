@@ -2,7 +2,7 @@
 #
 # Azure WAF supports Front Door and Application Gateway.  Set waf_type in
 # config.yaml to choose which.  Rules use matchConditions with operators
-# like IPMatch, GeoMatch, Contains, BeginsWith, Regex, etc.
+# like IPMatch, GeoMatch, Contains, BeginsWith, RegEx, etc.
 #
 # Phases: azure_waf_custom_rules, azure_waf_rate_rules, azure_waf_managed_rules
 #
@@ -85,7 +85,11 @@ azure_waf_custom_rules:
     matchConditions:
       - matchVariable: RequestBody
         selector: null
-        operator: Regex
+        # Azure spells this operator `RegEx` (capital E). The valid set is
+        # Any, BeginsWith, Contains, EndsWith, Equal, GeoMatch, GreaterThan,
+        # GreaterThanOrEqual, IPMatch, LessThan, LessThanOrEqual, RegEx,
+        # ServiceTagMatch.
+        operator: RegEx
         negateCondition: false
         matchValue:
           - ".{10000,}"

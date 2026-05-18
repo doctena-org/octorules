@@ -4396,3 +4396,106 @@ class TestProgressCallback:
         with caplog.at_level(logging.INFO, logger="octorules"):
             cmd_plan(sample_config, ["example.com"])
         assert "[1/1] planned" not in caplog.text
+
+
+class TestPerZonePluginRouting:
+    """End-to-end: ``cmd_lint`` routes each zone's file only to its
+    target provider's plugin, eliminating cross-provider schema noise
+    when multiple ``octorules-*`` packages are installed in the same
+    venv. Pre-fix, the AWS plugin would validate Cloudflare's
+    ``custom_rulesets`` block and vice versa.
+    """
+
+    def test_cmd_lint_routes_zones_to_their_provider_plugins(self, tmp_path):
+        from octorules.commands._lint import cmd_lint
+        from octorules.linter.engine import LintContext, LintResult, Severity
+        from octorules.linter.plugin import (
+            LintPlugin,
+            register_linter,
+            unregister_linter,
+        )
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "my-web-acl.yaml").write_text("aws_waf_custom_rules: []\n")
+
+        # Two zones, two different providers — set via explicit class_path
+        # so we exercise the convention-based plugin-name resolution.
+        config = Config(
+            providers={
+                "cf-prod": ProviderConfig(
+                    name="cf-prod",
+                    class_path="octorules_cloudflare.provider.CloudflareProvider",
+                    kwargs={"token": "t"},
+                ),
+                "aws-prod": ProviderConfig(
+                    name="aws-prod",
+                    class_path="octorules_aws.provider.AwsWafProvider",
+                    kwargs={"region": "us-west-2"},
+                ),
+            },
+            rules_dir=rules_dir,
+            zones={
+                "example.com": ZoneConfig(
+                    name="example.com",
+                    sources=["rules"],
+                    targets=["cf-prod"],
+                ),
+                "my-web-acl": ZoneConfig(
+                    name="my-web-acl",
+                    sources=["rules"],
+                    targets=["aws-prod"],
+                ),
+            },
+        )
+
+        # Plugins that record which zone they were called against. Each
+        # emits a result so ``has_warnings`` is set (avoids any
+        # "no warnings" short-circuit in cmd_lint).
+        cf_zones: list[str] = []
+        aws_zones: list[str] = []
+
+        def cf_lint(rules_data: dict, ctx: LintContext) -> None:
+            del rules_data
+            cf_zones.append(ctx.zone_name)
+            ctx.add(LintResult(rule_id="CFTEST", severity=Severity.INFO, message="cf"))
+
+        def aws_lint(rules_data: dict, ctx: LintContext) -> None:
+            del rules_data
+            aws_zones.append(ctx.zone_name)
+            ctx.add(LintResult(rule_id="WATEST", severity=Severity.INFO, message="aws"))
+
+        # Use unique plugin names so we don't clash with real plugins
+        # potentially registered in the same venv (the editable installs
+        # the audit added earlier).
+        cf_name = "_test_cf_routing"
+        aws_name = "_test_aws_routing"
+
+        # Patch provider_name_for_class_path so the test plugin names
+        # resolve from the real CloudflareProvider / AwsWafProvider
+        # class paths instead of the default "cloudflare" / "aws".
+        from octorules.linter import plugin as _plugin_mod
+
+        original_resolver = _plugin_mod.provider_name_for_class_path
+
+        def _resolver(class_path: str | None) -> str | None:
+            if class_path and "_cloudflare" in class_path:
+                return cf_name
+            if class_path and "_aws" in class_path:
+                return aws_name
+            return original_resolver(class_path)
+
+        _plugin_mod.provider_name_for_class_path = _resolver
+        register_linter(LintPlugin(name=cf_name, lint_fn=cf_lint, rule_ids=frozenset({"CFTEST"})))
+        register_linter(LintPlugin(name=aws_name, lint_fn=aws_lint, rule_ids=frozenset({"WATEST"})))
+        try:
+            cmd_lint(config, zone_filter=None, lint_format="summary")
+        finally:
+            unregister_linter(cf_name)
+            unregister_linter(aws_name)
+            _plugin_mod.provider_name_for_class_path = original_resolver
+
+        # Each plugin saw only its target zone's file — no cross-pollination.
+        assert cf_zones == ["example.com"]
+        assert aws_zones == ["my-web-acl"]

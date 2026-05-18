@@ -15,12 +15,13 @@ providers:
   google:
     project: env/GCLOUD_PROJECT   # GCP project ID (required)
     timeout: 30.0                 # gRPC/HTTP timeout (default: 30)
+    max_workers: 1                # Per-provider parallelism (default: 1)
     safety:
       delete_threshold: 30.0
       update_threshold: 30.0
       min_existing: 3
   rules:
-    directory: ./rules
+    directory: ./rules/google
 
 manager:
   max_workers: 2

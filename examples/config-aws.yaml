@@ -18,14 +18,13 @@ providers:
     wcu_limit: 5000            # WCU capacity limit for lint checks (default: 1500)
     timeout: 30.0              # Connection + read timeout (default: 30)
     max_retries: 2             # Adaptive retry count (default: 2)
+    max_workers: 1             # Per-provider parallelism (default: 1)
     safety:
       delete_threshold: 30.0
       update_threshold: 30.0
       min_existing: 3
   rules:
-    directory: ./rules
-  lists:
-    directory: ./rules/custom_lists
+    directory: ./rules/aws
 
 manager:
   max_workers: 2

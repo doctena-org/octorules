@@ -840,6 +840,57 @@ class Config:
             self._rules_cache[cache_key] = data
             return data
 
+    def target_plugins_for_zone(self, zone_name: str) -> set[str] | None:
+        """Return the lint-plugin names that own this zone's rules file.
+
+        Used by ``cmd_lint`` to route each zone's file to the plugin(s)
+        belonging to its target provider(s), so the AWS lint plugin
+        doesn't validate Cloudflare's ``custom_rulesets`` block (and
+        vice versa) when both packages are installed.
+
+        Resolution: ``zones[zone_name].targets`` → list of target names,
+        each looked up in ``providers[...]``.  For each provider, the
+        plugin name is inferred from either (a) the explicit ``class:``
+        attribute via the ``octorules_<plugin_name>`` package convention,
+        or (b) when no ``class:`` is set, the provider-config key name
+        itself when it matches a registered lint plugin (the
+        entry-point-name convention used by ``_resolve_provider_class``).
+
+        Returns:
+            A set of plugin names when every target resolves cleanly,
+            otherwise ``None``.  ``None`` tells the lint engine to fall
+            back to running every registered plugin — appropriate for
+            zones with no targets, custom (non-``octorules_*``) provider
+            classes, or files outside ``config.zones`` entirely.
+        """
+        from octorules.linter.plugin import (
+            get_registered_plugins,
+            provider_name_for_class_path,
+        )
+
+        zone_cfg = self.zones.get(zone_name)
+        if zone_cfg is None or not zone_cfg.targets:
+            return None
+        registered = {p.name for p in get_registered_plugins()}
+        names: set[str] = set()
+        for target in zone_cfg.targets:
+            prov = self.providers.get(target)
+            if prov is None:
+                return None  # unknown target — be conservative
+            if prov.class_path:
+                plugin_name = provider_name_for_class_path(prov.class_path)
+                if plugin_name is None:
+                    return None  # non-conventional class path
+                names.add(plugin_name)
+                continue
+            # No explicit class: fall back to the provider-config key name,
+            # which by entry-point convention matches the plugin name.
+            if prov.name in registered:
+                names.add(prov.name)
+                continue
+            return None  # can't resolve — let the engine run all plugins
+        return names or None
+
     def load_zone_rules(self, zone_name: str) -> dict:
         """Load the rules YAML file for a given zone.
 

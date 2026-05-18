@@ -486,7 +486,10 @@ class TestFormatPlanMarkdown:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_markdown([zp])
-        assert "`action`: 'redirect'" in result
+        # Markdown cell values now use single-line YAML (flow style).
+        # Plain scalars render bare; `'true'` keeps its quotes only
+        # because YAML quotes it to disambiguate from the boolean.
+        assert "`action`: redirect" in result
         assert "`expression`: 'true'" in result
 
     def test_remove_shows_details(self):
@@ -503,7 +506,7 @@ class TestFormatPlanMarkdown:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_markdown([zp])
-        assert "`action`: 'redirect'" in result
+        assert "`action`: redirect" in result
 
     def test_summary_no_changes(self):
         result = format_plan_markdown([ZonePlan("example.com")])
@@ -562,11 +565,12 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "Update" in result
-        # Old value with − prefix, new value with + prefix
-        assert "&minus;&ensp;<code>expression</code>: old-expr" in result
-        assert "+&ensp;<code>expression</code>: new-expr" in result
-        # Old value (−) appears first, new value (+) on continuation row
-        assert result.index("&minus;") < result.index("+&ensp;")
+        # Diff values render as YAML inside a <pre> block with the field
+        # as the top-level key and a '-' or '+' marker on every line.
+        assert "<pre>- expression: old-expr</pre>" in result
+        assert "<pre>+ expression: new-expr</pre>" in result
+        # Old side appears before new side.
+        assert result.index("- expression: old-expr") < result.index("+ expression: new-expr")
 
     def test_reorder_shows_message(self):
         pp = PhasePlan(
@@ -590,7 +594,7 @@ class TestFormatPlanHtml:
         assert "b.com" not in result
 
     def test_create_shows_rule_details_single_row(self):
-        """Create uses a single <tr> with <br/>-joined details (matches octodns)."""
+        """Create renders the whole rule as one YAML doc inside a <pre> block."""
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[
@@ -604,18 +608,24 @@ class TestFormatPlanHtml:
         )
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
-        # Field names wrapped in <code> tags
-        assert "<code>action</code>: redirect" in result
-        assert "<code>expression</code>: true" in result
-        # Details joined with <br/> in a single <td>
-        assert "<code>action</code>: redirect<br/><code>expression</code>: true" in result
-        # No colspan=2 continuation rows for Create
-        # (only Update uses continuation rows)
+        # Whole rule rendered as one YAML doc inside <pre> with a '+'
+        # prefix on every line (matches the diff-block convention used
+        # for MODIFY rows). The planner injects logging.enabled: true as
+        # the default; YAML quotes the string "true" to disambiguate
+        # from boolean.
+        expected = (
+            "<td><pre>+ action: redirect\n"
+            "+ expression: &#x27;true&#x27;\n"
+            "+ logging:\n"
+            "+   enabled: true</pre></td>"
+        )
+        assert expected in result
+        # No colspan=2 continuation rows for Create.
         create_section = result[result.index("Create") : result.index("Summary")]
         assert "colspan=2" not in create_section
 
     def test_delete_shows_rule_details_single_row(self):
-        """Delete uses a single <tr> with <br/>-joined details (matches octodns)."""
+        """Delete renders the whole rule as one YAML doc inside a <pre> block."""
         pp = PhasePlan(
             phase=REDIRECT_PHASE,
             changes=[
@@ -630,7 +640,13 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "Delete" in result
-        assert "<code>action</code>: redirect<br/><code>expression</code>: true" in result
+        expected = (
+            "<td><pre>- action: redirect\n"
+            "- expression: &#x27;true&#x27;\n"
+            "- logging:\n"
+            "-   enabled: true</pre></td>"
+        )
+        assert expected in result
 
     def test_xss_safety(self):
         """Script tags in zone names and refs must be escaped."""
@@ -702,6 +718,457 @@ class TestFormatPlanHtml:
         output = buf.getvalue()
         assert "<table>" in output
         assert "example.com" in output
+
+    def test_create_dict_value_renders_as_yaml_pre_block(self):
+        """ADD: dict field values render as block YAML inside <pre>."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={
+                        "expression": "true",
+                        "action": "execute",
+                        "action_parameters": {
+                            "id": "abc123",
+                            "overrides": {
+                                "enabled": False,
+                                "categories": [{"category": "wordpress", "action": "block"}],
+                            },
+                        },
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        # Python repr should not leak through.
+        assert "{&#x27;" not in result
+        assert "{'id'" not in result
+        assert "False" not in result.split("Summary")[0]
+        # Whole rule rendered as one YAML doc with '+' prefix on every line.
+        assert "<td><pre>+ " in result
+        assert "+ action: execute" in result
+        assert "+ action_parameters:" in result
+        assert "+   id: abc123" in result
+        assert "+   overrides:" in result
+        assert "+     enabled: false" in result
+        assert "+       - category: wordpress" in result
+        assert "+         action: block" in result
+
+    def test_delete_list_value_renders_as_yaml_pre_block(self):
+        """REMOVE: list field values render as block YAML inside <pre>."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.REMOVE,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={
+                        "expression": "true",
+                        "action": "skip",
+                        "action_parameters": {
+                            "rules": {"rs1": ["a", "b", "c"]},
+                        },
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "{&#x27;" not in result
+        # Whole rule rendered as one YAML doc with '-' prefix on every line.
+        assert "- action_parameters:" in result
+        assert "-   rules:" in result
+        assert "-     rs1:" in result
+        assert "-       - a" in result
+        assert "-       - b" in result
+        assert "-       - c" in result
+
+    def test_modify_dict_value_renders_as_yaml_pre_block_on_both_sides(self):
+        """MODIFY: dict diff values render as block YAML on both - and + rows."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={
+                        "expression": "true",
+                        "action": "execute",
+                        "action_parameters": {"id": "abc", "overrides": {"enabled": True}},
+                    },
+                    desired={
+                        "expression": "true",
+                        "action": "execute",
+                        "action_parameters": {
+                            "id": "abc",
+                            "overrides": {
+                                "enabled": True,
+                                "categories": [{"category": "wordpress", "enabled": False}],
+                            },
+                        },
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "{&#x27;" not in result
+        # Each side renders as one <pre> block with the field embedded as
+        # the top-level YAML key and the diff marker on every line.
+        assert "<pre>- action_parameters:" in result
+        assert "<pre>+ action_parameters:" in result
+        assert "-   overrides:" in result
+        assert "+   overrides:" in result
+        assert "+     categories:" in result
+        assert "+       - category: wordpress" in result
+
+    def test_logging_enabled_flip_renders_as_yaml(self):
+        """MODIFY: logging dict flip renders as block YAML, not Python repr."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={
+                        "expression": "true",
+                        "action": "execute",
+                        "logging": {"enabled": True},
+                    },
+                    desired={
+                        "expression": "true",
+                        "action": "execute",
+                        "logging": {"enabled": False},
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "{&#x27;enabled&#x27;: True}" not in result
+        assert "{&#x27;enabled&#x27;: False}" not in result
+        # Each side is one <pre> block; key and value share the same block
+        # so they render as a single cohesive unit, not as a disconnected
+        # <code> badge plus a separate <pre>.
+        assert "<pre>- logging:\n-   enabled: true</pre>" in result
+        assert "<pre>+ logging:\n+   enabled: false</pre>" in result
+
+    def test_empty_dict_does_not_use_pre_block(self):
+        """Empty dict/list values render inline, not as a YAML <pre> block."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={"expression": "true", "action": "execute", "action_parameters": {}},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        # Empty dict renders inside the unified YAML doc as `key: {}`,
+        # not as a separate <pre> block of its own. The diff prefix
+        # carries through.
+        assert "+ action_parameters: {}" in result
+
+    def test_xss_safety_in_yaml_dict_values(self):
+        """HTML in dict keys/values is escaped inside the YAML <pre> block."""
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={
+                        "expression": "true",
+                        "action": "execute",
+                        "action_parameters": {
+                            "id": '<script>alert("xss")</script>',
+                        },
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        assert "<script>" not in result
+        assert "&lt;script&gt;" in result
+
+
+class TestFormatPlanMarkdownDictValues:
+    """ADD/REMOVE rows in markdown must not leak Python repr for dict
+    or list field values; flow-style YAML is used instead."""
+
+    def test_add_dict_value_renders_as_flow_yaml(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={
+                        "expression": "true",
+                        "action": "execute",
+                        "action_parameters": {
+                            "id": "abc",
+                            "overrides": {"enabled": True},
+                        },
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        # No Python repr leaks.
+        assert "{'id': 'abc'" not in result
+        assert "'overrides': {'enabled': True}" not in result
+        # Flow-style YAML for the dict value.
+        assert "`action_parameters`: {id: abc, overrides: {enabled: true}}" in result
+
+    def test_scalar_values_have_no_trailing_yaml_doc_end_marker(self):
+        # Regression: bare scalars used to dump with a trailing '\n...'
+        # document-end marker, leaking into the markdown table cell as
+        # `description: null...`. The list-wrapper trick avoids that.
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={
+                        "action": "redirect",
+                        "description": None,
+                        "expression": "true",
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        # None renders as bare `null`, not `null...`.
+        assert "`description`: null" in result
+        assert "null..." not in result
+        assert "...\n" not in result
+
+    def test_multiline_string_stays_on_one_line_in_markdown_cell(self):
+        # Regression: a string with embedded newlines used to break the
+        # markdown table by spanning multiple physical lines. The
+        # \n-flatten preprocessor keeps it on one cell.
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={
+                        "action": "redirect",
+                        "description": "line one\nline two",
+                        "expression": "true",
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        # The line containing the rule's row stays on one row.
+        rule_line = next(ln for ln in result.split("\n") if "r1" in ln and "|" in ln)
+        assert "line one" in rule_line
+        assert "line two" in rule_line
+        # Newlines were flattened to `\n` literal.
+        assert "line one\\nline two" in rule_line
+
+    def test_remove_list_value_renders_as_flow_yaml(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.REMOVE,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={
+                        "expression": "true",
+                        "action": "skip",
+                        "action_parameters": {"rules": ["a", "b", "c"]},
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        assert "['a', 'b', 'c']" not in result
+        assert "`action_parameters`: {rules: [a, b, c]}" in result
+
+
+class TestMultiFieldModifyGrouping:
+    """All changed fields in one MODIFY render as a single diff block
+    per side, so the ``Update`` label + ref stay attached to the whole
+    diff instead of leaving later fields orphaned in colspan=2 rows."""
+
+    def test_multi_field_modify_renders_all_changes_in_one_block_per_side(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={
+                        "action": "block",
+                        "description": None,
+                        "expression": "true",
+                        "action_parameters": {"id": "abc"},
+                    },
+                    desired={
+                        "action": "log",
+                        "description": "New description",
+                        "expression": "true",
+                        "action_parameters": {"id": "abc", "mode": "simulate"},
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        # Exactly two MODIFY <tr>s for this rule: one for the - side, one
+        # for the + side. The Update label + ref attach to the first row;
+        # the second row is colspan=2 continuation.
+        update_section = result[result.index("Update") : result.index("Summary")]
+        assert update_section.count("<pre>") == 2
+        # All three changed fields appear inside the same - block.
+        assert "- action: block" in result
+        assert "- description: null" in result
+        assert "- action_parameters:" in result
+        # Same three appear in the + block.
+        assert "+ action: log" in result
+        assert "+ description: New description" in result
+        assert "+ action_parameters:" in result
+        # `expression` did NOT change, so it isn't in the diff block.
+        assert "- expression:" not in result
+        assert "+ expression:" not in result
+
+
+class TestLongExpressionRendering:
+    """Long wirefilter expressions must keep their multi-line
+    pretty-printed form (block scalar) instead of collapsing to one
+    line. This preserves the readability PR #166 demonstrated for
+    ``ip.src in {...}`` lists."""
+
+    def test_long_expression_renders_as_literal_block_in_html_add(self):
+        # Long enough to trigger format_expression_display's line breaks
+        # at the {...} boundary plus the binary operators.
+        long_expr = (
+            "(ip.src in "
+            "{1.2.3.4 5.6.7.8 9.10.11.12 13.14.15.16 17.18.19.20 21.22.23.24} "
+            'and http.host eq "www.example.com")'
+        )
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.ADD,
+                    "r1",
+                    REDIRECT_PHASE,
+                    desired={"expression": long_expr, "action": "block"},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        # YAML literal block marker '|' appears after the expression key.
+        assert "expression: |" in result
+        # IP list contents survive on separate lines (a property of
+        # format_expression_display).
+        assert "1.2.3.4" in result
+        # And the long expression has more than one line inside the cell.
+        # The block scalar's content lines all start with the diff prefix
+        # ('+ ' for ADD).
+        assert "+ expression: |" in result
+
+    def test_long_expression_renders_as_literal_block_in_html_modify(self):
+        # Both sides over 80 chars so both trigger the literal block path.
+        long_old = (
+            "(ip.src in "
+            "{1.2.3.4 5.6.7.8 9.10.11.12 13.14.15.16 17.18.19.20 21.22.23.24}"
+            ' and http.host eq "old.example.com")'
+        )
+        long_new = (
+            "(ip.src in "
+            "{1.2.3.4 5.6.7.8 9.10.11.12 13.14.15.16 17.18.19.20 21.22.23.24}"
+            ' and http.host eq "new.example.com")'
+        )
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={"expression": long_old, "action": "block"},
+                    desired={"expression": long_new, "action": "block"},
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_html([zp])
+        # Each side renders the expression as a literal block (PyYAML emits
+        # ``|-`` to strip the trailing newline). Every block line carries
+        # the diff prefix on its own line.
+        assert "- expression: |-" in result
+        assert "+ expression: |-" in result
+        # The set-literal contents survive on separate lines.
+        assert "-       1.2.3.4" in result
+        assert "+       1.2.3.4" in result
+
+
+class TestMdDiffValue:
+    """Markdown diff-value rendering, including dict/list YAML."""
+
+    def test_dict_value_renders_as_yaml_inside_diff_fence(self):
+        pp = PhasePlan(
+            phase=REDIRECT_PHASE,
+            changes=[
+                RuleChange(
+                    ChangeType.MODIFY,
+                    "r1",
+                    REDIRECT_PHASE,
+                    current={
+                        "expression": "true",
+                        "action": "execute",
+                        "logging": {"enabled": True},
+                    },
+                    desired={
+                        "expression": "true",
+                        "action": "execute",
+                        "logging": {"enabled": False},
+                    },
+                )
+            ],
+        )
+        zp = ZonePlan("example.com", phase_plans=[pp])
+        result = format_plan_markdown([zp])
+        # No Python repr leaks
+        assert "{'enabled': True}" not in result
+        assert "{'enabled': False}" not in result
+        # Block-style YAML inside the diff fence with prefix lines.
+        # Value line is two-space indented under the key (YAML), then the
+        # diff prefix is prepended verbatim → "-  enabled: true".
+        assert "- logging:" in result
+        assert "-  enabled: true" in result
+        assert "+ logging:" in result
+        assert "+  enabled: false" in result
 
 
 class TestBuildReportData:

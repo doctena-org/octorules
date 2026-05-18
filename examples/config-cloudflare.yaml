@@ -12,14 +12,16 @@ providers:
     token: env/CLOUDFLARE_API_TOKEN
     timeout: 30.0              # HTTP timeout in seconds (default: 30)
     max_retries: 2             # SDK retry count (default: 2)
+    max_workers: 1             # Per-provider HTTP connection-pool sizing
+                               # (default: 1).  Increase when running
+                               # parallel multi-phase syncs to scale the
+                               # underlying httpx connection pool.
     safety:
       delete_threshold: 30.0
       update_threshold: 30.0
       min_existing: 3
   rules:
-    directory: ./rules
-  lists:
-    directory: ./rules/custom_lists
+    directory: ./rules/cloudflare
 
 manager:
   max_workers: 4

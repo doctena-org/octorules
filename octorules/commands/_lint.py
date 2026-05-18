@@ -238,6 +238,15 @@ def cmd_lint(
 
         suppressions = parse_suppressions(rules_file, known_rules=known_rules)
 
+        # Per-zone plugin routing: when the zone declares a target provider,
+        # only that provider's lint plugin runs on this file. Stops the AWS
+        # plugin from validating Cloudflare's `custom_rulesets` block (and
+        # vice versa) when both packages are installed and the rules
+        # directory holds files for multiple providers. Files without a
+        # zone config (extra_stems below) get `None` → all plugins run,
+        # the legacy behaviour.
+        target_plugins = config.target_plugins_for_zone(zone_name)
+
         ctx = lint_zone_file(
             desired,
             file_path=str(rules_file),
@@ -247,6 +256,7 @@ def cmd_lint(
             phase_filter=phase_filter,
             rule_filter=lint_rules,
             suppressions=suppressions,
+            target_plugins=target_plugins,
         )
 
         # Core rules (provider-agnostic, run after provider plugins)

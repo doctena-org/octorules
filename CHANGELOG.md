@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.27.1] - 2026-05-18
+
+### Added
+- `examples/rules/` restructured into per-provider subdirectories so
+  each `config-<provider>.yaml` lints its zones in isolation. The
+  multi-provider `config.yaml` example uses `examples/rules/multi/`.
+- Per-zone lint-plugin routing — each zone's rule file is linted only
+  by its target provider's plugin. Eliminates cross-provider schema
+  collisions when multiple `octorules-*` packages are installed.
+- New example rules across all five providers covering previously
+  unshown phases.
+
+### Changed
+- PR-comment plan output renders nested rule fields as YAML instead
+  of Python `repr`, with `+`/`-` diff markers on every cell line.
+- `Update` rows group all changed fields into one diff block per side
+  instead of one row pair per field.
+- Long wirefilter expressions render as multi-line literal blocks,
+  preserving readability for `ip.src in {…}` lists.
+- MODIFY diffs reorder fields to match ADD/REMOVE (scalars first,
+  large nested blocks last).
+
+### Performance
+- `audit ip-shadow` reworked to use an indexed supernet lookup.
+  5,000-rule multi-phase zones drop from ~22 s to ~40 ms.
+
 ## [0.27.0] - 2026-05-13
 
 ### Changed

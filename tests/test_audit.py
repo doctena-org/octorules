@@ -2000,6 +2000,78 @@ class TestAuditPerformance:
         elapsed = time.monotonic() - t0
         assert elapsed < 5.0, f"ip-shadow on 5000 rules took {elapsed:.1f}s (limit 5s)"
 
+    def test_ip_shadow_5000_rules_multi_phase_under_2s(self):
+        """5,000 rules across multiple phases must complete in < 2s.
+
+        Single-phase data (used in ``test_ip_shadow_5000_rules_under_5s``)
+        short-circuits in the inner-loop phase-rank check and never
+        exercises the cross-phase comparison logic. This test spreads
+        rules across three phases — every rule in a later phase is a
+        candidate to be shadowed by every blocking rule in an earlier
+        phase — so the indexed algorithm's supernet-lookup path is the
+        load-bearing one. Pre-refactor the same workload took ~22s.
+        """
+        import time
+
+        phases = ["phase_a", "phase_b", "phase_c"]
+        rules = [
+            _make_rule_ip(
+                ref=f"rule-{i}",
+                phase=phases[i % 3],
+                action="block",
+                ips=[f"198.51.{i // 256}.{i % 256}/32"],
+            )
+            for i in range(5000)
+        ]
+        t0 = time.monotonic()
+        findings = check_ip_shadow(rules, phase_order=phases)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, (
+            f"ip-shadow on 5000 multi-phase rules took {elapsed:.2f}s (limit 2s); "
+            "the indexed algorithm regressed to O(N^2)?"
+        )
+        # /32s are disjoint so no shadows. The assertion is on perf, but
+        # we check correctness too: a bad index that emits spurious
+        # shadowers would fail here.
+        assert findings == []
+
+    def test_ip_shadow_5000_rules_with_shadower_correctness(self):
+        """Synthetic 5,000-rule workload with a single broad shadower.
+
+        Guards against an indexed-algorithm bug that emits no findings
+        when one early-phase blocking rule with a broad supernet covers
+        many later-phase rules.
+        """
+        import time
+
+        phases = ["broad_phase", "narrow_phase"]
+        rules = [
+            # One broad blocking rule in the earlier phase covers everything in 10.0.0.0/8.
+            _make_rule_ip(
+                ref="broad-shadower",
+                phase="broad_phase",
+                action="block",
+                ips=["10.0.0.0/8"],
+            ),
+        ]
+        # 4,999 narrow rules in the later phase, all inside 10.0.0.0/8.
+        rules.extend(
+            _make_rule_ip(
+                ref=f"narrow-{i}",
+                phase="narrow_phase",
+                action="allow",
+                ips=[f"10.{i // 256}.{i % 256}.0/24"],
+            )
+            for i in range(4999)
+        )
+        t0 = time.monotonic()
+        findings = check_ip_shadow(rules, phase_order=phases)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 2.0, f"ip-shadow correctness check took {elapsed:.2f}s (limit 2s)"
+        # Every narrow rule is shadowed by the broad rule.
+        assert len(findings) == 4999
+        assert all("broad-shadower" in f.message for f in findings)
+
     def test_zone_drift_5000_rules_under_5s(self):
         """5,000 rules across 10 zones must complete drift check in < 2s."""
         import time

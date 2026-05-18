@@ -1,0 +1,205 @@
+# Azure WAF rules for policy "my-waf-policy"
+#
+# Azure WAF supports Front Door and Application Gateway.  Set waf_type in
+# config.yaml to choose which.  Rules use matchConditions with operators
+# like IPMatch, GeoMatch, Contains, BeginsWith, RegEx, etc.
+#
+# Phases: azure_waf_custom_rules, azure_waf_rate_rules, azure_waf_managed_rules
+#
+# Operator reference:
+# https://learn.microsoft.com/en-us/azure/web-application-firewall/
+
+# ---------------------------------------------------------------------------
+# Custom Rules — match conditions with block/allow/redirect/log actions
+# ---------------------------------------------------------------------------
+azure_waf_custom_rules:
+  - ref: BlockBadIPs
+    priority: 1
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RemoteAddr
+        selector: null
+        operator: IPMatch
+        negateCondition: false
+        matchValue:
+          - 198.51.100.0/24
+          - 203.0.113.0/24
+        transforms: []
+
+  - ref: BlockBadCountries
+    priority: 2
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RemoteAddr
+        selector: null
+        operator: GeoMatch
+        negateCondition: false
+        matchValue:
+          - KP
+          - IR
+        transforms: []
+
+  - ref: BlockSQLi
+    priority: 3
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: QueryString
+        selector: null
+        operator: Contains
+        negateCondition: false
+        matchValue:
+          - "' OR 1=1"
+          - "'; DROP TABLE"
+          - "UNION SELECT"
+        transforms:
+          - Lowercase
+          - UrlDecode
+
+  - ref: AllowHealthChecks
+    priority: 4
+    action: Allow
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RequestUri
+        selector: null
+        operator: BeginsWith
+        negateCondition: false
+        matchValue:
+          - /health
+          - /ready
+        transforms:
+          - Lowercase
+
+  - ref: BlockLargePayloads
+    priority: 5
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RequestBody
+        selector: null
+        # Azure spells this operator `RegEx` (capital E). The valid set is
+        # Any, BeginsWith, Contains, EndsWith, Equal, GeoMatch, GreaterThan,
+        # GreaterThanOrEqual, IPMatch, LessThan, LessThanOrEqual, RegEx,
+        # ServiceTagMatch.
+        operator: RegEx
+        negateCondition: false
+        matchValue:
+          - ".{10000,}"
+        transforms: []
+
+  - ref: BlockBadApiKey
+    priority: 6
+    action: Block
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RequestHeader
+        selector: x-api-key
+        operator: Equal
+        negateCondition: false
+        matchValue:
+          - "deprecated_key_v1"
+          - "test_key"
+        transforms: []
+
+  - ref: AllowAzureServiceToApp
+    priority: 7
+    action: Allow
+    enabledState: Enabled
+    ruleType: MatchRule
+    matchConditions:
+      - matchVariable: RemoteAddr
+        selector: null
+        operator: ServiceTagMatch
+        negateCondition: false
+        matchValue:
+          - AzureFrontDoor
+          - AzureLoadBalancer
+        transforms: []
+
+# ---------------------------------------------------------------------------
+# Rate-Limit Rules — throttle by IP or other group-by keys
+# ---------------------------------------------------------------------------
+azure_waf_rate_rules:
+  - ref: RateLimitAPI
+    priority: 10
+    action: Block
+    enabledState: Enabled
+    ruleType: RateLimitRule
+    rateLimitDurationInMinutes: 1
+    rateLimitThreshold: 100
+    groupBy:
+      - variableName: SocketAddr
+    matchConditions:
+      - matchVariable: RequestUri
+        selector: null
+        operator: BeginsWith
+        negateCondition: false
+        matchValue:
+          - /api/
+        transforms:
+          - Lowercase
+
+  - ref: RateLimitGlobal
+    priority: 11
+    action: Log
+    enabledState: Enabled
+    ruleType: RateLimitRule
+    rateLimitDurationInMinutes: 5
+    rateLimitThreshold: 5000
+    groupBy:
+      - variableName: SocketAddr
+    matchConditions:
+      - matchVariable: RequestMethod
+        selector: null
+        operator: Any
+        negateCondition: false
+        matchValue: []
+        transforms: []
+
+# ---------------------------------------------------------------------------
+# Managed Rules — OWASP Core Rule Set and bot protection overrides
+# ---------------------------------------------------------------------------
+# Managed rule sets ship with Azure WAF.  This section configures which
+# sets are active and overrides individual rules or groups.
+azure_waf_managed_rules:
+  - ref: Microsoft_DefaultRuleSet
+    ruleSetType: Microsoft_DefaultRuleSet
+    ruleSetVersion: "2.1"
+    ruleSetAction: Block
+    ruleGroupOverrides:
+      - ruleGroupName: SQLI
+        exclusions:
+          - matchVariable: RequestHeaderNames
+            selector: x-api-key
+            selectorMatchOperator: Equals
+        rules:
+          # Disable a rule that causes false positives on API payloads
+          - ruleId: "942100"
+            enabledState: Disabled
+          # Log instead of block for monitoring
+          - ruleId: "942110"
+            action: Log
+      - ruleGroupName: XSS
+        rules:
+          - ruleId: "941100"
+            action: Log
+
+  - ref: Microsoft_BotManagerRuleSet
+    ruleSetType: Microsoft_BotManagerRuleSet
+    ruleSetVersion: "1.0"
+    ruleSetAction: Log
+    ruleGroupOverrides:
+      - ruleGroupName: BadBots
+        rules:
+          - ruleId: "190010"
+            enabledState: Enabled
+            action: Block

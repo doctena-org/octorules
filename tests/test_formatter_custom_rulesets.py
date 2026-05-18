@@ -122,7 +122,7 @@ class TestCustomRulesetFormatting:
         assert "action" in output
 
     def test_html_format_modify_in_custom_ruleset(self):
-        """MODIFY changes in HTML should show −/+ prefixes."""
+        """MODIFY changes in HTML render as ``<pre>`` YAML diff blocks."""
         change = RuleChange(
             ChangeType.MODIFY,
             "r1",
@@ -134,8 +134,8 @@ class TestCustomRulesetFormatting:
         zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
         output = format_plan_html([zp])
         assert "custom_ruleset: Block attackers" in output
-        assert "&minus;&ensp;" in output
-        assert "+&ensp;" in output
+        assert "<pre>- action: log</pre>" in output
+        assert "<pre>+ action: block</pre>" in output
         assert "Update" in output
 
     def test_markdown_format_modify_in_custom_ruleset(self):

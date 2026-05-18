@@ -2821,3 +2821,103 @@ class TestUnknownConfigKeyWarnings:
             Config.from_file(cfg)
         assert "Unknown key" not in caplog.text
         assert "Unknown top-level" not in caplog.text
+
+
+class TestTargetPluginsForZone:
+    """``Config.target_plugins_for_zone`` — per-zone lint-plugin routing."""
+
+    def _config_with(self, tmp_path, zones_yaml: str, providers_yaml: str = "") -> Config:
+        cfg = tmp_path / "config.yaml"
+        prov = providers_yaml or "  cloudflare:\n    token: tok\n"
+        # `rules:` is the framework-level rules source — every example config
+        # declares it so `sources: [rules]` resolves.
+        cfg.write_text(f"providers:\n{prov}  rules: {{}}\nzones:\n{zones_yaml}")
+        (tmp_path / "rules").mkdir(exist_ok=True)
+        return Config.from_file(cfg)
+
+    def test_explicit_class_path(self, tmp_path):
+        config = self._config_with(
+            tmp_path,
+            zones_yaml="  example.com:\n    targets: [cf-prod]\n    sources: [rules]\n",
+            providers_yaml=(
+                "  cf-prod:\n"
+                "    class: octorules_cloudflare.provider.CloudflareProvider\n"
+                "    token: tok\n"
+            ),
+        )
+        assert config.target_plugins_for_zone("example.com") == {"cloudflare"}
+
+    def test_implicit_provider_name(self, tmp_path):
+        """No `class:` — fall back to the provider-config key when it
+        matches a registered plugin (entry-point convention)."""
+        # Register a "cloudflare" plugin so the fallback resolves.
+        from octorules.linter.engine import LintContext, LintResult, Severity
+        from octorules.linter.plugin import (
+            LintPlugin,
+            register_linter,
+            unregister_linter,
+        )
+
+        def _noop(rules_data: dict, ctx: LintContext) -> None:
+            del rules_data, ctx
+
+        plugin = LintPlugin(
+            name="cloudflare",
+            lint_fn=_noop,
+            rule_ids=frozenset({"CFTEST"}),
+        )
+        # Avoid duplicate-registration error if the real CF plugin is installed.
+        try:
+            register_linter(plugin)
+            try:
+                config = self._config_with(
+                    tmp_path,
+                    zones_yaml="  example.com:\n    targets: [cloudflare]\n    sources: [rules]\n",
+                )
+                assert config.target_plugins_for_zone("example.com") == {"cloudflare"}
+            finally:
+                unregister_linter("cloudflare")
+        except ValueError:
+            # Real CF plugin already registered — test the resolution against it.
+            config = self._config_with(
+                tmp_path,
+                zones_yaml="  example.com:\n    targets: [cloudflare]\n    sources: [rules]\n",
+            )
+            assert config.target_plugins_for_zone("example.com") == {"cloudflare"}
+            del LintResult, Severity  # silence unused imports
+
+    def test_no_targets_returns_none(self, tmp_path):
+        config = self._config_with(
+            tmp_path,
+            zones_yaml="  example.com:\n    sources: [rules]\n",
+        )
+        assert config.target_plugins_for_zone("example.com") is None
+
+    def test_zone_not_in_config(self, tmp_path):
+        config = self._config_with(tmp_path, zones_yaml="  example.com:\n    sources: [rules]\n")
+        assert config.target_plugins_for_zone("not-a-zone") is None
+
+    def test_non_octorules_class_path_returns_none(self, tmp_path):
+        config = self._config_with(
+            tmp_path,
+            zones_yaml="  example.com:\n    targets: [acme-prod]\n    sources: [rules]\n",
+            providers_yaml=("  acme-prod:\n    class: thirdparty.acme.provider.AcmeProvider\n"),
+        )
+        # Custom (non-octorules_*) class path — can't infer plugin name,
+        # fall back so every registered plugin runs.
+        assert config.target_plugins_for_zone("example.com") is None
+
+    def test_multi_target_same_class(self, tmp_path):
+        config = self._config_with(
+            tmp_path,
+            zones_yaml="  example.com:\n    targets: [cf-prod, cf-staging]\n    sources: [rules]\n",
+            providers_yaml=(
+                "  cf-prod:\n"
+                "    class: octorules_cloudflare.provider.CloudflareProvider\n"
+                "    token: a\n"
+                "  cf-staging:\n"
+                "    class: octorules_cloudflare.provider.CloudflareProvider\n"
+                "    token: b\n"
+            ),
+        )
+        assert config.target_plugins_for_zone("example.com") == {"cloudflare"}

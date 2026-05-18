@@ -8,6 +8,8 @@ from collections.abc import Callable
 from html import escape as html_escape
 from typing import IO
 
+import yaml
+
 from octorules._color import _CYAN, _GREEN, _RED, _YELLOW, Pen, supports_color
 from octorules.expression import format_expression_display
 from octorules.extensions import get_format_extensions
@@ -46,17 +48,30 @@ def _change_color(change_type: ChangeType) -> str:
     return _CHANGE_COLORS[change_type]
 
 
+_PRIORITY_KEYS: tuple[str, ...] = ("action", "description", "expression")
+
+
+def _ordered_rule_keys(keys: set[str]) -> list[str]:
+    """Apply the rule-field display order: small scalar fields first
+    (action, description, expression), then everything else alphabetically.
+    """
+    priority = [k for k in _PRIORITY_KEYS if k in keys]
+    remaining = sorted(keys - set(_PRIORITY_KEYS))
+    return priority + remaining
+
+
 def _compute_field_diffs(change: RuleChange) -> list[tuple[str, object, object]]:
     """Compute field-level diffs between normalized current and desired rules.
 
-    Returns list of (key, old_value, new_value) tuples for changed fields.
+    Returns list of (key, old_value, new_value) tuples for changed fields,
+    in display order (priority keys first, then alphabetical).
     """
     old = change.normalized_current
     new = change.normalized_desired
     if not old or not new:
         return []
     diffs = []
-    for key in sorted(old.keys() | new.keys()):
+    for key in _ordered_rule_keys(old.keys() | new.keys()):
         old_val = old.get(key)
         new_val = new.get(key)
         if old_val != new_val:
@@ -67,24 +82,14 @@ def _compute_field_diffs(change: RuleChange) -> list[tuple[str, object, object]]
 def _rule_detail_pairs(rule: RuleDict | None) -> list[tuple[str, object]]:
     """Extract key-value pairs from a normalized rule for Details display.
 
-    Orders: action, description, expression first, then remaining alphabetically.
-    Skips 'enabled' when True (the default) since it's not informative.
+    Orders: action, description, expression first, then remaining
+    alphabetically.  Skips 'enabled' when True (the default) since it
+    is not informative.
     """
     if not rule:
         return []
-    priority_keys = ["action", "description", "expression"]
     pairs: list[tuple[str, object]] = []
-    seen: set[str] = set()
-    for key in priority_keys:
-        if key in rule:
-            val = rule[key]
-            if key == "enabled" and val is True:
-                continue
-            pairs.append((key, val))
-            seen.add(key)
-    for key in sorted(rule.keys()):
-        if key in seen:
-            continue
+    for key in _ordered_rule_keys(set(rule.keys())):
         val = rule[key]
         if key == "enabled" and val is True:
             continue
@@ -356,7 +361,7 @@ def _md_change_row(
         rule = c.normalized_desired if c.change_type == ChangeType.ADD else c.normalized_current
         pairs = _rule_detail_pairs(rule)
         if pairs:
-            parts = [f"`{key}`: {val!r}" for key, val in pairs]
+            parts = [f"`{key}`: {_md_format_value(val)}" for key, val in pairs]
             details = _md_escape("; ".join(parts))
         else:
             details = ""
@@ -366,9 +371,17 @@ def _md_change_row(
 def _md_diff_value(key: str, val: object, prefix: str) -> list[str]:
     """Format a diff value for a markdown ``diff`` code block.
 
-    Long expression strings are pretty-printed with each continuation line
-    prefixed so GitHub renders the whole block in the correct colour.
+    ``dict`` / ``list`` values render as block-style YAML with the key as
+    the first line and the value indented under it; every line carries
+    the diff prefix so GitHub colours the whole block. Long expression
+    strings are pretty-printed the same way.
     """
+    yaml_text = _yaml_pretty(val)
+    if yaml_text is not None:
+        result = [f"{prefix} {key}:"]
+        for yl in yaml_text.split("\n"):
+            result.append(f"{prefix}{yl}")
+        return result
     if isinstance(val, str) and len(val) > 80:
         formatted = format_expression_display(val)
         if "\n" in formatted:
@@ -453,18 +466,120 @@ def _html_op_name(change_type: ChangeType) -> str:
     return _HTML_OP_NAMES[change_type]
 
 
-def _html_diff_value(key: str, val: object, prefix: str) -> str:
-    """Format a diff value for an HTML table cell.
-
-    Long expression strings are pretty-printed inside ``<pre>`` so that
-    GitHub renders them with preserved whitespace and indentation.
+class _LiteralStr(str):
+    """Marker subclass. PyYAML emits these as ``|`` literal block scalars
+    so multi-line strings (long wirefilter expressions, pre-formatted by
+    ``format_expression_display``) render with their newlines preserved.
     """
-    e = html_escape
-    if isinstance(val, str) and len(val) > 80:
+
+
+def _literal_str_representer(dumper: yaml.Dumper, data: _LiteralStr) -> yaml.ScalarNode:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", str(data), style="|")
+
+
+class _IndentingDumper(yaml.SafeDumper):
+    """SafeDumper variant that indents list dashes under their parent key."""
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
+_IndentingDumper.add_representer(_LiteralStr, _literal_str_representer)
+
+
+def _preformat_long_strings(val: object) -> object:
+    """Recursively walk ``val``. Replace any long string whose
+    ``format_expression_display`` form spans multiple lines with a
+    ``_LiteralStr`` marker so the YAML dumper emits it as a literal
+    block scalar. Preserves the readable line-wrapping for wirefilter
+    expressions like ``ip.src in {...}`` lists.
+    """
+    if isinstance(val, dict):
+        return {k: _preformat_long_strings(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_preformat_long_strings(v) for v in val]
+    if isinstance(val, str) and not isinstance(val, _LiteralStr) and len(val) > 80:
         formatted = format_expression_display(val)
         if "\n" in formatted:
-            return f"{prefix}&ensp;<code>{e(key)}</code>:<pre>{e(formatted)}</pre>"
-    return f"{prefix}&ensp;<code>{e(key)}</code>: {e(str(val))}"
+            return _LiteralStr(formatted)
+    return val
+
+
+def _rule_yaml(pairs: list[tuple[str, object]]) -> str:
+    """Render a list of ``(key, value)`` pairs as a block-style YAML
+    document with sibling top-level keys. Preserves the insertion order
+    of ``pairs`` (priority keys first, then alphabetical — see
+    ``_rule_detail_pairs``). Long wirefilter expressions inside the
+    values render as ``|`` literal block scalars for readability.
+    """
+    ordered: dict[str, object] = {k: _preformat_long_strings(v) for k, v in pairs}
+    return yaml.dump(
+        ordered,
+        Dumper=_IndentingDumper,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+        width=2147483647,
+        indent=2,
+    ).rstrip("\n")
+
+
+def _yaml_pretty(val: object) -> str | None:
+    """Return block-style YAML for non-empty dict/list values, indented by
+    two spaces on every line so the output nests visually under the field
+    key label; else ``None``.
+    """
+    if not isinstance(val, dict | list) or not val:
+        return None
+    text = yaml.dump(
+        _preformat_long_strings(val),
+        Dumper=_IndentingDumper,
+        default_flow_style=False,
+        sort_keys=False,
+        allow_unicode=True,
+        width=2147483647,
+        indent=2,
+    )
+    return "\n".join(f"  {ln}" for ln in text.rstrip("\n").split("\n"))
+
+
+def _flatten_string_newlines(val: object) -> object:
+    """Recursively replace newlines inside string values with ``\\n`` so
+    PyYAML keeps the value on one physical line (markdown table cells
+    can't span multiple rows).
+    """
+    if isinstance(val, dict):
+        return {k: _flatten_string_newlines(v) for k, v in val.items()}
+    if isinstance(val, list):
+        return [_flatten_string_newlines(v) for v in val]
+    if isinstance(val, str) and "\n" in val:
+        return val.replace("\n", "\\n")
+    return val
+
+
+def _md_format_value(val: object) -> str:
+    """Format a single value for a markdown table cell as one-line YAML.
+
+    Markdown tables can't render block content in cells, so dicts and
+    lists use flow-style YAML (e.g. ``{enabled: true}``) instead of
+    block style. Scalars also go through YAML so ``True`` / ``None`` /
+    string-``"true"`` render with the same conventions as everywhere
+    else in the plan output.
+
+    The value is wrapped in a single-element list before dumping so
+    PyYAML doesn't append its ``...`` document-end marker (which would
+    otherwise trail bare scalars).
+    """
+    text = yaml.dump(
+        [_flatten_string_newlines(val)],
+        Dumper=_IndentingDumper,
+        default_flow_style=True,
+        sort_keys=False,
+        allow_unicode=True,
+        width=2147483647,
+    ).strip()
+    # Strip the surrounding [...] wrapper list markers.
+    return text[1:-1]
 
 
 def _html_render_changes(
@@ -485,15 +600,18 @@ def _html_render_changes(
             if c.change_type == ChangeType.ADD:
                 creates += 1
                 detail_pairs = _rule_detail_pairs(c.normalized_desired)
+                marker = "+"
             else:
                 removes += 1
                 detail_pairs = _rule_detail_pairs(c.normalized_current)
+                marker = "-"
             lines.append("  <tr>")
             lines.append(f"    <td>{e(op)}</td>")
             lines.append(f"    <td>{e(c.ref)}</td>")
             if detail_pairs:
-                parts = [f"<code>{e(key)}</code>: {e(str(val))}" for key, val in detail_pairs]
-                lines.append(f"    <td>{'<br/>'.join(parts)}</td>")
+                yaml_text = _rule_yaml(detail_pairs)
+                prefixed = "\n".join(f"{marker} {ln}" for ln in yaml_text.split("\n"))
+                lines.append(f"    <td><pre>{e(prefixed)}</pre></td>")
             else:
                 lines.append("    <td></td>")
             lines.append("  </tr>")
@@ -507,21 +625,23 @@ def _html_render_changes(
         elif c.change_type == ChangeType.MODIFY:
             modifies += 1
             diffs = _compute_field_diffs(c)
-            for i, (key, old_val, new_val) in enumerate(diffs):
-                if i == 0:
-                    lines.append("  <tr>")
-                    lines.append(f"    <td>{e(op)}</td>")
-                    lines.append(f"    <td>{e(c.ref)}</td>")
-                else:
-                    lines.append("  <tr>")
-                    lines.append("    <td colspan=2></td>")
-                lines.append(f"    <td>{_html_diff_value(key, old_val, '&minus;')}</td>")
+            if diffs:
+                old_pairs = [(k, old_v) for k, old_v, _ in diffs]
+                new_pairs = [(k, new_v) for k, _, new_v in diffs]
+                old_yaml = _rule_yaml(old_pairs)
+                new_yaml = _rule_yaml(new_pairs)
+                old_block = "\n".join(f"- {ln}" for ln in old_yaml.split("\n"))
+                new_block = "\n".join(f"+ {ln}" for ln in new_yaml.split("\n"))
+                lines.append("  <tr>")
+                lines.append(f"    <td>{e(op)}</td>")
+                lines.append(f"    <td>{e(c.ref)}</td>")
+                lines.append(f"    <td><pre>{e(old_block)}</pre></td>")
                 lines.append("  </tr>")
                 lines.append("  <tr>")
                 lines.append("    <td colspan=2></td>")
-                lines.append(f"    <td>{_html_diff_value(key, new_val, '+')}</td>")
+                lines.append(f"    <td><pre>{e(new_block)}</pre></td>")
                 lines.append("  </tr>")
-            if not diffs:
+            else:
                 lines.append("  <tr>")
                 lines.append(f"    <td>{e(op)}</td>")
                 lines.append(f"    <td>{e(c.ref)}</td>")

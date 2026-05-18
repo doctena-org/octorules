@@ -14,12 +14,13 @@ providers:
     plan: advanced               # free or advanced (for plan-aware lint)
     timeout: 30.0                # HTTP timeout (default: 30)
     max_retries: 2               # HTTP retry count (default: 2)
+    max_workers: 1               # Per-provider parallelism (default: 1)
     safety:
       delete_threshold: 30.0
       update_threshold: 30.0
       min_existing: 3
   rules:
-    directory: ./rules
+    directory: ./rules/bunny
 
 manager:
   max_workers: 2
