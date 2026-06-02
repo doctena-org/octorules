@@ -442,11 +442,31 @@ octorules audit [--check ...] [--severity error|warning|info] [--format text|jso
 - **cdn-ranges** -- Rules that match known CDN provider IP ranges (Cloudflare, AWS CloudFront, Google Cloud, Bunny, Azure Front Door). Fetches fresh ranges from public APIs; falls back to baked-in data when offline. (Azure's list is scraped from the Microsoft Download Center page — the JSON URL rotates weekly.)
 - **zone-drift** -- Same CIDR treated differently across zones (e.g. blocked in zone A, allowed in zone B).
 
-Acceptance comments suppress known findings (check names must be lowercase):
+Acceptance comments suppress known findings (check names must be lowercase).
+Like the `disable=` lint directives, they are positional: a comment attaches to
+the rule anchor (a `ref:` or `description:` line) that follows it, scoping the
+acceptance to that rule. A comment placed before any rule (e.g. at the top of
+the file) is file-wide:
 
 ```yaml
-  # octorules:accept=zone-drift
-  # octorules:accept=ip-overlap,cdn-ranges
+# octorules:accept=zone-drift          # file-wide (before any rule)
+
+waf_custom_rules:
+  # octorules:accept=ip-overlap,cdn-ranges   # scoped to the rule below
+  - ref: r1
+    expression: ...
+```
+
+To scope an acceptance to a finding on a **list** (whose finding ref is
+`list:<name>`), place the comment above the list's `name:` in the list's own
+file — `!include`d files are followed:
+
+```yaml
+# custom_lists/block_known_attackers.yaml
+# octorules:accept=cdn-ranges
+name: block_known_attackers
+kind: ip
+items: [...]
 ```
 
 ### `octorules versions`

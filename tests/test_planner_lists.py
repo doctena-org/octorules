@@ -441,6 +441,30 @@ class TestDiffList:
         assert "normalized_current" in mods[0].__dict__
         assert "normalized_desired" in mods[0].__dict__
 
+    def test_create_add_no_logging_in_normalized(self):
+        """ADD changes on a CREATE use the list-item normalizer, not the rule
+        normalizer, so they must not gain a spurious ``logging`` block."""
+        lp = diff_list("blocklist", None, "ip", [{"ip": "10.0.0.1"}], [])
+        add = next(c for c in lp.changes if c.change_type == ChangeType.ADD)
+        # Pre-seeded (so the rule normalizer never runs on first access)...
+        assert "normalized_desired" in add.__dict__
+        # ...and free of the rule-only logging default.
+        assert "logging" not in add.normalized_desired
+        assert add.normalized_desired == {"ip": "10.0.0.1"}
+
+    def test_item_add_remove_no_logging_in_normalized(self):
+        """Adding/removing items on an EXISTING list must also avoid the
+        rule-logging default on the per-item normalized values."""
+        desired = [{"ip": "10.0.0.2"}]
+        current = [{"ip": "10.0.0.1"}]
+        lp = diff_list("blocklist", "id1", "ip", desired, current)
+        add = next(c for c in lp.changes if c.change_type == ChangeType.ADD)
+        remove = next(c for c in lp.changes if c.change_type == ChangeType.REMOVE)
+        assert "logging" not in add.normalized_desired
+        assert "logging" not in remove.normalized_current
+        assert add.normalized_desired == {"ip": "10.0.0.2"}
+        assert remove.normalized_current == {"ip": "10.0.0.1"}
+
     def test_description_change_none_to_value(self):
         """Adding description where none existed before."""
         lp = diff_list(

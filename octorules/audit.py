@@ -49,27 +49,104 @@ _AUDIT_ACCEPT_RE = re.compile(
     r"#\s*octorules:\s*accept\s*=\s*([a-z][a-z0-9-]*(?:\s*,\s*[a-z][a-z0-9-]*)*)"
 )
 
+# Anchor lines a directive can attach to (shellcheck-style positional model,
+# mirroring octorules' lint suppressions). ``name:`` is recognised only inside
+# ``!include``d list files, where it anchors as ``list:<name>`` to match the
+# audit's ``list:<name>`` finding refs.
+_ACCEPT_REF_RE = re.compile(r"^\s*-\s*ref:\s*(\S+)")
+_ACCEPT_DESC_RE = re.compile(r"^\s*(?:-\s*)?description:\s*(?:\"(.+?)\"|'(.+?)'|(.+?))\s*$")
+_ACCEPT_NAME_RE = re.compile(r"^\s*name:\s*(\S+)")
+_INCLUDE_RE = re.compile(r"!include\s+['\"]?([^'\"\s]+)")
 
-def parse_audit_acceptances(file_path: str | Path) -> set[str]:
-    """Parse ``# octorules:accept=<check>`` directives from a YAML file.
 
-    Returns a set of accepted check names (e.g. ``{"zone-drift"}``).
-    Unknown check names are logged as warnings and silently dropped.
+def _scan_acceptances(
+    text: str,
+    result: dict[str, set[str]],
+    *,
+    name_anchor: bool,
+    file_path: str | Path,
+) -> None:
+    """Scan one file's text for accept directives, attaching each to the
+    rule anchor (``ref:``/``description:``, or ``name:`` when *name_anchor*)
+    that follows it. Directives before any anchor are file-wide (``"*"``).
     """
-    accepted: set[str] = set()
+    pending: set[str] = set()
+    seen_first_anchor = False
+
+    for line in text.splitlines():
+        m_dir = _AUDIT_ACCEPT_RE.search(line)
+        if m_dir:
+            names = {n.strip() for n in m_dir.group(1).split(",")}
+            unknown = names - ALL_CHECKS
+            for u in sorted(unknown):
+                log.warning("Unknown audit check %r in acceptance directive (%s)", u, file_path)
+            pending.update(names - unknown)
+            continue  # a directive line is never itself an anchor
+
+        anchor: str | None = None
+        m_ref = _ACCEPT_REF_RE.match(line)
+        if m_ref:
+            anchor = m_ref.group(1)
+        elif name_anchor and (m_name := _ACCEPT_NAME_RE.match(line)):
+            anchor = f"list:{m_name.group(1)}"
+        else:
+            m_desc = _ACCEPT_DESC_RE.match(line)
+            if m_desc:
+                anchor = m_desc.group(1) or m_desc.group(2) or m_desc.group(3)
+
+        if anchor is not None:
+            seen_first_anchor = True
+            if pending:
+                result.setdefault(anchor, set()).update(pending)
+                pending.clear()
+        elif line.strip() and not line.strip().startswith("#"):
+            # Non-comment, non-anchor content line. Pending directives before
+            # any anchor are file-level; after an anchor they're discarded to
+            # avoid attaching to the wrong rule.
+            if pending and not seen_first_anchor:
+                result.setdefault("*", set()).update(pending)
+                pending.clear()
+            elif pending and seen_first_anchor:
+                pending.clear()
+
+    if pending and not seen_first_anchor:
+        result.setdefault("*", set()).update(pending)
+
+
+def parse_audit_acceptances(file_path: str | Path) -> dict[str, set[str]]:
+    """Parse ``# octorules:accept=<check>`` directives, shellcheck-style.
+
+    A directive attaches to the rule anchor that follows it — a ``ref:`` or
+    ``description:`` line — and scopes the acceptance to that rule's findings.
+    Directives placed before any anchor (e.g. at the top of the file) are
+    file-wide and keyed under ``"*"``. Returns a dict mapping anchor (or
+    ``"*"``) to the set of accepted check names.
+
+    ``!include``d files are followed so a directive can be scoped to a list
+    by placing it above the list's ``name:`` in the list's own file; there a
+    ``name: foo`` line anchors as ``list:foo`` to match the audit's
+    ``list:<name>`` finding refs. Unknown check names are logged and dropped.
+    """
+    result: dict[str, set[str]] = {}
     try:
         text = Path(file_path).read_text()
     except OSError:
-        return accepted
+        return result
 
-    for m in _AUDIT_ACCEPT_RE.finditer(text):
-        names = {n.strip() for n in m.group(1).split(",")}
-        unknown = names - ALL_CHECKS
-        for u in sorted(unknown):
-            log.warning("Unknown audit check %r in acceptance directive (%s)", u, file_path)
-        accepted.update(names - unknown)
+    _scan_acceptances(text, result, name_anchor=False, file_path=file_path)
 
-    return accepted
+    base = Path(file_path).parent
+    for inc in _INCLUDE_RE.findall(text):
+        inc_path = (base / inc).resolve()
+        if not inc_path.is_file():
+            continue
+        try:
+            inc_text = inc_path.read_text()
+        except OSError:
+            continue
+        _scan_acceptances(inc_text, result, name_anchor=True, file_path=inc_path)
+
+    return result
 
 
 # ---------------------------------------------------------------------------

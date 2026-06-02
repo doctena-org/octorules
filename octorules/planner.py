@@ -986,6 +986,28 @@ def normalize_list_item(item: RuleDict) -> RuleDict:
     return {k: v for k, v in item.items() if k not in excluded}
 
 
+def _list_item_add_change(ref: str, item: RuleDict, phase: Phase) -> RuleChange:
+    """Build an ADD change for a list item.
+
+    Pre-seeds ``normalized_desired`` with :func:`normalize_list_item` rather
+    than letting the cached property fall back to :func:`normalize_rule`.
+    List items have no logging concept; ``normalize_rule`` would inject the
+    rule-only ``logging.enabled: true`` default and surface a spurious
+    ``+ logging`` block in plan output. MODIFY changes are already seeded
+    this way; this keeps ADD/REMOVE consistent.
+    """
+    change = RuleChange(change_type=ChangeType.ADD, ref=ref, phase=phase, desired=item)
+    change.__dict__["normalized_desired"] = normalize_list_item(item)
+    return change
+
+
+def _list_item_remove_change(ref: str, item: RuleDict, phase: Phase) -> RuleChange:
+    """Build a REMOVE change for a list item (see :func:`_list_item_add_change`)."""
+    change = RuleChange(change_type=ChangeType.REMOVE, ref=ref, phase=phase, current=item)
+    change.__dict__["normalized_current"] = normalize_list_item(item)
+    return change
+
+
 def _make_list_phase(list_name: str) -> Phase:
     """Create a synthetic Phase for list item changes."""
     return _make_synthetic_phase("list", list_name, "account_lists")
@@ -1044,14 +1066,7 @@ def diff_list(
         plan.create = True
         for item in desired_items:
             identity = _item_identity(item, list_kind)
-            plan.changes.append(
-                RuleChange(
-                    change_type=ChangeType.ADD,
-                    ref=identity,
-                    phase=synthetic_phase,
-                    desired=item,
-                )
-            )
+            plan.changes.append(_list_item_add_change(identity, item, synthetic_phase))
         plan.prepared_items = desired_items
         if desired_description:
             plan.description_change = (None, desired_description)
@@ -1066,25 +1081,11 @@ def diff_list(
 
     # Additions
     for key in desired_keys - current_keys:
-        plan.changes.append(
-            RuleChange(
-                change_type=ChangeType.ADD,
-                ref=key,
-                phase=synthetic_phase,
-                desired=desired_by_id[key],
-            )
-        )
+        plan.changes.append(_list_item_add_change(key, desired_by_id[key], synthetic_phase))
 
     # Removals
     for key in current_keys - desired_keys:
-        plan.changes.append(
-            RuleChange(
-                change_type=ChangeType.REMOVE,
-                ref=key,
-                phase=synthetic_phase,
-                current=current_by_id[key],
-            )
-        )
+        plan.changes.append(_list_item_remove_change(key, current_by_id[key], synthetic_phase))
 
     # Modifications
     for key in desired_keys & current_keys:

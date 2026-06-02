@@ -1010,20 +1010,21 @@ class TestAuditExtensionRegistry:
 # parse_audit_acceptances
 # ---------------------------------------------------------------------------
 class TestParseAuditAcceptances:
-    def test_single_check(self, tmp_path):
+    def test_filewide_when_before_section_key(self, tmp_path):
+        """A directive at the top, above a non-rule line, is file-wide ("*")."""
         f = tmp_path / "test.yaml"
         f.write_text("# octorules:accept=zone-drift\nsome: yaml\n")
-        assert parse_audit_acceptances(f) == {"zone-drift"}
+        assert parse_audit_acceptances(f) == {"*": {"zone-drift"}}
 
     def test_multiple_checks_one_line(self, tmp_path):
         f = tmp_path / "test.yaml"
         f.write_text("# octorules:accept=ip-overlap,cdn-ranges\n")
-        assert parse_audit_acceptances(f) == {"ip-overlap", "cdn-ranges"}
+        assert parse_audit_acceptances(f) == {"*": {"ip-overlap", "cdn-ranges"}}
 
     def test_whitespace_variations(self, tmp_path):
         f = tmp_path / "test.yaml"
         f.write_text("# octorules: accept = ip-overlap , cdn-ranges\n")
-        assert parse_audit_acceptances(f) == {"ip-overlap", "cdn-ranges"}
+        assert parse_audit_acceptances(f) == {"*": {"ip-overlap", "cdn-ranges"}}
 
     def test_unknown_check_logged_and_dropped(self, tmp_path, caplog):
         f = tmp_path / "test.yaml"
@@ -1032,7 +1033,7 @@ class TestParseAuditAcceptances:
 
         with caplog.at_level(logging.WARNING, logger="octorules.audit"):
             result = parse_audit_acceptances(f)
-        assert result == set()
+        assert result == {}
         assert "bogus" in caplog.text
 
     def test_mixed_known_unknown(self, tmp_path, caplog):
@@ -1042,32 +1043,82 @@ class TestParseAuditAcceptances:
 
         with caplog.at_level(logging.WARNING, logger="octorules.audit"):
             result = parse_audit_acceptances(f)
-        assert result == {"zone-drift"}
+        assert result == {"*": {"zone-drift"}}
         assert "bogus" in caplog.text
 
     def test_file_not_found(self, tmp_path):
         f = tmp_path / "nonexistent.yaml"
-        assert parse_audit_acceptances(f) == set()
+        assert parse_audit_acceptances(f) == {}
 
     def test_multiple_directives(self, tmp_path):
         f = tmp_path / "test.yaml"
         f.write_text("# octorules:accept=zone-drift\nsome: yaml\n# octorules:accept=ip-overlap\n")
-        assert parse_audit_acceptances(f) == {"zone-drift", "ip-overlap"}
+        assert parse_audit_acceptances(f) == {"*": {"zone-drift", "ip-overlap"}}
 
     def test_empty_file(self, tmp_path):
         f = tmp_path / "test.yaml"
         f.write_text("")
-        assert parse_audit_acceptances(f) == set()
+        assert parse_audit_acceptances(f) == {}
 
     def test_no_directives(self, tmp_path):
         f = tmp_path / "test.yaml"
         f.write_text("zones:\n  example.com:\n    sources: [rules]\n")
-        assert parse_audit_acceptances(f) == set()
+        assert parse_audit_acceptances(f) == {}
 
     def test_all_checks_accepted(self, tmp_path):
         f = tmp_path / "test.yaml"
         f.write_text("# octorules:accept=ip-overlap,ip-shadow,cdn-ranges,zone-drift\n")
-        assert parse_audit_acceptances(f) == ALL_CHECKS
+        assert parse_audit_acceptances(f) == {"*": set(ALL_CHECKS)}
+
+    def test_scoped_to_following_ref(self, tmp_path):
+        """A directive directly above a rule attaches to that rule's ref."""
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "waf_custom_rules:\n"
+            "# octorules:accept=cdn-ranges\n"
+            "- ref: r1\n"
+            "  expression: 'ip.src in {1.2.3.4}'\n"
+        )
+        assert parse_audit_acceptances(f) == {"r1": {"cdn-ranges"}}
+
+    def test_scoped_to_following_description(self, tmp_path):
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "waf_custom_rules:\n"
+            "# octorules:accept=zone-drift\n"
+            '- description: "My rule"\n'
+            "  expression: 'true'\n"
+        )
+        assert parse_audit_acceptances(f) == {"My rule": {"zone-drift"}}
+
+    def test_scoped_to_second_rule_only(self, tmp_path):
+        """A directive above the second rule scopes to it, not the first."""
+        f = tmp_path / "test.yaml"
+        f.write_text(
+            "waf_custom_rules:\n"
+            "- ref: r1\n"
+            "  expression: 'a'\n"
+            "# octorules:accept=ip-overlap\n"
+            "- ref: r2\n"
+            "  expression: 'b'\n"
+        )
+        assert parse_audit_acceptances(f) == {"r2": {"ip-overlap"}}
+
+    def test_list_scope_via_included_file(self, tmp_path):
+        """A directive above `name:` in an !included list file anchors as
+        list:<name>, matching the audit's list:<name> finding refs."""
+        (tmp_path / "block.yaml").write_text(
+            "# octorules:accept=cdn-ranges\nname: block_known_attackers\nkind: ip\nitems: []\n"
+        )
+        f = tmp_path / "test.yaml"
+        f.write_text("lists:\n- !include 'block.yaml'\n")
+        assert parse_audit_acceptances(f) == {"list:block_known_attackers": {"cdn-ranges"}}
+
+    def test_name_is_not_an_anchor_in_main_file(self, tmp_path):
+        """`name:` only anchors inside included list files, not the main file."""
+        f = tmp_path / "test.yaml"
+        f.write_text("# octorules:accept=cdn-ranges\nname: foo\n")
+        assert parse_audit_acceptances(f) == {"*": {"cdn-ranges"}}
 
     def test_coexists_with_lint_disable(self, tmp_path):
         """Both octorules:disable and octorules:accept in the same file work independently."""
@@ -1080,9 +1131,9 @@ class TestParseAuditAcceptances:
             "- ref: r1\n"
             "  expression: 'true'\n"
         )
-        # Audit sees only accept, not disable
+        # Audit sees only accept, not disable; it attaches to the ref below it
         audit_result = parse_audit_acceptances(f)
-        assert audit_result == {"zone-drift"}
+        assert audit_result == {"r1": {"zone-drift"}}
 
         # Lint sees only disable, not accept
         lint_result = parse_suppressions(f)
@@ -1099,8 +1150,8 @@ class TestParseAuditAcceptances:
             "- ref: 81f3cf649da74ee29a547fdb9b8425eb\n"
             "  expression: 'ip.src in {194.154.198.204}'\n"
         )
-        # Audit acceptance works
-        assert parse_audit_acceptances(f) == {"zone-drift"}
+        # Audit acceptance works — attaches to the ref below it
+        assert parse_audit_acceptances(f) == {"81f3cf649da74ee29a547fdb9b8425eb": {"zone-drift"}}
 
         # Lint suppression attaches to the ref
         lint_result = parse_suppressions(f)
@@ -1818,6 +1869,41 @@ class TestCmdAudit:
             exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
         assert exit_code == 0  # suppressed
         captured = capsys.readouterr()
+        assert "suppressed" in captured.err
+
+    def test_acceptance_scoped_to_rule(self, tmp_path, capsys):
+        """A directive above one rule scopes the accept to that rule only.
+
+        Two overlapping rules produce an ip-overlap finding whose ref is the
+        narrower rule (r2). The directive above r1 leaves it; above r2 it is
+        suppressed.
+        """
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        config_path = _write_config_and_rules(tmp_path, zone_rules={"zone-a": {}})
+        rules_file = tmp_path / "rules" / "zone-a.yaml"
+        # Hand-written so refs are first-key (matching the `- ref:` anchor),
+        # as real rules files are.
+        r1 = "- ref: r1\n  action: block\n  expression: 'ip.src in {10.0.0.0/8}'\n"
+        r2 = "- ref: r2\n  action: block\n  expression: 'ip.src in {10.0.0.0/24}'\n"
+
+        # Directive above r1: the finding (ref r2) is NOT suppressed.
+        rules_file.write_text(f"waf_custom_rules:\n# octorules:accept=ip-overlap\n{r1}{r2}")
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
+        captured = capsys.readouterr()
+        assert "Overlapping IP ranges" in captured.out
+
+        # Directive above r2: the finding is suppressed.
+        rules_file.write_text(f"waf_custom_rules:\n{r1}# octorules:accept=ip-overlap\n{r2}")
+        config = Config.from_file(str(config_path))
+        with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+            exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
+        captured = capsys.readouterr()
+        assert exit_code == 0
+        assert "Overlapping IP ranges" not in captured.out
         assert "suppressed" in captured.err
 
     def test_json_format_outputs_json(self, tmp_path, capsys):

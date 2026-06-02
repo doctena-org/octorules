@@ -16,6 +16,7 @@ from octorules.planner import (
     PhasePlan,
     RuleChange,
     ZonePlan,
+    diff_list,
 )
 
 REDIRECT_PHASE = get_phase("redirect_rules")
@@ -63,6 +64,60 @@ class TestListFormatting:
         lines = output.splitlines()
         assert any("−" in ln and "old desc" in ln for ln in lines)
         assert any("+" in ln and "new desc" in ln for ln in lines)
+
+    def test_text_create_folds_description(self):
+        """On create, the description is part of the new list — folded into
+        the create, not rendered as a `~ description` diff with a `- None`."""
+        lp = ListPlan(
+            list_name="new_list",
+            list_kind="ip",
+            create=True,
+            description_change=(None, "blocked ranges"),
+        )
+        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
+        output = format_zone_plan(zp, use_color=False)
+        assert "+ create list" in output
+        assert "+ description: 'blocked ranges'" in output
+        # No misleading modify diff and no `None` old value.
+        assert "~ description" not in output
+        assert "None" not in output
+
+    def test_markdown_create_folds_description(self):
+        lp = ListPlan(
+            list_name="new_list",
+            list_kind="ip",
+            create=True,
+            description_change=(None, "blocked ranges"),
+        )
+        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
+        output = format_plan_markdown([zp])
+        assert "create list — description: blocked ranges" in output
+        assert "| ~ |" not in output
+        assert "None" not in output
+
+    def test_html_create_folds_description(self):
+        lp = ListPlan(
+            list_name="new_list",
+            list_kind="ip",
+            create=True,
+            description_change=(None, "blocked ranges"),
+        )
+        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
+        output = format_plan_html([zp])
+        assert "+ description: blocked ranges" in output
+        # The old behaviour emitted an Update row with `description: None`.
+        assert "<td>Update</td>" not in output
+        assert "description: None" not in output
+
+    def test_html_create_no_per_item_logging(self):
+        """End-to-end: a created list rendered to HTML shows clean `+ ip:`
+        rows with no spurious `logging` block (regression for the rule-
+        normalizer leaking onto list items)."""
+        lp = diff_list("blocklist", None, "ip", [{"ip": "1.2.3.4"}], [])
+        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
+        output = format_plan_html([zp])
+        assert "+ ip: 1.2.3.4" in output
+        assert "logging" not in output
 
     def test_json_format_includes_lists(self):
         lp = ListPlan(

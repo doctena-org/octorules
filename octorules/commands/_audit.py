@@ -83,13 +83,14 @@ def cmd_audit(
     phase_order = list(ALL_FRIENDLY_NAMES)
 
     # Parse audit acceptances from each rules file.
-    accepted_by_zone: dict[str, set[str]] = {}
+    accepted_by_zone: dict[str, dict[str, set[str]]] = {}
     for stem in file_stems:
         rules_file = config.rules_dir / f"{stem}.yaml"
         accepted = parse_audit_acceptances(rules_file)
         if accepted:
             accepted_by_zone[stem] = accepted
-            log.info("  %s: accepted audit checks: %s", stem, ", ".join(sorted(accepted)))
+            checks_accepted = sorted({c for checks in accepted.values() for c in checks})
+            log.info("  %s: accepted audit checks: %s", stem, ", ".join(checks_accepted))
 
     log.debug("Auditing %d zone(s)", len(file_stems))
     for stem in file_stems:
@@ -115,14 +116,15 @@ def cmd_audit(
         cdn_stale_days=cdn_stale_days,
     )
 
-    # Apply suppressions: a finding is suppressed when ANY zone it mentions
-    # has an acceptance for that check.
+    # Apply suppressions: a finding is suppressed when its zone accepts the
+    # check either file-wide ("*") or for the finding's specific rule anchor
+    # (the ref the directive was placed above).
     total_suppressed = 0
     if accepted_by_zone:
         unsuppressed = []
         for f in findings:
-            zone = f.zone_name
-            if zone and zone in accepted_by_zone and f.check in accepted_by_zone[zone]:
+            acc = accepted_by_zone.get(f.zone_name, {}) if f.zone_name else {}
+            if f.check in acc.get(f.ref, set()) or f.check in acc.get("*", set()):
                 total_suppressed += 1
             else:
                 unsuppressed.append(f)

@@ -192,9 +192,15 @@ def format_list_plan(lp: ListPlan, use_color: bool = True) -> list[str]:
     lines.append(p.header(header))
     if lp.create:
         lines.append(p.success("  + create list"))
+        # On create the description is part of the new list, not a
+        # standalone update — fold it in as an added field rather than
+        # rendering a misleading description diff with a None old value.
+        if lp.description_change is not None:
+            new_desc = lp.description_change[1]
+            lines.append(p.muted("    + ") + p.success(f"description: {new_desc!r}"))
     if lp.delete:
         lines.append(p.error("  - delete list"))
-    if lp.description_change is not None:
+    if not lp.create and lp.description_change is not None:
         old_desc, new_desc = lp.description_change
         lines.append(p.warning("  ~ description:"))
         lines.append(p.muted("    − ") + p.error(repr(old_desc)))  # noqa: RUF001
@@ -424,10 +430,17 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
         for lp in zp.list_plans:
             phase_label = f"list:{lp.list_name}"
             if lp.create:
-                lines.append(f"| + | {phase_label} | | create list |")
+                # Fold the description into the create row rather than
+                # emitting a separate `~ description` diff with a `- None`
+                # old value (the list does not exist yet).
+                if lp.description_change is not None:
+                    new_desc = _md_escape(str(lp.description_change[1]))
+                    lines.append(f"| + | {phase_label} | | create list — description: {new_desc} |")
+                else:
+                    lines.append(f"| + | {phase_label} | | create list |")
             if lp.delete:
                 lines.append(f"| - | {phase_label} | | delete list |")
-            if lp.description_change is not None:
+            if not lp.create and lp.description_change is not None:
                 old_desc, new_desc = lp.description_change
                 lines.append(f"| ~ | {phase_label} | | `description` |")
                 pending_diffs.append([("description", old_desc, new_desc)])
@@ -742,7 +755,15 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append("  <tr>")
                 lines.append("    <td>Create</td>")
                 lines.append("    <td></td>")
-                lines.append("    <td>create list</td>")
+                # On create, fold the description into the create row
+                # instead of a separate Update row whose old value is a
+                # misleading `description: None` (the list is new).
+                if lp.description_change is not None:
+                    new_desc = lp.description_change[1]
+                    body = f"create list\n+ description: {new_desc}"
+                    lines.append(f"    <td><pre>{e(body)}</pre></td>")
+                else:
+                    lines.append("    <td>create list</td>")
                 lines.append("  </tr>")
             if lp.delete:
                 lp_removes += 1
@@ -751,7 +772,7 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append("    <td></td>")
                 lines.append("    <td>delete list</td>")
                 lines.append("  </tr>")
-            if lp.description_change is not None:
+            if not lp.create and lp.description_change is not None:
                 lp_modifies += 1
                 old_desc, new_desc = lp.description_change
                 lines.append("  <tr>")

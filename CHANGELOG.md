@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.28.0] - 2026-06-02
+
+### Changed
+- Audit acceptance directives (`# octorules:accept=`) are now positional,
+  matching the lint `# octorules:disable=` directives: a directive attaches
+  to the rule anchor (`ref:` or `description:`) below it, scoping the
+  acceptance to that rule; a directive placed before any rule is file-wide.
+  Previously every acceptance was file-wide regardless of placement.
+  `!include`d files are followed, so an acceptance placed above a list's
+  `name:` in the list's own file scopes to that list's `list:<name>`
+  findings.
+- List-create plan output folds the list description into the `Create`
+  operation instead of emitting a separate `Update` row whose old value is
+  a misleading `None`.
+
+### Fixed
+- List-item plan rows (add / remove) no longer show a spurious
+  `logging: enabled: true` block. List items were normalized through the
+  rule normalizer, which injects the rule-only `logging.enabled` default;
+  they now use the list-item normalizer, consistent with modify rows.
+
 ## [0.27.1] - 2026-05-18
 
 ### Added
