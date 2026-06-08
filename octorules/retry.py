@@ -73,5 +73,9 @@ def retry_with_backoff(
                     max_attempts,
                     exc,
                 )
-    assert last_exc is not None
+    # Reachable only when max_attempts < 1 (the loop body never ran, so no
+    # exception was captured). An explicit raise survives `python -O`, which
+    # would strip an assert and turn `raise last_exc` into `raise None`.
+    if last_exc is None:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
     raise last_exc

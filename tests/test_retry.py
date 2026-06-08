@@ -102,3 +102,14 @@ class TestRetryWithBackoff:
         )
         assert result == 42
         mock_sleep.assert_called_once_with(0.0)
+
+    def test_max_attempts_below_one_raises_value_error(self):
+        """max_attempts < 1 never runs the loop; raise an explicit error.
+
+        Guards against the prior ``assert last_exc is not None`` which would
+        become ``raise None`` under ``python -O``.
+        """
+        op = MagicMock()
+        with pytest.raises(ValueError, match="max_attempts must be >= 1, got 0"):
+            retry_with_backoff(op, retryable=(ValueError,), max_attempts=0, label="test")
+        assert op.call_count == 0
