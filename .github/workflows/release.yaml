@@ -6,8 +6,7 @@ on:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
 
 permissions:
-  id-token: write
-  contents: write
+  contents: read
 
 jobs:
   lint:
@@ -18,6 +17,9 @@ jobs:
 
   publish:
     needs: [lint, test]
+    permissions:
+      id-token: write
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: pypi
