@@ -352,6 +352,34 @@ class TestChangeTypeFilter:
         assert len(result.extension_plans["my_custom_ext"][0].changes) == 1
         assert result.extension_plans["my_custom_ext"][0].changes[0].change_type == ChangeType.ADD
 
+    def test_untyped_extension_changes_are_kept(self):
+        """Settings-extension changes carry field/current/desired with no
+        change_type; the filter must keep them rather than crash with
+        AttributeError, while still filtering typed changes alongside."""
+
+        @dataclass
+        class _SettingsChange:
+            field: str
+            current: object
+            desired: object
+
+        ctf = ChangeTypeFilter(exclude=["REMOVE"])
+        ext_plan = _ExtPlan(
+            description="bot_management",
+            changes=[
+                _SettingsChange(field="enable_js", current=False, desired=True),
+                RuleChange(change_type=ChangeType.REMOVE, ref="typed-rm", phase=REDIRECT_PHASE),
+            ],
+        )
+        plan = ZonePlan(
+            zone_name="example.com",
+            extension_plans={"cloudflare_bot_management": [ext_plan]},
+        )
+        result = ctf.process_changes("example.com", plan, MagicMock())
+        remaining = result.extension_plans["cloudflare_bot_management"][0].changes
+        assert len(remaining) == 1
+        assert remaining[0].field == "enable_js"
+
     def test_exclude_filters_multiple_extensions(self):
         """ChangeTypeFilter should filter changes across multiple extension types."""
         ctf = ChangeTypeFilter(exclude=["ADD"])

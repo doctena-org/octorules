@@ -671,6 +671,7 @@ Unsupported optional methods must still exist to satisfy the Protocol. The conve
 - **`normalize_fields()` / `denormalize_fields()`** — bidirectional field name mapping between YAML and provider API formats.
 - **`validate_path_within()`** (`octorules.pathutil`) — path traversal protection for file operations.
 - **`make_error_wrapper()`** — decorator factory for mapping provider SDK exceptions to `ProviderError`/`ProviderAuthError`.
+- **Linter helpers** (`octorules.linter.helpers`) — `CATCH_ALL_CIDRS` plus `find_duplicate_priorities()` and `find_first_priority_gap()` for the duplicate-priority / non-contiguous-priority lint checks providers mirror by convention.
 
 Extension hooks (plan, apply, format, validate, dump, audit) registered via `octorules.extensions` are validated at registration time — the framework checks the callable's signature against the expected parameters and raises `TypeError` immediately if they don't match, so provider authors get clear errors during development rather than at runtime.
 

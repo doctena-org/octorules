@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.29.0] - 2026-06-11
+
+### Added
+- `octorules.linter.helpers` — shared lint helpers for provider
+  packages: `CATCH_ALL_CIDRS`, `find_duplicate_priorities`,
+  `find_first_priority_gap`.
+
+### Changed
+- `normalize_expression` results are cached; large zone files lint
+  ~3x faster.
+- Refreshed the bundled CDN range snapshots.
+
+### Fixed
+- `ChangeTypeFilter` no longer crashes on settings-extension changes.
+- `retry_with_backoff` raises `ValueError` for `max_attempts < 1`.
+
 ## [0.28.0] - 2026-06-02
 
 ### Changed

@@ -704,3 +704,18 @@ class TestSplitSetItems:
 # ---------------------------------------------------------------------------
 # CSP value formatting
 # ---------------------------------------------------------------------------
+
+
+class TestNormalizeExpressionCache:
+    def test_repeated_calls_hit_the_cache(self):
+        # Lint checks and planner diffs normalize the same expression
+        # several times per run; the LRU cache makes repeats free.
+        from octorules.expression import normalize_expression
+
+        normalize_expression.cache_clear()
+        expr = 'http.host   eq   "cache-probe.example.com"'
+        first = normalize_expression(expr)
+        second = normalize_expression(expr)
+        assert first == second == 'http.host eq "cache-probe.example.com"'
+        info = normalize_expression.cache_info()
+        assert info.hits >= 1

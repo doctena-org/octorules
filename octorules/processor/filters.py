@@ -79,7 +79,9 @@ class ChangeTypeFilter:
     """Filter planned changes by type.
 
     Removes changes of the specified types from all plan components
-    (phase plans, custom ruleset plans, list plans, page shield policy plans).
+    (phase plans, custom ruleset plans, list plans, extension plans).
+    Extension changes without a ``change_type`` attribute (settings
+    extensions use plain field changes) are never filtered.
 
     Args:
         exclude: Change types to block (e.g. ["REMOVE", "REORDER"]).
@@ -107,5 +109,11 @@ class ChangeTypeFilter:
             lp.changes = [c for c in lp.changes if c.change_type not in self._exclude]
         for ext_plans in plan.extension_plans.values():
             for ep in ext_plans:
-                ep.changes = [c for c in ep.changes if c.change_type not in self._exclude]
+                # Extension changes are not all typed: settings extensions
+                # (e.g. bot management) use field-level changes without a
+                # change_type. Untyped changes can never match an excluded
+                # type, so they are kept.
+                ep.changes = [
+                    c for c in ep.changes if getattr(c, "change_type", None) not in self._exclude
+                ]
         return plan
