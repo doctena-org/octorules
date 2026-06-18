@@ -1,9 +1,9 @@
 {
-  "_generated_at": "2026-06-10T09:08:44Z",
+  "_generated_at": "2026-06-18T09:42:13Z",
   "_generator": "scripts/sync_cdn_ranges.py",
   "provider": "Azure Front Door",
   "version": {
-    "changeNumber": 403,
+    "changeNumber": 404,
     "cloud": "Public"
   },
   "cidrs": [

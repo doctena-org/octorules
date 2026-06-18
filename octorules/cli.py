@@ -586,6 +586,16 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         config = Config.from_file(args.config)
+        # --phase is validated against the phase registry, which providers
+        # populate as an import side-effect.  When --phase is given, load the
+        # configured providers first so a valid phase isn't rejected against an
+        # empty registry (and the error message can list the real phases).
+        # ep.load() only imports the module (no provider instance, no
+        # credentials) and is idempotent.  Skipped when no --phase is given so
+        # we don't import providers for commands that don't need them yet.
+        if args.phases:
+            for prov_name in config.providers:
+                _ensure_provider_loaded(prov_name)
         phase_filter = _validate_phases(args.phases)
 
         if getattr(args, "config_only", False):
@@ -618,8 +628,10 @@ def main(argv: list[str] | None = None) -> None:
             )
             _exit(command, code, time.monotonic() - t0)
         elif command == "lint":
-            # Load only configured providers for lint plugin registration,
-            # without constructing provider instances (no API credentials needed).
+            # Load configured providers for lint plugin registration, without
+            # constructing provider instances (no API credentials needed).
+            # Needed even without --phase (the loop above only runs when a
+            # --phase filter is given); idempotent if already loaded.
             for prov_name in config.providers:
                 _ensure_provider_loaded(prov_name)
             from octorules.commands._providers import read_zone_plans_cache

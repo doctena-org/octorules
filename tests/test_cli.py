@@ -1170,6 +1170,47 @@ class TestPhaseFiltering:
     def test_validate_phases_none_returns_none(self):
         assert _validate_phases(None) is None
 
+    @patch("octorules.cli.cmd_plan", return_value=0)
+    @patch("octorules.cli.Config.from_file")
+    def test_providers_loaded_before_phase_validation(self, mock_config, mock_cmd, tmp_config):
+        """Regression: configured providers must be loaded — registering their
+        phases — *before* --phase is validated.
+
+        Phase registration is a provider-import side-effect, so the registry is
+        empty until providers load.  Validating first rejected every --phase
+        value against an empty registry and rendered an empty "Valid phases:"
+        list (broke plan/sync/audit/dump and config-mode lint).
+
+        A phase that exists only after its provider loads must validate
+        successfully through main(); before the fix it raised ConfigError and
+        cmd_plan was never reached.
+        """
+        from octorules import phases as phases_mod
+
+        unique = "regression_only_phase_xyz"
+        mock_config.return_value = MagicMock(providers={"fakeprov": object()})
+
+        def fake_load(_name):
+            phases_mod.register_phase(
+                phases_mod.Phase(
+                    friendly_name=unique,
+                    provider_id="regression_xyz_id",
+                    default_action=None,
+                )
+            )
+
+        try:
+            with patch("octorules.cli._ensure_provider_loaded", side_effect=fake_load):
+                with pytest.raises(SystemExit) as exc_info:
+                    main(["--config", str(tmp_config), "plan", "--phase", unique])
+            assert mock_cmd.called, "cmd_plan not reached — valid --phase was rejected"
+            assert exc_info.value.code == 0
+            _, kwargs = mock_cmd.call_args
+            assert kwargs["phase_filter"] == [unique]
+        finally:
+            if unique in phases_mod.PHASE_BY_NAME:
+                phases_mod.unregister_phase(unique)
+
     def test_filter_desired_by_phase(self):
         desired = {
             "redirect_rules": [{"ref": "r1"}],

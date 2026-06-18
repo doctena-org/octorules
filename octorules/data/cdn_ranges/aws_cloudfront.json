@@ -1,10 +1,10 @@
 {
-  "_generated_at": "2026-06-10T09:08:44Z",
+  "_generated_at": "2026-06-18T09:42:13Z",
   "_generator": "scripts/sync_cdn_ranges.py",
   "provider": "AWS CloudFront",
   "version": {
-    "createDate": "2026-06-09-19-07-05",
-    "syncToken": "1781032025"
+    "createDate": "2026-06-18-06-07-05",
+    "syncToken": "1781762825"
   },
   "cidrs": [
     "108.138.0.0/15",

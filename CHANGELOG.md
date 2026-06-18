@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.29.1] - 2026-06-18
+
+### Changed
+- Refreshed the bundled CDN range snapshots (Google 976→979,
+  Bunny 916→918 CIDRs).
+
+### Fixed
+- `--phase` now works on `plan`, `sync`, `audit`, and `dump` (and
+  config-mode `lint`). It previously rejected every phase with
+  `Unknown phase '<x>'. Valid phases:` followed by an empty list,
+  because the configured providers — which register their phases on
+  import — were not loaded before the filter was validated.
+  Single-file `lint <file>` was unaffected.
+
 ## [0.29.0] - 2026-06-11
 
 ### Added
