@@ -1,6 +1,7 @@
 """Built-in processor filters for common WAF pipeline transformations."""
 
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from octorules.config import ConfigError
@@ -9,6 +10,30 @@ from octorules.planner import ChangeType
 if TYPE_CHECKING:
     from octorules.planner import ZonePlan
     from octorules.provider.base import BaseProvider
+
+
+def _filter_plan_changes(plan: "ZonePlan", keep: Callable[[object], bool]) -> "ZonePlan":
+    """Apply *keep* to every change across all plan buckets, in place.
+
+    Walks the four change-bearing components of a :class:`ZonePlan` — phase
+    plans, custom-ruleset plans, list plans, and extension plans — and keeps
+    only the changes for which ``keep(change)`` returns ``True``.
+
+    *keep* receives a single change object. Extension changes are not all
+    typed: settings extensions (e.g. bot management) use field-level changes
+    with no ``change_type``/``ref``. Predicates must tolerate such objects
+    (use ``getattr`` with a default rather than attribute access).
+    """
+    for pp in plan.phase_plans:
+        pp.changes = [c for c in pp.changes if keep(c)]
+    for crp in plan.custom_ruleset_plans:
+        crp.changes = [c for c in crp.changes if keep(c)]
+    for lp in plan.list_plans:
+        lp.changes = [c for c in lp.changes if keep(c)]
+    for ext_plans in plan.extension_plans.values():
+        for ep in ext_plans:
+            ep.changes = [c for c in ep.changes if keep(c)]
+    return plan
 
 
 class PhaseFilter:
@@ -101,19 +126,57 @@ class ChangeTypeFilter:
     def process_changes(
         self, zone_name: str, plan: "ZonePlan", provider: "BaseProvider"
     ) -> "ZonePlan":
-        for pp in plan.phase_plans:
-            pp.changes = [c for c in pp.changes if c.change_type not in self._exclude]
-        for crp in plan.custom_ruleset_plans:
-            crp.changes = [c for c in crp.changes if c.change_type not in self._exclude]
-        for lp in plan.list_plans:
-            lp.changes = [c for c in lp.changes if c.change_type not in self._exclude]
-        for ext_plans in plan.extension_plans.values():
-            for ep in ext_plans:
-                # Extension changes are not all typed: settings extensions
-                # (e.g. bot management) use field-level changes without a
-                # change_type. Untyped changes can never match an excluded
-                # type, so they are kept.
-                ep.changes = [
-                    c for c in ep.changes if getattr(c, "change_type", None) not in self._exclude
-                ]
-        return plan
+        # Untyped extension changes (settings extensions use field-level
+        # changes without a change_type) have ``getattr(...) is None``, which
+        # can never be in the excluded set, so they are kept.
+        return _filter_plan_changes(
+            plan, lambda c: getattr(c, "change_type", None) not in self._exclude
+        )
+
+
+class PreserveFilter:
+    """Preserve rules whose ``ref`` matches a pattern from selected change types.
+
+    Drops planned changes whose ``ref`` matches *refs* and whose
+    ``change_type`` is in *change_types*. This protects externally managed
+    rules (e.g. rules a security vendor or another team injects out-of-band)
+    from deletion or reordering while other drift is still planned — a scoped
+    middle ground between ``allow_unmanaged`` false (every unmanaged rule
+    becomes a REMOVE) and true (all REMOVEs suppressed).
+
+    Reads only ``ref`` and ``change_type``, both present on every
+    :class:`RuleChange`, so it is provider-agnostic.
+
+    Args:
+        refs: Regex matched (``re.search``) against each change's ``ref``.
+        change_types: Change types to suppress for matching refs. Defaults to
+            ``["REMOVE", "REORDER"]``. ADD/MODIFY are not meaningful for
+            preservation (an unmanaged rule is never added or modified).
+    """
+
+    def __init__(self, *, refs: str, change_types: list[str] | None = None) -> None:
+        if not refs:
+            raise ConfigError("PreserveFilter: 'refs' is required")
+        try:
+            self._refs = re.compile(refs)
+        except re.error as e:
+            raise ConfigError(f"PreserveFilter: invalid regex pattern: {e}") from None
+        types = change_types if change_types is not None else ["REMOVE", "REORDER"]
+        if not types:
+            raise ConfigError("PreserveFilter: 'change_types' must be a non-empty list")
+        try:
+            self._types = {ChangeType[t.upper()] for t in types}
+        except KeyError as e:
+            valid = ", ".join(ct.name for ct in ChangeType)
+            raise ConfigError(
+                f"PreserveFilter: unknown change type {e}. Valid types: {valid}"
+            ) from None
+
+    def process_changes(
+        self, zone_name: str, plan: "ZonePlan", provider: "BaseProvider"
+    ) -> "ZonePlan":
+        def keep(c: object) -> bool:
+            ct = getattr(c, "change_type", None)
+            return not (ct in self._types and self._refs.search(getattr(c, "ref", "") or ""))
+
+        return _filter_plan_changes(plan, keep)

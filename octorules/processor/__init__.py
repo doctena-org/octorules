@@ -32,6 +32,11 @@ class BaseProcessor(Protocol):
         ...
 
 
-from octorules.processor.filters import ChangeTypeFilter, PhaseFilter, RefFilter  # noqa: E402
+from octorules.processor.filters import (  # noqa: E402
+    ChangeTypeFilter,
+    PhaseFilter,
+    PreserveFilter,
+    RefFilter,
+)
 
-__all__ = ["BaseProcessor", "ChangeTypeFilter", "PhaseFilter", "RefFilter"]
+__all__ = ["BaseProcessor", "ChangeTypeFilter", "PhaseFilter", "PreserveFilter", "RefFilter"]

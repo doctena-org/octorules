@@ -1,8 +1,14 @@
 # octorules — multi-provider configuration example
 #
-# This config demonstrates all five providers managed from a single config.
-# For single-provider examples, see config-cloudflare.yaml, config-aws.yaml,
-# config-google.yaml, config-azure.yaml, and config-bunny.yaml.
+# This config demonstrates all five providers managed from a single config,
+# with representative rules under rules/multi/ to show the orchestration shape.
+# For complete, per-phase single-provider examples, see each provider package's
+# own examples/ directory:
+#   https://github.com/doctena-org/octorules-cloudflare/tree/main/examples
+#   https://github.com/doctena-org/octorules-aws/tree/main/examples
+#   https://github.com/doctena-org/octorules-azure/tree/main/examples
+#   https://github.com/doctena-org/octorules-google/tree/main/examples
+#   https://github.com/doctena-org/octorules-bunny/tree/main/examples
 
 # ---------------------------------------------------------------------------
 # Secret handlers — pluggable credential backends
@@ -63,7 +69,7 @@ providers:
     subscription_id: env/AZURE_SUBSCRIPTION_ID
     resource_group: env/AZURE_RESOURCE_GROUP
     waf_type: front_door       # front_door (default) or app_gateway
-    timeout: 30.0              # For both types, use two instances — see config-azure.yaml
+    timeout: 30.0              # For both types, run two instances — see the octorules-azure examples/
     max_workers: 1
     safety:
       delete_threshold: 30.0
@@ -117,6 +123,16 @@ processors:
     class: octorules.processor.filters.RefFilter
     exclude: "^test-"
 
+  # Protect externally-managed rules (whose ref starts with "vendor-") from
+  # deletion or reordering, while still cleaning up other drift. A scoped
+  # alternative to the all-or-nothing allow_unmanaged flag.
+  preserve_external_rules:
+    class: octorules.processor.filters.PreserveFilter
+    refs: "^vendor-"
+    change_types:
+      - REMOVE
+      - REORDER
+
 # ---------------------------------------------------------------------------
 # Manager — concurrency and plan output settings
 # ---------------------------------------------------------------------------
@@ -134,6 +150,20 @@ manager:
     html:
       class: octorules.plan_output.PlanHtml
       path: /tmp/octorules-plan.html
+
+# ---------------------------------------------------------------------------
+# Cloudflare Account-Level Rules
+# ---------------------------------------------------------------------------
+# Cloudflare has 6 account-level-only phases that cannot be deployed at the
+# zone level (bulk_redirect_rules, network_ddos_rules, network_firewall_rules,
+# network_firewall_managed, network_firewall_ratelimit, network_firewall_ids).
+#
+# Account rules files are loaded from the configured rules directory by
+# slugified account name — here, rules/multi/<account-slug>.yaml (e.g. an
+# account named "Example Account" -> rules/multi/example-account.yaml).
+# See that file: bulk_redirect_rules is exemplified; the five Magic Transit
+# (L4) phases are documented but not exemplified (no offline L4 expression
+# schema).
 
 # ---------------------------------------------------------------------------
 # Zones — per-zone settings

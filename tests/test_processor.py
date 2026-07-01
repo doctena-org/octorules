@@ -15,7 +15,13 @@ from octorules.planner import (
     RuleChange,
     ZonePlan,
 )
-from octorules.processor import BaseProcessor, ChangeTypeFilter, PhaseFilter, RefFilter
+from octorules.processor import (
+    BaseProcessor,
+    ChangeTypeFilter,
+    PhaseFilter,
+    PreserveFilter,
+    RefFilter,
+)
 
 
 @dataclass
@@ -412,3 +418,156 @@ class TestChangeTypeFilter:
     def test_invalid_change_type_raises(self):
         with pytest.raises(ConfigError, match="unknown change type"):
             ChangeTypeFilter(exclude=["BOGUS"])
+
+
+# --- PreserveFilter tests ---
+class TestPreserveFilter:
+    def _make_plan(self, change_type=ChangeType.REMOVE):
+        """ZonePlan with one *change_type* change (ref 'vendor-*') in every bucket."""
+
+        def rc(ref):
+            return RuleChange(change_type=change_type, ref=ref, phase=REDIRECT_PHASE)
+
+        return ZonePlan(
+            zone_name="example.com",
+            phase_plans=[PhasePlan(phase=REDIRECT_PHASE, changes=[rc("vendor-x")])],
+            custom_ruleset_plans=[
+                CustomRulesetPlan(
+                    ruleset_id="abc",
+                    ruleset_name="test",
+                    phase="http_request_firewall_custom",
+                    changes=[rc("vendor-cr")],
+                )
+            ],
+            list_plans=[ListPlan(list_name="blocklist", list_id="lid", changes=[rc("vendor-li")])],
+            extension_plans={
+                "page_shield": [_ExtPlan(description="csp", changes=[rc("vendor-ext")])]
+            },
+        )
+
+    def _phase_plan(self, *changes):
+        return ZonePlan(
+            zone_name="example.com",
+            phase_plans=[PhasePlan(phase=REDIRECT_PHASE, changes=list(changes))],
+        )
+
+    def test_drops_matching_remove_keeps_others(self):
+        pf = PreserveFilter(refs=r"^vendor-")
+        zp = self._phase_plan(
+            RuleChange(change_type=ChangeType.REMOVE, ref="vendor-x", phase=REDIRECT_PHASE),
+            RuleChange(change_type=ChangeType.REMOVE, ref="mine-y", phase=REDIRECT_PHASE),
+        )
+        result = pf.process_changes("example.com", zp, MagicMock())
+        assert [c.ref for c in result.phase_plans[0].changes] == ["mine-y"]
+
+    def test_keeps_unlisted_change_type_for_matching_ref(self):
+        """ADD is not in the default change_types, so a matching-ref ADD survives."""
+        pf = PreserveFilter(refs=r"^vendor-")
+        zp = self._phase_plan(
+            RuleChange(change_type=ChangeType.ADD, ref="vendor-x", phase=REDIRECT_PHASE),
+            RuleChange(change_type=ChangeType.REMOVE, ref="vendor-x", phase=REDIRECT_PHASE),
+        )
+        result = pf.process_changes("example.com", zp, MagicMock())
+        assert [c.change_type for c in result.phase_plans[0].changes] == [ChangeType.ADD]
+
+    def test_default_covers_remove_and_reorder(self):
+        pf = PreserveFilter(refs=r"^vendor-")
+        zp = self._phase_plan(
+            RuleChange(change_type=ChangeType.REMOVE, ref="vendor-a", phase=REDIRECT_PHASE),
+            RuleChange(change_type=ChangeType.REORDER, ref="vendor-b", phase=REDIRECT_PHASE),
+            RuleChange(change_type=ChangeType.MODIFY, ref="vendor-c", phase=REDIRECT_PHASE),
+        )
+        result = pf.process_changes("example.com", zp, MagicMock())
+        # REMOVE + REORDER preserved (dropped from plan); MODIFY is not a
+        # preservation type, so it stays.
+        assert [c.change_type for c in result.phase_plans[0].changes] == [ChangeType.MODIFY]
+
+    def test_custom_change_types_only_remove(self):
+        pf = PreserveFilter(refs=r"^vendor-", change_types=["REMOVE"])
+        zp = self._phase_plan(
+            RuleChange(change_type=ChangeType.REMOVE, ref="vendor-a", phase=REDIRECT_PHASE),
+            RuleChange(change_type=ChangeType.REORDER, ref="vendor-b", phase=REDIRECT_PHASE),
+        )
+        result = pf.process_changes("example.com", zp, MagicMock())
+        # Only REMOVE preserved; REORDER stays in the plan.
+        assert [c.change_type for c in result.phase_plans[0].changes] == [ChangeType.REORDER]
+
+    def test_applies_across_all_buckets(self):
+        pf = PreserveFilter(refs=r"^vendor-", change_types=["REMOVE"])
+        result = pf.process_changes("example.com", self._make_plan(), MagicMock())
+        assert result.phase_plans[0].changes == []
+        assert result.custom_ruleset_plans[0].changes == []
+        assert result.list_plans[0].changes == []
+        assert result.extension_plans["page_shield"][0].changes == []
+
+    def test_non_matching_ref_kept_across_buckets(self):
+        pf = PreserveFilter(refs=r"^nomatch-", change_types=["REMOVE"])
+        result = pf.process_changes("example.com", self._make_plan(), MagicMock())
+        assert len(result.phase_plans[0].changes) == 1
+        assert len(result.custom_ruleset_plans[0].changes) == 1
+        assert len(result.list_plans[0].changes) == 1
+        assert len(result.extension_plans["page_shield"][0].changes) == 1
+
+    def test_untyped_extension_change_kept(self):
+        """Settings-extension changes (no change_type/ref) are kept, no crash —
+        even with a catch-all ref pattern, since they have no change_type."""
+
+        @dataclass
+        class _SettingsChange:
+            field: str
+            current: object
+            desired: object
+
+        pf = PreserveFilter(refs=r".*")
+        ext_plan = _ExtPlan(
+            description="bot_management",
+            changes=[
+                _SettingsChange(field="enable_js", current=False, desired=True),
+                RuleChange(change_type=ChangeType.REMOVE, ref="vendor-x", phase=REDIRECT_PHASE),
+            ],
+        )
+        plan = ZonePlan(
+            zone_name="example.com",
+            extension_plans={"cloudflare_bot_management": [ext_plan]},
+        )
+        result = pf.process_changes("example.com", plan, MagicMock())
+        remaining = result.extension_plans["cloudflare_bot_management"][0].changes
+        assert len(remaining) == 1
+        assert remaining[0].field == "enable_js"
+
+    def test_none_ref_kept(self):
+        """ref=None is treated as empty string — pattern won't match, change kept."""
+        pf = PreserveFilter(refs=r"^vendor-")
+        zp = self._phase_plan(
+            RuleChange(change_type=ChangeType.REMOVE, ref=None, phase=REDIRECT_PHASE)
+        )
+        result = pf.process_changes("example.com", zp, MagicMock())
+        assert len(result.phase_plans[0].changes) == 1
+
+    def test_case_insensitive_change_types(self):
+        pf = PreserveFilter(refs=r"^vendor-", change_types=["remove"])
+        zp = self._phase_plan(
+            RuleChange(change_type=ChangeType.REMOVE, ref="vendor-x", phase=REDIRECT_PHASE)
+        )
+        result = pf.process_changes("example.com", zp, MagicMock())
+        assert result.phase_plans[0].changes == []
+
+    def test_empty_refs_raises(self):
+        with pytest.raises(ConfigError, match="'refs' is required"):
+            PreserveFilter(refs="")
+
+    def test_none_refs_raises(self):
+        with pytest.raises(ConfigError, match="'refs' is required"):
+            PreserveFilter(refs=None)
+
+    def test_invalid_regex_raises(self):
+        with pytest.raises(ConfigError, match="invalid regex pattern"):
+            PreserveFilter(refs="[invalid(regex")
+
+    def test_empty_change_types_raises(self):
+        with pytest.raises(ConfigError, match="non-empty"):
+            PreserveFilter(refs=r"^vendor-", change_types=[])
+
+    def test_unknown_change_type_raises(self):
+        with pytest.raises(ConfigError, match="unknown change type"):
+            PreserveFilter(refs=r"^vendor-", change_types=["BOGUS"])

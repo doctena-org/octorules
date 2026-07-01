@@ -21,8 +21,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e ".[dev]"
-      - run: ruff check octorules/ tests/
-      - run: ruff format --check octorules/ tests/
-      - run: yamllint --no-warnings .github/workflows/*.yaml
-      - run: python scripts/sync_cdn_ranges.py --check
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install -e ".[dev]"
+      - run: .venv/bin/pre-commit run --all-files

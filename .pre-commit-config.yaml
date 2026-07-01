@@ -1,0 +1,25 @@
+# Managed by pre-commit (https://pre-commit.com). Install once: pre-commit install
+# These pinned hooks are the single source of truth for lint tool versions
+# (ruff/yamllint are NOT in [dev]). CI runs `pre-commit run --all-files`.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.19
+    hooks:
+      - id: ruff-check
+        files: ^(octorules|tests)/
+      - id: ruff-format
+        files: ^(octorules|tests)/
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: ["--no-warnings"]
+        files: ^\.github/workflows/.*\.ya?ml$
+  - repo: local
+    hooks:
+      - id: cdn-ranges-fresh
+        name: CDN ranges staleness check
+        entry: .venv/bin/python scripts/sync_cdn_ranges.py --check
+        language: system
+        pass_filenames: false
+        always_run: true

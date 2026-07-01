@@ -1,0 +1,62 @@
+# Cloudflare account-level rules for "Example Account"
+#
+# Cloudflare has 6 account-level-only phases that cannot be deployed at the
+# zone level: bulk_redirect_rules (HTTP) plus the five Magic Transit /
+# Network Firewall (Layer-4) phases. All six are exemplified below.
+
+# ---------------------------------------------------------------------------
+# Bulk Redirect Rules — account-wide HTTP 3xx redirects
+# ---------------------------------------------------------------------------
+# Unlike zone-level redirect_rules, bulk_redirect_rules apply across all zones
+# in the account. Default action: "redirect" (omitted below).
+bulk_redirect_rules:
+  - ref: account-redirect-old-domain
+    description: "Redirect a retired domain to its replacement"
+    expression: 'http.host eq "old-domain.example"'
+    action_parameters:
+      from_value:
+        target_url:
+          value: "https://new-domain.example"
+        status_code: 301
+
+# ---------------------------------------------------------------------------
+# Magic Transit / Network Firewall (Layer-4) phases
+# ---------------------------------------------------------------------------
+# Require a Magic Transit subscription. Expressions use packet-level fields
+# (ip.proto, tcp.*, udp.*) validated against octorules-wirefilter's L4 scheme.
+# Valid actions: block, log.
+
+# Layer-4 DDoS mitigation (ddos_l4)
+network_ddos_rules:
+  - ref: l4-syn-flood
+    description: "Mitigate SYN floods"
+    expression: "tcp.flags.syn and not tcp.flags.ack"
+    action: block
+
+# Custom packet filtering (magic_transit)
+network_firewall_rules:
+  - ref: l4-block-mgmt-ports
+    description: "Block inbound management ports"
+    expression: 'ip.proto eq "tcp" and tcp.dstport in {23 3389}'
+    action: block
+
+# Cloudflare-managed L4 protection (magic_transit_managed)
+network_firewall_managed:
+  - ref: l4-log-dns
+    description: "Log inbound DNS for visibility"
+    expression: 'ip.proto eq "udp" and udp.dstport eq 53'
+    action: log
+
+# L4 rate limiting (magic_transit_ratelimit)
+network_firewall_ratelimit:
+  - ref: l4-ratelimit-https
+    description: "Watch inbound HTTPS connection volume"
+    expression: 'ip.proto eq "tcp" and tcp.dstport eq 443'
+    action: log
+
+# Intrusion detection (magic_transit_ids_managed)
+network_firewall_ids:
+  - ref: l4-log-icmp
+    description: "Log ICMP traffic"
+    expression: 'ip.proto eq "icmp"'
+    action: log

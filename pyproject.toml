@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.29.1"
+version = "0.29.2"
 description = "WAF rules as code — manage rules across providers declaratively"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -45,8 +45,7 @@ wirefilter = [
 ]
 dev = [
     "pytest>=7.0",
-    "ruff>=0.4.0",
-    "yamllint>=1.35.0",
+    "pre-commit>=3.5",
     "build",
 ]
 

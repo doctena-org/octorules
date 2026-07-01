@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.29.2] - 2026-07-01
+
+### Added
+- `PreserveFilter` processor — preserve rules whose `ref` matches a pattern
+  from `REMOVE`/`REORDER` changes; a scoped middle ground between
+  `allow_unmanaged` off (every unmanaged rule is removed) and on (nothing
+  unmanaged is removed).
+
 ## [0.29.1] - 2026-06-18
 
 ### Changed

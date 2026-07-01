@@ -58,7 +58,7 @@ zones:
 
 The `env/` prefix resolves values from environment variables at runtime — keep secrets out of YAML. This is the built-in secret handler; see [Secret handlers](#secret-handlers) for pluggable backends (Vault, AWS Secrets Manager, etc.).
 
-> **Complete examples** — the [`examples/`](examples/) directory contains detailed config and rules files for all five providers (Cloudflare, AWS, Google, Azure, Bunny), including multi-provider setups, every config field, and every phase/rule format. Start there rather than writing config from scratch.
+> **Examples** — the [`examples/`](examples/) directory here contains the multi-provider orchestration config (`config.yaml`) plus representative rules under `rules/multi/`. **Complete, per-phase single-provider examples live in each provider package's own `examples/` directory** — see [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare/tree/main/examples), [octorules-aws](https://github.com/doctena-org/octorules-aws/tree/main/examples), [octorules-azure](https://github.com/doctena-org/octorules-azure/tree/main/examples), [octorules-google](https://github.com/doctena-org/octorules-google/tree/main/examples), and [octorules-bunny](https://github.com/doctena-org/octorules-bunny/tree/main/examples). Start there rather than writing config from scratch.
 
 All keys under a provider section (except `class` and `safety`) are forwarded as keyword arguments to the provider constructor — octodns-style passthrough. See each provider's documentation for available settings.
 
@@ -109,9 +109,9 @@ Create a rules file for each zone. The filename must match the zone name used as
 | Azure WAF | WAF policy name | `my-waf-policy` | `<rules-dir>/my-waf-policy.yaml` |
 | Bunny Shield | Pull zone name | `my-pull-zone` | `<rules-dir>/my-pull-zone.yaml` |
 
-The mapping is: `zones.<name>` in `config.yaml` → `<rules-dir>/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID. `<rules-dir>` defaults to `./rules/` and is set under `providers.rules.directory` — point it wherever each customer's rules live (the [`examples/`](examples/) directory ships per-provider subdirs under `examples/rules/<provider>/` so each `config-<provider>.yaml` lints its own zones in isolation, plus an `examples/rules/multi/` collecting all of them for the multi-provider `config.yaml`).
+The mapping is: `zones.<name>` in `config.yaml` → `<rules-dir>/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID. `<rules-dir>` defaults to `./rules/` and is set under `providers.rules.directory` — point it wherever each customer's rules live (the [`examples/`](examples/) directory here ships `rules/multi/` for the multi-provider `config.yaml`; each provider package ships its own single-provider example under its `examples/` directory).
 
-Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`. Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation and the [`examples/rules/`](examples/rules/) directory for complete per-provider examples.
+Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`. Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation and that provider package's own `examples/` directory for complete per-provider examples.
 
 octorules lints each rule file only against the plugin matching its zone's target provider. With per-provider lint plugins installed in the same venv (e.g. both `octorules-cloudflare` and `octorules-aws`), a Cloudflare zone file never gets validated against the AWS schema and vice versa — eliminating cross-provider false positives on same-named blocks (`custom_rulesets`, `lists`).
 
@@ -293,15 +293,24 @@ Both default to no-op (pass-through). Processors run in the order listed. The `c
 
 ### Built-in filters
 
-octorules ships three ready-to-use processors in `octorules.processor.filters`:
+octorules ships four ready-to-use processors in `octorules.processor.filters`:
 
 | Filter | Description |
 |--------|-------------|
 | **PhaseFilter** | Include or exclude phases by name (`include`/`exclude` lists) |
 | **RefFilter** | Include or exclude rules by regex on the `ref` field |
 | **ChangeTypeFilter** | Block specific change types: `ADD`, `REMOVE`, `MODIFY`, `REORDER` |
+| **PreserveFilter** | Protect rules whose `ref` matches a regex from `REMOVE`/`REORDER` changes |
 
-See [`examples/config.yaml`](examples/config.yaml) for working examples of all three.
+`allow_unmanaged` is all-or-nothing: off, every live rule absent from your YAML
+is planned for removal; on, nothing unmanaged is ever removed. **PreserveFilter**
+is the scoped middle ground — keep `allow_unmanaged` off so genuine drift is
+still cleaned up, but spare rules whose `ref` matches a pattern (e.g. rules a
+security vendor or another team injects out-of-band) from deletion and
+reordering. It reads only `ref` and `change_type`, so it works across every
+provider.
+
+See [`examples/config.yaml`](examples/config.yaml) for working examples of all four.
 
 ## Zone discovery
 
@@ -694,7 +703,7 @@ pip install -e ".[dev,wirefilter]"
 ### Pre-commit hook
 
 ```bash
-ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+pre-commit install
 ```
 
 ### Running tests and linting
