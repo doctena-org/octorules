@@ -236,15 +236,6 @@ def normalize_rule(rule: RuleDict) -> RuleDict:
         if k == "action_parameters" and isinstance(v, dict) and ap_excluded:
             v = {ak: av for ak, av in v.items() if ak not in ap_excluded}
         result[k] = _normalize_value(v, key=k)
-    # Apply provider default for `logging.enabled`. Cloudflare's PUT API
-    # stores `logging.enabled: true` when the field is absent from the
-    # request body, and returns the same on GET. To avoid spurious MODIFY
-    # diffs against hand-written YAML that omits the field, treat an
-    # absent `logging` block as equivalent to the API default. Explicit
-    # `logging.enabled: false` (the load-bearing case for quiet skip
-    # rules) is preserved as-is and still diffs against current state.
-    if "logging" not in result:
-        result["logging"] = {"enabled": True}
     return result
 
 
@@ -603,11 +594,11 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
     for ri, rule in enumerate(rules):
         rule_ctx = f"Rule at index {ri} in custom ruleset {label!r}"
         ref = _require_string_field(rule, "ref", rule_ctx)
-        _require_string_field(rule, "expression", f"Rule {ref!r} in custom ruleset {label!r}")
-        if "action" not in rule:
-            raise RuleValidationError(
-                f"Rule {ref!r} in custom ruleset {label!r} must specify an 'action'"
-            )
+        # Beyond ``ref``, required fields are declared by the provider that
+        # owns the phase — mirrors how phase-rule field requirements are
+        # provider-owned (enforced by prepare_rule hooks and linters).
+        for required in PHASE_BY_PROVIDER_ID[phase].rule_required_fields:
+            _require_string_field(rule, required, f"Rule {ref!r} in custom ruleset {label!r}")
         if ref in seen_refs:
             raise RuleValidationError(f"Duplicate ref {ref!r} in custom ruleset {label!r}")
         seen_refs.add(ref)
@@ -990,10 +981,9 @@ def _list_item_add_change(ref: str, item: RuleDict, phase: Phase) -> RuleChange:
     """Build an ADD change for a list item.
 
     Pre-seeds ``normalized_desired`` with :func:`normalize_list_item` rather
-    than letting the cached property fall back to :func:`normalize_rule`.
-    List items have no logging concept; ``normalize_rule`` would inject the
-    rule-only ``logging.enabled: true`` default and surface a spurious
-    ``+ logging`` block in plan output. MODIFY changes are already seeded
+    than letting the cached property fall back to :func:`normalize_rule`,
+    which strips the ``rule`` API-field category — list items must strip
+    the ``list_item`` category instead. MODIFY changes are already seeded
     this way; this keeps ADD/REMOVE consistent.
     """
     change = RuleChange(change_type=ChangeType.ADD, ref=ref, phase=phase, desired=item)

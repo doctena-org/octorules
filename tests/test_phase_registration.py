@@ -182,9 +182,12 @@ class TestRegisterApiFields:
         unregister_api_fields("rule")
         assert get_api_fields("rule") == frozenset()
 
-    def test_unknown_category_raises(self):
-        with pytest.raises(ValueError, match="Unknown API field category"):
-            register_api_fields("nonexistent", {"id"})
+    def test_register_auto_creates_category(self):
+        register_api_fields("custom_entity", {"id"})
+        try:
+            assert get_api_fields("custom_entity") == frozenset({"id"})
+        finally:
+            unregister_api_fields("custom_entity")
 
     def test_get_unknown_category_raises(self):
         with pytest.raises(ValueError, match="Unknown API field category"):

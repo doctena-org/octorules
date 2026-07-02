@@ -12,6 +12,7 @@ from octorules.commands._helpers import (
     _emit_plan_outputs,
     _filter_desired_by_phase,
     _format_api_error,
+    _future_result_or_default,
     _phase_filter_to_provider_ids,
 )
 from octorules.commands._providers import (
@@ -320,17 +321,9 @@ def _plan_account(
 
         # Plan custom rulesets
         if cr_future is not None:
-            try:
-                custom_rulesets_current = cr_future.result(timeout=_FUTURE_TIMEOUT)
-            except ProviderAuthError:
-                raise
-            except ProviderError as e:
-                log.warning(
-                    "Failed to fetch custom rulesets for account %s: %s",
-                    provider.account_name,
-                    _format_api_error(e),
-                )
-                custom_rulesets_current = {}
+            custom_rulesets_current = _future_result_or_default(
+                cr_future, "custom rulesets", provider, {}
+            )
 
             # Re-key by name for diff_custom_rulesets_full
             current_by_name = {
@@ -343,17 +336,7 @@ def _plan_account(
 
         # Plan lists
         if lists_future is not None:
-            try:
-                current_lists = lists_future.result(timeout=_FUTURE_TIMEOUT)
-            except ProviderAuthError:
-                raise
-            except ProviderError as e:
-                log.warning(
-                    "Failed to fetch lists for account %s: %s",
-                    provider.account_name,
-                    _format_api_error(e),
-                )
-                current_lists = {}
+            current_lists = _future_result_or_default(lists_future, "lists", provider, {})
 
             list_plans = diff_lists_full(lists_desired, current_lists)
             for lp in list_plans:

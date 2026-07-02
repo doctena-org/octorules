@@ -7,7 +7,6 @@ Public API:
 from octorules.provider.base import (
     SUPPORTS_CUSTOM_RULESETS,
     SUPPORTS_LISTS,
-    SUPPORTS_PAGE_SHIELD,
     SUPPORTS_ZONE_DISCOVERY,
     BaseProvider,
     PhaseRulesResult,
@@ -18,7 +17,6 @@ from octorules.provider.base import (
 __all__ = [
     "SUPPORTS_CUSTOM_RULESETS",
     "SUPPORTS_LISTS",
-    "SUPPORTS_PAGE_SHIELD",
     "SUPPORTS_ZONE_DISCOVERY",
     "BaseProvider",
     "PhaseRulesResult",

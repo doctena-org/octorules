@@ -23,6 +23,12 @@ def _test_prepare_rule(rule: dict, phase: Phase) -> dict:
 
     Mirrors what ``octorules_cloudflare._cf_prepare_rule`` does so core tests
     can exercise phase-dependent logic without requiring octorules-cloudflare.
+
+    Deliberately does NOT mirror the CF hook's ``logging.enabled: true``
+    default injection: that default is only symmetric because Cloudflare's
+    API echoes the field back on GET. Core test fixtures' *current* rules
+    don't do that, so injecting here would skew every desired-vs-current
+    fixture in the suite.
     """
     rule["expression"] = normalize_expression(rule["expression"])
     ap = rule.get("action_parameters")
@@ -88,7 +94,15 @@ _TEST_BARE_PHASE_SPECS: list[tuple] = [
 ]
 
 _TEST_PHASES: list[Phase] = [
-    Phase(name, pid, action, zone_level=zl, account_level=al, prepare_rule=_test_prepare_rule)
+    Phase(
+        name,
+        pid,
+        action,
+        zone_level=zl,
+        account_level=al,
+        prepare_rule=_test_prepare_rule,
+        rule_required_fields=("expression", "action"),
+    )
     for name, pid, action, zl, al in _TEST_PHASE_SPECS
 ] + [
     Phase(name, pid, action, zone_level=zl, account_level=al)

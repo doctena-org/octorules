@@ -27,6 +27,29 @@ _FEATURE_KEYS: dict[str, str] = {
 # Timeouts for future.result() calls when joining background fetches.
 _FUTURE_TIMEOUT = 120
 
+
+def _future_result_or_default(future, what: str, provider, default):
+    """Resolve a background-fetch *future*, downgrading provider errors.
+
+    ``ProviderAuthError`` always propagates — auth failures are permanent
+    and pressing on against the same credentials only multiplies noise.
+    Any other ``ProviderError`` logs a warning naming *what* failed and
+    returns *default* so planning/dumping continues without that data.
+    """
+    try:
+        return future.result(timeout=_FUTURE_TIMEOUT)
+    except ProviderAuthError:
+        raise
+    except ProviderError as e:
+        log.warning(
+            "Failed to fetch %s for account %s: %s",
+            what,
+            provider.account_name,
+            _format_api_error(e),
+        )
+        return default
+
+
 # Type alias for staged task lists.
 _TaskList = list[tuple[str, Callable[[], None]]]
 

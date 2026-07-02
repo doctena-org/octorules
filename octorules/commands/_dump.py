@@ -7,8 +7,8 @@ from pathlib import Path
 import octorules.commands._helpers as _helpers_mod
 import octorules.commands._providers as _providers_mod
 from octorules.commands._helpers import (
-    _FUTURE_TIMEOUT,
     _format_api_error,
+    _future_result_or_default,
     _phase_filter_to_provider_ids,
 )
 from octorules.commands._providers import _get_zone_provider
@@ -113,30 +113,14 @@ def cmd_dump(
             # Fetch custom rulesets
             custom_rulesets: dict[str, dict] | None = None
             if cr_future is not None:
-                try:
-                    custom_rulesets = cr_future.result(timeout=_FUTURE_TIMEOUT) or None
-                except ProviderAuthError:
-                    raise
-                except ProviderError as e:
-                    log.warning(
-                        "Failed to fetch custom rulesets for account %s: %s",
-                        provider.account_name,
-                        _format_api_error(e),
-                    )
+                custom_rulesets = (
+                    _future_result_or_default(cr_future, "custom rulesets", provider, None) or None
+                )
 
             # Fetch lists
             lists: dict[str, dict] | None = None
             if lists_future is not None:
-                try:
-                    lists = lists_future.result(timeout=_FUTURE_TIMEOUT) or None
-                except ProviderAuthError:
-                    raise
-                except ProviderError as e:
-                    log.warning(
-                        "Failed to fetch lists for account %s: %s",
-                        provider.account_name,
-                        _format_api_error(e),
-                    )
+                lists = _future_result_or_default(lists_future, "lists", provider, None) or None
 
             # Call extension dump hooks (e.g. Page Shield)
             ext_data = call_dump_extensions(scope, provider, out_dir)

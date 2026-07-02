@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] - 2026-07-02
+
+### Added
+- `Phase.rule_required_fields` — phases declare which rule fields
+  `custom_rulesets` validation requires (previously hardcoded
+  `expression`/`action`).
+- Shared provider-linter helpers in `octorules.linter.helpers`
+  (sweep-line CIDR containment, phase iteration, duplicate grouping).
+
+### Changed
+- `register_api_fields()` creates unknown categories instead of raising;
+  the Cloudflare-only `page_shield_policy` category is no longer
+  pre-declared.
+- Rule normalization no longer injects Cloudflare's
+  `logging: {enabled: true}` API default — the Cloudflare provider owns
+  it (octorules-cloudflare >= 0.12.1).
+
+### Removed
+- `SUPPORTS_PAGE_SHIELD` — moved to `octorules_cloudflare.page_shield`.
+  Cloudflare users: upgrade octorules-cloudflare to >= 0.12.1 before
+  upgrading core; older versions fail at import against this release.
+
 ## [0.29.2] - 2026-07-01
 
 ### Added

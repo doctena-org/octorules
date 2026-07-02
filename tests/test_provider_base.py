@@ -8,13 +8,17 @@ import pytest
 from octorules.provider.base import (
     SUPPORTS_CUSTOM_RULESETS,
     SUPPORTS_LISTS,
-    SUPPORTS_PAGE_SHIELD,
     SUPPORTS_ZONE_DISCOVERY,
     BaseProvider,
     PhaseRulesResult,
     Scope,
     provider_supports,
 )
+
+# Synthetic feature flag — provider_supports() is plain set membership, so
+# framework tests don't need a real feature constant (provider-specific ones,
+# like Cloudflare's page_shield, live in their provider packages).
+SUPPORTS_TEST_FEATURE = "test_feature"
 
 # Check provider availability without importing (avoids phase registration
 # collisions with conftest's test phases).
@@ -96,31 +100,31 @@ class TestExceptionHierarchy:
 class TestProviderSupports:
     def test_with_full_supports(self):
         prov = MagicMock()
-        prov.SUPPORTS = frozenset({SUPPORTS_CUSTOM_RULESETS, SUPPORTS_LISTS, SUPPORTS_PAGE_SHIELD})
+        prov.SUPPORTS = frozenset({SUPPORTS_CUSTOM_RULESETS, SUPPORTS_LISTS, SUPPORTS_TEST_FEATURE})
         assert provider_supports(prov, SUPPORTS_CUSTOM_RULESETS)
         assert provider_supports(prov, SUPPORTS_LISTS)
-        assert provider_supports(prov, SUPPORTS_PAGE_SHIELD)
+        assert provider_supports(prov, SUPPORTS_TEST_FEATURE)
 
     def test_with_partial_supports(self):
         prov = MagicMock()
         prov.SUPPORTS = frozenset({SUPPORTS_CUSTOM_RULESETS, SUPPORTS_LISTS})
         assert provider_supports(prov, SUPPORTS_CUSTOM_RULESETS)
         assert provider_supports(prov, SUPPORTS_LISTS)
-        assert not provider_supports(prov, SUPPORTS_PAGE_SHIELD)
+        assert not provider_supports(prov, SUPPORTS_TEST_FEATURE)
 
     def test_with_empty_supports(self):
         prov = MagicMock()
         prov.SUPPORTS = frozenset()
         assert not provider_supports(prov, SUPPORTS_CUSTOM_RULESETS)
         assert not provider_supports(prov, SUPPORTS_LISTS)
-        assert not provider_supports(prov, SUPPORTS_PAGE_SHIELD)
+        assert not provider_supports(prov, SUPPORTS_TEST_FEATURE)
 
     def test_without_supports_attribute(self):
         """Providers without SUPPORTS are assumed to support everything."""
         prov = MagicMock(spec=[])
         assert provider_supports(prov, SUPPORTS_CUSTOM_RULESETS)
         assert provider_supports(prov, SUPPORTS_LISTS)
-        assert provider_supports(prov, SUPPORTS_PAGE_SHIELD)
+        assert provider_supports(prov, SUPPORTS_TEST_FEATURE)
 
     def test_constants_importable_from_provider(self):
         from octorules.provider import (
@@ -130,15 +134,11 @@ class TestProviderSupports:
             SUPPORTS_LISTS as L,
         )
         from octorules.provider import (
-            SUPPORTS_PAGE_SHIELD as P,
-        )
-        from octorules.provider import (
             provider_supports as ps,
         )
 
         assert C == "custom_rulesets"
         assert L == "lists"
-        assert P == "page_shield"
         assert ps is provider_supports
 
 

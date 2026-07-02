@@ -659,7 +659,7 @@ A provider is a Python package that:
 
 1. **Implements `BaseProvider`** — the `@runtime_checkable` Protocol in `octorules.provider.base` defining 19 methods + 4 properties.
 2. **Declares `SUPPORTS`** — a `frozenset[str]` of optional features (`custom_rulesets`, `lists`, `page_shield`, `zone_discovery`).
-3. **Registers phases** — calls `register_phases()` at import time with the provider's phase definitions. Each `Phase` can include a `prepare_rule` callable for provider-specific rule preparation (expression normalization, default fields, action injection). The core planner calls this hook — it contains no provider-specific logic itself.
+3. **Registers phases** — calls `register_phases()` at import time with the provider's phase definitions. Each `Phase` can include a `prepare_rule` callable for provider-specific rule preparation (expression normalization, default fields, action injection) and a `rule_required_fields` tuple declaring which fields rules inside `custom_rulesets` entries must set. The core planner calls these — it contains no provider-specific logic itself.
 4. **Registers a linter plugin** — optional; provides provider-specific lint rules. Linters should only check their own phases (not phases owned by other providers).
 5. **Declares an entry point** — in `pyproject.toml`:
 
@@ -680,7 +680,7 @@ Unsupported optional methods must still exist to satisfy the Protocol. The conve
 - **`normalize_fields()` / `denormalize_fields()`** — bidirectional field name mapping between YAML and provider API formats.
 - **`validate_path_within()`** (`octorules.pathutil`) — path traversal protection for file operations.
 - **`make_error_wrapper()`** — decorator factory for mapping provider SDK exceptions to `ProviderError`/`ProviderAuthError`.
-- **Linter helpers** (`octorules.linter.helpers`) — `CATCH_ALL_CIDRS` plus `find_duplicate_priorities()` and `find_first_priority_gap()` for the duplicate-priority / non-contiguous-priority lint checks providers mirror by convention.
+- **Linter helpers** (`octorules.linter.helpers`) — shared logic for the lint checks providers mirror by convention: `lint_result()`, `iter_provider_phases()`, `find_overlapping_cidrs()` (sweep-line CIDR containment), `normalize_host_bits()`, `find_duplicates_by_key()`, `count_phase_rules()`, `is_strict_int()`, `find_duplicate_priorities()`, `find_first_priority_gap()`, and `CATCH_ALL_CIDRS`.
 
 Extension hooks (plan, apply, format, validate, dump, audit) registered via `octorules.extensions` are validated at registration time — the framework checks the callable's signature against the expected parameters and raises `TypeError` immediately if they don't match, so provider authors get clear errors during development rather than at runtime.
 

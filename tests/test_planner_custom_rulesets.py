@@ -240,7 +240,7 @@ class TestValidateCustomRuleset:
             "phase": "http_request_firewall_custom",
             "rules": [{"ref": "r1", "expression": "true"}],
         }
-        with pytest.raises(RuleValidationError, match="must specify an 'action'"):
+        with pytest.raises(RuleValidationError, match="missing required 'action'"):
             validate_custom_ruleset(entry, 0)
 
     def test_duplicate_ref(self):

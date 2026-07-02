@@ -610,15 +610,9 @@ class TestFormatPlanHtml:
         result = format_plan_html([zp])
         # Whole rule rendered as one YAML doc inside <pre> with a '+'
         # prefix on every line (matches the diff-block convention used
-        # for MODIFY rows). The planner injects logging.enabled: true as
-        # the default; YAML quotes the string "true" to disambiguate
+        # for MODIFY rows). YAML quotes the string "true" to disambiguate
         # from boolean.
-        expected = (
-            "<td><pre>+ action: redirect\n"
-            "+ expression: &#x27;true&#x27;\n"
-            "+ logging:\n"
-            "+   enabled: true</pre></td>"
-        )
+        expected = "<td><pre>+ action: redirect\n+ expression: &#x27;true&#x27;</pre></td>"
         assert expected in result
         # No colspan=2 continuation rows for Create.
         create_section = result[result.index("Create") : result.index("Summary")]
@@ -640,12 +634,7 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "Delete" in result
-        expected = (
-            "<td><pre>- action: redirect\n"
-            "- expression: &#x27;true&#x27;\n"
-            "- logging:\n"
-            "-   enabled: true</pre></td>"
-        )
+        expected = "<td><pre>- action: redirect\n- expression: &#x27;true&#x27;</pre></td>"
         assert expected in result
 
     def test_xss_safety(self):

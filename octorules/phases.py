@@ -29,6 +29,11 @@ class Phase:
     # and must return the prepared dict.  Providers register this to handle
     # expression normalization, default fields, action injection, etc.
     prepare_rule: Callable[[dict, "Phase"], dict] | None = field(default=None, repr=False)
+    # Rule fields (beyond ``ref``) that must be present on rules inside
+    # ``custom_rulesets`` entries targeting this phase.  Declared by the
+    # provider that owns the phase; ``validate_custom_ruleset()`` enforces
+    # them at plan time.  Empty means only ``ref`` is required.
+    rule_required_fields: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -204,20 +209,21 @@ _api_fields: dict[str, set[str]] = {
     "rule": set(),
     "action_parameters": set(),
     "list_item": set(),
-    "page_shield_policy": set(),
 }
 
 
 def register_api_fields(category: str, fields: set[str]) -> None:
     """Register provider API fields to strip for *category*.
 
-    Categories: ``"rule"``, ``"action_parameters"``, ``"list_item"``,
-    ``"page_shield_policy"``.
+    Core pre-declares ``"rule"``, ``"action_parameters"``, and
+    ``"list_item"``.  Providers may register additional categories for
+    their own entity kinds — an unknown *category* is created on first
+    registration.  Reads (:func:`get_api_fields`, :func:`strip_api_fields`)
+    stay strict and raise on categories that were never registered, so a
+    misspelled category here surfaces at the provider's own read site.
     """
     with _REGISTRY_LOCK:
-        if category not in _api_fields:
-            raise ValueError(f"Unknown API field category {category!r}")
-        _api_fields[category].update(fields)
+        _api_fields.setdefault(category, set()).update(fields)
 
 
 def unregister_api_fields(category: str) -> None:

@@ -12,6 +12,7 @@ import ipaddress
 import json as _json
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -198,32 +199,28 @@ class AuditFinding:
 # ---------------------------------------------------------------------------
 # CDN range fetching
 # ---------------------------------------------------------------------------
-def _fetch_json(url: str, timeout: int = 15) -> Any:
-    """Fetch JSON from a URL. Returns parsed data or None on failure."""
+def _fetch_url(url: str, timeout: int, parse: Callable[[bytes], Any]) -> Any:
+    """Fetch *url* and run *parse* on the body. Returns None on failure."""
     req = Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
                 log.warning("HTTP %d from %s", resp.status, url)
                 return None
-            return _json.loads(resp.read())
+            return parse(resp.read())
     except (_json.JSONDecodeError, OSError, TimeoutError) as e:
         log.warning("Failed to fetch %s: %s", url, e)
         return None
 
 
+def _fetch_json(url: str, timeout: int = 15) -> Any:
+    """Fetch JSON from a URL. Returns parsed data or None on failure."""
+    return _fetch_url(url, timeout, _json.loads)
+
+
 def _fetch_text(url: str, timeout: int = 15) -> str | None:
     """Fetch plain text from a URL. Returns decoded body or None on failure."""
-    req = Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urlopen(req, timeout=timeout) as resp:
-            if resp.status != 200:
-                log.warning("HTTP %d from %s", resp.status, url)
-                return None
-            return resp.read().decode("utf-8", errors="replace")
-    except (OSError, TimeoutError) as e:
-        log.warning("Failed to fetch %s: %s", url, e)
-        return None
+    return _fetch_url(url, timeout, lambda body: body.decode("utf-8", errors="replace"))
 
 
 @dataclass

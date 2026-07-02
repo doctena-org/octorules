@@ -62,21 +62,15 @@ class TestNormalizeRule:
         assert normalized["action"] == "redirect"
 
     def test_preserves_user_fields(self):
-        # Note: normalize_rule injects the CF API default
-        # ``logging.enabled: true`` when the field is absent, so the
-        # output is a superset of the input rather than identical.
         rule = {"expression": "true", "action": "redirect", "enabled": True}
         normalized = normalize_rule(rule)
-        assert normalized["expression"] == "true"
-        assert normalized["action"] == "redirect"
-        assert normalized["enabled"] is True
-        assert normalized["logging"] == {"enabled": True}
+        assert normalized == rule
 
-    def test_empty_rule(self):
-        # The injected ``logging`` default applies even to empty input —
-        # there's no provider context here to gate it on, and the symmetry
-        # (both sides of a diff get it) keeps it harmless.
-        assert normalize_rule({}) == {"logging": {"enabled": True}}
+    def test_no_field_injection(self):
+        # normalize_rule must not invent fields — provider API defaults
+        # (e.g. Cloudflare's ``logging.enabled: true``) are the provider
+        # prepare_rule hook's job, not core normalization's.
+        assert normalize_rule({}) == {}
 
 
 class TestValidateRules:
@@ -480,19 +474,19 @@ class TestDiffPhase:
         assert plan.has_changes
         assert {c.change_type for c in plan.changes} == {ChangeType.MODIFY}
 
-    def test_logging_absent_matches_default_true(self):
-        # YAML that omits the ``logging`` block must compare equal to a
-        # CF-returned rule with ``logging.enabled: true`` — that's the
-        # API default and omission is shorthand for it. Otherwise every
-        # hand-written rule would generate a spurious MODIFY on first
-        # plan against current state.
+    def test_logging_absent_diffs_against_explicit_true(self):
+        # Core is provider-agnostic about ``logging`` — an absent block is
+        # NOT shorthand for ``enabled: true`` at this layer. The Cloudflare
+        # provider's prepare_rule hook injects the API default, so real CF
+        # plans stay diff-clean; the core test prepare hook deliberately
+        # does not mirror that injection (see conftest).
         desired = [
             {
                 "ref": "r1",
                 "expression": "true",
                 "action": "redirect",
                 "enabled": True,
-                # no logging block — shorthand for default-true
+                # no logging block
             }
         ]
         current = [
@@ -505,7 +499,7 @@ class TestDiffPhase:
             }
         ]
         plan = diff_phase(REDIRECT_PHASE, desired, current)
-        assert not plan.has_changes
+        assert {c.change_type for c in plan.changes} == {ChangeType.MODIFY}
 
     def test_logging_absent_diffs_against_false(self):
         # Symmetry: YAML omitting ``logging`` (= default true) MUST diff
@@ -1750,8 +1744,18 @@ class TestValidateCustomRuleset:
 
     def test_missing_rule_action(self):
         entry = self._valid_entry(rules=[{"ref": "r1", "expression": "true"}])
-        with pytest.raises(RuleValidationError, match="must specify an 'action'"):
+        with pytest.raises(RuleValidationError, match="missing required 'action'"):
             validate_custom_ruleset(entry, 0)
+
+    def test_missing_rule_expression(self):
+        entry = self._valid_entry(rules=[{"ref": "r1", "action": "block"}])
+        with pytest.raises(RuleValidationError, match="missing required 'expression'"):
+            validate_custom_ruleset(entry, 0)
+
+    def test_phase_without_declared_fields_requires_only_ref(self):
+        """Phases that declare no rule_required_fields accept ref-only rules."""
+        entry = self._valid_entry(phase="bare_custom", rules=[{"ref": "r1"}])
+        validate_custom_ruleset(entry, 0)  # Should not raise
 
     def test_duplicate_ref(self):
         entry = self._valid_entry(

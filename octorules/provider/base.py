@@ -4,21 +4,12 @@ from dataclasses import dataclass, field
 from typing import ClassVar, Protocol, runtime_checkable
 
 # Feature negotiation constants — providers declare which optional features
-# they support via a ``SUPPORTS`` class variable.
+# they support via a ``SUPPORTS`` class variable. Only multi-provider
+# features live here; provider-specific constants belong to their provider
+# package (e.g. octorules-cloudflare's SUPPORTS_PAGE_SHIELD).
 SUPPORTS_CUSTOM_RULESETS = "custom_rulesets"
 SUPPORTS_LISTS = "lists"
-# TODO(v1.0.0): Move SUPPORTS_PAGE_SHIELD to octorules_cloudflare. Page Shield
-# is CF-only — its implementation moved to octorules_cloudflare/page_shield.py
-# in v0.17.0, but this feature constant stayed behind for backward compat.
-# Multi-provider features (CUSTOM_RULESETS, LISTS) belong in core; CF-only
-# constants don't. Cleanup also drops the import from page_shield.py:32 and
-# the corresponding test cases in tests/test_provider_base.py.
-SUPPORTS_PAGE_SHIELD = "page_shield"
 SUPPORTS_ZONE_DISCOVERY = "zone_discovery"
-
-_SUPPORTS_ALL = frozenset(
-    {SUPPORTS_CUSTOM_RULESETS, SUPPORTS_LISTS, SUPPORTS_PAGE_SHIELD, SUPPORTS_ZONE_DISCOVERY}
-)
 
 
 def provider_supports(provider: "BaseProvider", feature: str) -> bool:
