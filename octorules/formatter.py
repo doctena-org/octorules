@@ -259,7 +259,7 @@ def _total_changes(zone_plans: list[ZonePlan]) -> int:
     return sum(zp.total_changes for zp in zone_plans)
 
 
-def _change_to_dict(c: RuleChange) -> dict:
+def change_to_dict(c: RuleChange) -> dict:
     """Convert a RuleChange to a JSON-serializable dict."""
     d: dict = {"type": c.change_type.value, "ref": c.ref}
     if (v := c.normalized_current) is not None:
@@ -267,6 +267,10 @@ def _change_to_dict(c: RuleChange) -> dict:
     if (v := c.normalized_desired) is not None:
         d["desired"] = v
     return d
+
+
+# Deprecated alias for the public name above.
+_change_to_dict = change_to_dict
 
 
 def format_plan_json(zone_plans: list[ZonePlan]) -> str:
@@ -285,7 +289,7 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
                 {
                     "phase": pp.phase.friendly_name,
                     "provider_id": pp.phase.provider_id,
-                    "changes": [_change_to_dict(c) for c in pp.changes],
+                    "changes": [change_to_dict(c) for c in pp.changes],
                 }
             )
         cr_plans = []
@@ -297,12 +301,12 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
                     "phase": crp.phase,
                     "create": crp.create,
                     "delete": crp.delete,
-                    "changes": [_change_to_dict(c) for c in crp.changes],
+                    "changes": [change_to_dict(c) for c in crp.changes],
                 }
             )
         lp_plans = []
         for lp in zp.list_plans:
-            lp_changes = [_change_to_dict(c) for c in lp.changes]
+            lp_changes = [change_to_dict(c) for c in lp.changes]
             lp_entry: dict = {
                 "list_name": lp.list_name,
                 "list_kind": lp.list_kind,
@@ -338,12 +342,16 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
     return json.dumps(result, indent=2)
 
 
-def _md_escape(text: str) -> str:
+def md_escape(text: str) -> str:
     """Escape pipe characters for markdown tables."""
     return str(text).replace("|", "\\|")
 
 
-def _md_change_row(
+# Deprecated alias for the public name above.
+_md_escape = md_escape
+
+
+def md_change_row(
     c: RuleChange,
     phase_label: str,
     pending_diffs: list[list[tuple[str, object, object]]],
@@ -352,8 +360,8 @@ def _md_change_row(
 ) -> str:
     """Build a single markdown table row for a RuleChange."""
     op = _change_symbol(c.change_type)
-    ref = _md_escape(c.ref)
-    escaped_phase = _md_escape(phase_label)
+    ref = md_escape(c.ref)
+    escaped_phase = md_escape(phase_label)
     if c.change_type == ChangeType.MODIFY and c.current and c.desired:
         field_diffs = _compute_field_diffs(c)
         if field_diffs:
@@ -368,10 +376,14 @@ def _md_change_row(
         pairs = _rule_detail_pairs(rule)
         if pairs:
             parts = [f"`{key}`: {_md_format_value(val)}" for key, val in pairs]
-            details = _md_escape("; ".join(parts))
+            details = md_escape("; ".join(parts))
         else:
             details = ""
     return f"| {op} | {escaped_phase} | {ref} | {details} |"
+
+
+# Deprecated alias for the public name above.
+_md_change_row = md_change_row
 
 
 def _md_diff_value(key: str, val: object, prefix: str) -> list[str]:
@@ -418,7 +430,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
         pending_diffs: list[list[tuple[str, object, object]]] = []
         for pp in zp.phase_plans:
             for c in pp.changes:
-                lines.append(_md_change_row(c, pp.phase.friendly_name, pending_diffs))
+                lines.append(md_change_row(c, pp.phase.friendly_name, pending_diffs))
         for crp in zp.custom_ruleset_plans:
             phase_label = f"custom_ruleset:{crp.ruleset_name}"
             if crp.create:
@@ -426,7 +438,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
             if crp.delete:
                 lines.append(f"| - | {phase_label} | | delete rule group |")
             for c in crp.changes:
-                lines.append(_md_change_row(c, phase_label, pending_diffs))
+                lines.append(md_change_row(c, phase_label, pending_diffs))
         for lp in zp.list_plans:
             phase_label = f"list:{lp.list_name}"
             if lp.create:
@@ -434,7 +446,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 # emitting a separate `~ description` diff with a `- None`
                 # old value (the list does not exist yet).
                 if lp.description_change is not None:
-                    new_desc = _md_escape(str(lp.description_change[1]))
+                    new_desc = md_escape(str(lp.description_change[1]))
                     lines.append(f"| + | {phase_label} | | create list — description: {new_desc} |")
                 else:
                     lines.append(f"| + | {phase_label} | | create list |")
@@ -445,7 +457,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 lines.append(f"| ~ | {phase_label} | | `description` |")
                 pending_diffs.append([("description", old_desc, new_desc)])
             for c in lp.changes:
-                lines.append(_md_change_row(c, phase_label, pending_diffs, has_reorder=False))
+                lines.append(md_change_row(c, phase_label, pending_diffs, has_reorder=False))
         for ext_name, fmt in get_format_extensions().items():
             ext_plans = zp.extension_plans.get(ext_name, [])
             if ext_plans:
@@ -595,7 +607,7 @@ def _md_format_value(val: object) -> str:
     return text[1:-1]
 
 
-def _html_render_changes(
+def html_render_changes(
     changes: list[RuleChange],
     lines: list[str],
 ) -> tuple[int, int, int, int]:
@@ -664,7 +676,11 @@ def _html_render_changes(
     return creates, removes, modifies, reorders
 
 
-def _html_summary_row(creates: int, removes: int, modifies: int, reorders: int) -> list[str]:
+# Deprecated alias for the public name above.
+_html_render_changes = html_render_changes
+
+
+def html_summary_row(creates: int, removes: int, modifies: int, reorders: int) -> list[str]:
     """Build the summary <tr> lines for an HTML table."""
     parts = []
     if creates:
@@ -683,7 +699,11 @@ def _html_summary_row(creates: int, removes: int, modifies: int, reorders: int) 
     ]
 
 
-_HTML_TABLE_HEADER = [
+# Deprecated alias for the public name above.
+_html_summary_row = html_summary_row
+
+
+HTML_TABLE_HEADER = [
     "<table>",
     "  <tr>",
     "    <th>Operation</th>",
@@ -691,6 +711,9 @@ _HTML_TABLE_HEADER = [
     "    <th>Details</th>",
     "  </tr>",
 ]
+
+# Deprecated alias for the public name above.
+_HTML_TABLE_HEADER = HTML_TABLE_HEADER
 
 
 def format_plan_html(zone_plans: list[ZonePlan]) -> str:
@@ -712,14 +735,14 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
 
         for pp in zp.phase_plans:
             lines.append(f"<h3>{e(pp.phase.friendly_name)}</h3>")
-            lines.extend(_HTML_TABLE_HEADER)
-            creates, removes, modifies, reorders = _html_render_changes(pp.changes, lines)
-            lines.extend(_html_summary_row(creates, removes, modifies, reorders))
+            lines.extend(HTML_TABLE_HEADER)
+            creates, removes, modifies, reorders = html_render_changes(pp.changes, lines)
+            lines.extend(html_summary_row(creates, removes, modifies, reorders))
             lines.append("</table>")
 
         for crp in zp.custom_ruleset_plans:
             lines.append(f"<h3>custom_ruleset: {e(crp.ruleset_name)}</h3>")
-            lines.extend(_HTML_TABLE_HEADER)
+            lines.extend(HTML_TABLE_HEADER)
 
             crp_creates = crp_removes = 0
 
@@ -738,15 +761,15 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append("    <td>delete rule group</td>")
                 lines.append("  </tr>")
 
-            c_creates, c_removes, c_modifies, c_reorders = _html_render_changes(crp.changes, lines)
+            c_creates, c_removes, c_modifies, c_reorders = html_render_changes(crp.changes, lines)
             crp_creates += c_creates
             crp_removes += c_removes
-            lines.extend(_html_summary_row(crp_creates, crp_removes, c_modifies, c_reorders))
+            lines.extend(html_summary_row(crp_creates, crp_removes, c_modifies, c_reorders))
             lines.append("</table>")
 
         for lp in zp.list_plans:
             lines.append(f"<h3>list: {e(lp.list_name)} ({e(lp.list_kind)})</h3>")
-            lines.extend(_HTML_TABLE_HEADER)
+            lines.extend(HTML_TABLE_HEADER)
 
             lp_creates = lp_removes = lp_modifies = 0
 
@@ -785,11 +808,11 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
                 lines.append(f"    <td>+&ensp;description: {e(str(new_desc))}</td>")
                 lines.append("  </tr>")
 
-            c_creates, c_removes, c_modifies, _ = _html_render_changes(lp.changes, lines)
+            c_creates, c_removes, c_modifies, _ = html_render_changes(lp.changes, lines)
             lp_creates += c_creates
             lp_removes += c_removes
             lp_modifies += c_modifies
-            lines.extend(_html_summary_row(lp_creates, lp_removes, lp_modifies, 0))
+            lines.extend(html_summary_row(lp_creates, lp_removes, lp_modifies, 0))
             lines.append("</table>")
 
         for ext_name, fmt in get_format_extensions().items():

@@ -68,7 +68,12 @@ To manage rules across multiple providers, add each provider as a named section 
 
 #### Multi-target zones
 
-A zone can target multiple providers of the **same class** (e.g. two Cloudflare accounts, or prod + staging). List multiple names under `targets:` — octorules plans and applies independently for each. Requires explicit `class:` since auto-discovery can't distinguish two instances of the same provider. See [`examples/config.yaml`](examples/config.yaml) for a commented example.
+A zone can target multiple providers. List multiple names under `targets:` — octorules plans and applies independently for each. Two modes:
+
+- **Same class** (e.g. two Cloudflare accounts, or prod + staging): the same rules go to every target, with per-rule `octorules: {included/excluded}` steering. Requires explicit `class:` since auto-discovery can't distinguish two instances of the same provider.
+- **Different classes** (e.g. `targets: [cloudflare, aws]` — an edge WAF and an origin WAF for the same domain): the zone file carries one namespace block per provider, and each target plans, syncs, and resolves its own zone identity from its own sections. Every bundled provider supports this; a custom provider class must declare a zone-file `NAMESPACE`. Use `zone_names:` when a provider names the underlying resource differently (see [Defining rules](#defining-rules)).
+
+See [`examples/config.yaml`](examples/config.yaml) for a commented example.
 
 #### Provider auto-discovery
 
@@ -112,6 +117,28 @@ Create a rules file for each zone. The filename must match the zone name used as
 The mapping is: `zones.<name>` in `config.yaml` → `<rules-dir>/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID. `<rules-dir>` defaults to `./rules/` and is set under `providers.rules.directory` — point it wherever each customer's rules live (the [`examples/`](examples/) directory here ships `rules/multi/` for the multi-provider `config.yaml`; each provider package ships its own single-provider example under its `examples/` directory).
 
 Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`. Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation and that provider package's own `examples/` directory for complete per-provider examples.
+
+All of a provider's sections nest under one namespace block — the format `dump` emits and the examples use:
+
+```yaml
+cloudflare:
+  waf_custom_rules:
+    - ref: block-bad-ips
+      expression: ip.src in {203.0.113.7}
+      action: block
+  bot_management:
+    enable_js: false
+```
+
+The flat spelling (provider sections as top-level keys) still loads but is deprecated. A zone may target providers of **different classes** (`targets: [cloudflare, aws]`) — its file then carries one namespace block per provider, and each target plans, syncs, and resolves its own zone identity independently (layered WAF stacks: e.g. an edge WAF and an origin WAF for the same domain). When the providers name the underlying resource differently, map it per target with `zone_names`:
+
+```yaml
+zones:
+  example.com:
+    targets: [cloudflare, aws]
+    zone_names:
+      aws: example-com-alb   # the Web ACL guarding the same domain
+```
 
 octorules lints each rule file only against the plugin matching its zone's target provider. With per-provider lint plugins installed in the same venv (e.g. both `octorules-cloudflare` and `octorules-aws`), a Cloudflare zone file never gets validated against the AWS schema and vice versa — eliminating cross-provider false positives on same-named blocks (`custom_rulesets`, `lists`).
 
@@ -496,7 +523,7 @@ octorules versions
 |------|-------------|
 | `--config PATH` | Path to config file (default: `config.yaml`) |
 | `--zone NAME` | Process only specified zone(s); can be repeated (default: all) |
-| `--phase NAME` | Limit to specific phase(s); can be repeated |
+| `--phase NAME` | Limit to specific phase(s); can be repeated. Accepts flat names and the dotted namespace form (`aws.waf_custom_rules`) |
 | `--scope SCOPE` | Scope: `all` (default), `zones`, or `account` |
 | `--debug` | Enable debug logging |
 | `--quiet` | Suppress all informational stdout output (plan tables, lint results, audit findings). Only errors and the exit code are reported. File output (`--output`) is unaffected |
@@ -585,6 +612,8 @@ zones:
       - my_proc
     allow_unmanaged: false           # Keep rules not in YAML (default: false)
     always_dry_run: true             # Never apply changes (default: false)
+    zone_names:                      # Per-target provider-resource name
+      my_provider: some-resource     # (defaults to the zone name)
     safety:                          # Per-zone overrides
       delete_threshold: 50.0
 
@@ -687,6 +716,8 @@ Unsupported optional methods must still exist to satisfy the Protocol. The conve
 - **Linter helpers** (`octorules.linter.helpers`) — shared logic for the lint checks providers mirror by convention: `lint_result()`, `iter_provider_phases()`, `find_overlapping_cidrs()` (sweep-line CIDR containment), `normalize_host_bits()`, `find_duplicates_by_key()`, `count_phase_rules()`, `is_strict_int()`, `find_duplicate_priorities()`, `find_first_priority_gap()`, and `CATCH_ALL_CIDRS`.
 
 Extension hooks (plan, apply, format, validate, dump, audit) registered via `octorules.extensions` are validated at registration time — the framework checks the callable's signature against the expected parameters and raises `TypeError` immediately if they don't match, so provider authors get clear errors during development rather than at runtime.
+
+Settings-style extensions — provider sections that diff a flat `{field: value}` dict of desired YAML settings against live zone configuration — can build on the shared data model and plan-output formatter in `octorules.extensions`: `SettingsChange`, `SettingsPlan`, and `SettingsFormatter` (text, JSON, markdown, HTML, and report output). All bundled providers' settings sections use it. `make_synthetic_phase()` supports extensions that plan non-standard rulesets.
 
 ## CI/CD integration
 

@@ -3,131 +3,135 @@
 # Cloud Armor uses CEL expressions and priority-based rule ordering.
 # The "ref" field maps to the rule priority (as a string).
 #
-# Phases: gcloud_armor_custom_rules, gcloud_armor_rate_rules,
-#         gcloud_armor_preconfigured_rules, gcloud_armor_redirect_rules
+# Nested under "google:" block with phase names stripped of gcloud_armor_ prefix:
+#   custom_rules (from gcloud_armor_custom_rules)
+#   rate_rules (from gcloud_armor_rate_rules)
+#   preconfigured_rules (from gcloud_armor_preconfigured_rules)
+#   redirect_rules (from gcloud_armor_redirect_rules)
 #
 # Expression syntax: CEL — see
 # https://cloud.google.com/armor/docs/rules-language-reference
 
-# ---------------------------------------------------------------------------
-# Custom Rules — IP-based and header-based matching
-# ---------------------------------------------------------------------------
-gcloud_armor_custom_rules:
-  - ref: "100"
-    description: "Block known bad IP ranges"
-    action: "deny(403)"
-    match:
-      config:
-        src_ip_ranges:
-          - 198.51.100.0/24
-          - 203.0.113.0/24
-      versioned_expr: SRC_IPS_V1
+google:
+  # ---------------------------------------------------------------------------
+  # Custom Rules — IP-based and header-based matching
+  # ---------------------------------------------------------------------------
+  custom_rules:
+    - ref: "100"
+      description: "Block known bad IP ranges"
+      action: "deny(403)"
+      match:
+        config:
+          src_ip_ranges:
+            - 198.51.100.0/24
+            - 203.0.113.0/24
+        versioned_expr: SRC_IPS_V1
 
-  - ref: "200"
-    description: "Block by country"
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "origin.region_code == 'KP' || origin.region_code == 'IR'"
+    - ref: "200"
+      description: "Block by country"
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "origin.region_code == 'KP' || origin.region_code == 'IR'"
 
-  - ref: "300"
-    description: "Allow internal health checks"
-    action: allow
-    match:
-      config:
-        src_ip_ranges:
-          - 35.191.0.0/16
-          - 130.211.0.0/22
-      versioned_expr: SRC_IPS_V1
+    - ref: "300"
+      description: "Allow internal health checks"
+      action: allow
+      match:
+        config:
+          src_ip_ranges:
+            - 35.191.0.0/16
+            - 130.211.0.0/22
+        versioned_expr: SRC_IPS_V1
 
-  - ref: "400"
-    description: "Block large request bodies"
-    # Cloud Armor accepts deny(403), deny(404), deny(429), deny(502).
-    # 413 (Payload Too Large) is not in the allowed set — use 403.
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "int(request.headers['content-length']) > 10000"
+    - ref: "400"
+      description: "Block large request bodies"
+      # Cloud Armor accepts deny(403), deny(404), deny(429), deny(502).
+      # 413 (Payload Too Large) is not in the allowed set — use 403.
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "int(request.headers['content-length']) > 10000"
 
-  - ref: "500"
-    description: "Block requests without User-Agent"
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "!has(request.headers['user-agent'])"
+    - ref: "500"
+      description: "Block requests without User-Agent"
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "!has(request.headers['user-agent'])"
 
-# ---------------------------------------------------------------------------
-# Rate-Limiting Rules — throttle or ban by rate
-# ---------------------------------------------------------------------------
-gcloud_armor_rate_rules:
-  - ref: "1000"
-    description: "Rate limit API endpoints to 100 req/min per IP"
-    action: throttle
-    match:
-      expr:
-        expression: "request.path.startsWith('/api/')"
-    rate_limit_options:
-      conform_action: allow
-      exceed_action: deny-429
-      rate_limit_threshold:
-        count: 100
-        interval_sec: 60
+  # ---------------------------------------------------------------------------
+  # Rate-Limiting Rules — throttle or ban by rate
+  # ---------------------------------------------------------------------------
+  rate_rules:
+    - ref: "1000"
+      description: "Rate limit API endpoints to 100 req/min per IP"
+      action: throttle
+      match:
+        expr:
+          expression: "request.path.startsWith('/api/')"
+      rate_limit_options:
+        conform_action: allow
+        exceed_action: deny-429
+        rate_limit_threshold:
+          count: 100
+          interval_sec: 60
 
-  - ref: "1100"
-    description: "Ban IPs exceeding 1000 req/min globally"
-    action: rate_based_ban
-    match:
-      expr:
-        expression: "true"
-    rate_limit_options:
-      conform_action: allow
-      exceed_action: deny-429
-      ban_duration_sec: 600
-      rate_limit_threshold:
-        count: 1000
-        interval_sec: 60
+    - ref: "1100"
+      description: "Ban IPs exceeding 1000 req/min globally"
+      action: rate_based_ban
+      match:
+        expr:
+          expression: "true"
+      rate_limit_options:
+        conform_action: allow
+        exceed_action: deny-429
+        ban_duration_sec: 600
+        rate_limit_threshold:
+          count: 1000
+          interval_sec: 60
 
-# ---------------------------------------------------------------------------
-# Preconfigured WAF Rules — OWASP and Google managed rules
-# ---------------------------------------------------------------------------
-gcloud_armor_preconfigured_rules:
-  - ref: "2000"
-    description: "Block SQL injection"
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
+  # ---------------------------------------------------------------------------
+  # Preconfigured WAF Rules — OWASP and Google managed rules
+  # ---------------------------------------------------------------------------
+  preconfigured_rules:
+    - ref: "2000"
+      description: "Block SQL injection"
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('sqli-v33-stable', {'sensitivity': 1})"
 
-  - ref: "2100"
-    description: "Block cross-site scripting"
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})"
+    - ref: "2100"
+      description: "Block cross-site scripting"
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('xss-v33-stable', {'sensitivity': 1})"
 
-  - ref: "2200"
-    description: "Log remote code execution attempts"
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 2})"
+    - ref: "2200"
+      description: "Log remote code execution attempts"
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('rce-v33-stable', {'sensitivity': 2})"
 
-  - ref: "2300"
-    description: "Block local file inclusion"
-    action: "deny(403)"
-    match:
-      expr:
-        expression: "evaluatePreconfiguredWaf('lfi-v33-stable', {'sensitivity': 1})"
+    - ref: "2300"
+      description: "Block local file inclusion"
+      action: "deny(403)"
+      match:
+        expr:
+          expression: "evaluatePreconfiguredWaf('lfi-v33-stable', {'sensitivity': 1})"
 
-# ---------------------------------------------------------------------------
-# Redirect Rules — reCAPTCHA Enterprise integration
-# ---------------------------------------------------------------------------
-gcloud_armor_redirect_rules:
-  - ref: "3000"
-    description: "reCAPTCHA challenge for suspicious traffic"
-    action: redirect
-    match:
-      expr:
-        expression: "origin.region_code == 'CN'"
-    redirect_options:
-      type: GOOGLE_RECAPTCHA
+  # ---------------------------------------------------------------------------
+  # Redirect Rules — reCAPTCHA Enterprise integration
+  # ---------------------------------------------------------------------------
+  redirect_rules:
+    - ref: "3000"
+      description: "reCAPTCHA challenge for suspicious traffic"
+      action: redirect
+      match:
+        expr:
+          expression: "origin.region_code == 'CN'"
+      redirect_options:
+        type: GOOGLE_RECAPTCHA

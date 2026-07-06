@@ -109,20 +109,29 @@ def _init_processors(config: Config) -> dict[str, BaseProcessor]:
 
 
 def _validate_multi_target(config: Config, providers: dict[str, BaseProvider]) -> None:
-    """Validate that multi-target zones use the same provider class.
+    """Validate multi-target zones.
 
-    Raises ConfigError if a zone has targets pointing to providers of
-    different classes.
+    Same-class multi-target (the same rules to several accounts) is
+    always allowed.  Targets spanning *different* provider classes are
+    allowed when every targeted class declares a zone-file ``NAMESPACE``
+    — each provider then plans only its own namespace's sections from
+    the shared zone file.  Raises ConfigError otherwise.
     """
     for zone_name, zone_cfg in config.zones.items():
         if len(zone_cfg.targets) <= 1:
             continue
         classes = {type(providers[t]) for t in zone_cfg.targets}
-        if len(classes) > 1:
+        if len(classes) <= 1:
+            continue
+        missing = sorted(
+            t for t in zone_cfg.targets if not getattr(type(providers[t]), "NAMESPACE", None)
+        )
+        if missing:
             class_names = ", ".join(f"{t}={type(providers[t]).__name__}" for t in zone_cfg.targets)
             raise ConfigError(
                 f"'zones.{zone_name}' has targets with different provider classes "
-                f"({class_names}). Multi-target requires same provider class."
+                f"({class_names}). Multi-provider zones require every provider class "
+                f"to declare a zone-file NAMESPACE; missing on: {', '.join(missing)}."
             )
 
 

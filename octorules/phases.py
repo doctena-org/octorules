@@ -198,6 +198,98 @@ def unregister_non_phase_key(key: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Provider namespaces — the nested zone-file format
+# ---------------------------------------------------------------------------
+
+# Zone files may nest a provider's sections under one namespace block
+# (``cloudflare: {waf_custom_rules: […], bot_management: {…}}``).  The
+# namespace mapping translates the nested spelling to the canonical flat
+# key (phase friendly name or settings key) that the rest of the system
+# operates on — internal names never change, the nested form is syntax.
+
+# namespace -> {nested_key: flat_key}
+PROVIDER_NAMESPACES: dict[str, dict[str, str]] = {}
+
+# flat_key -> (namespace, nested_key) — derived, for dump grouping and
+# key-ownership checks.  Mutated in place like the other derived maps.
+NAMESPACE_OF_KEY: dict[str, tuple[str, str]] = {}
+
+# Core sections a namespace block may carry without an explicit mapping.
+NAMESPACE_CORE_SECTIONS = frozenset({"lists", "custom_rulesets"})
+
+
+def register_namespace(namespace: str, keys: dict[str, str]) -> None:
+    """Register a provider's zone-file namespace.
+
+    *keys* maps the nested spelling inside the ``namespace:`` block to
+    the canonical flat key, e.g. ``{"waf_custom_rules":
+    "aws_waf_custom_rules", "waf_settings": "aws_waf_settings"}``.
+    Explicit mapping by design — nested names are not derived from flat
+    prefixes (google's flat prefix is ``gcloud_``, its namespace
+    ``google``).
+
+    Idempotent for an identical re-registration; a conflicting one
+    raises ValueError.
+    """
+    with _REGISTRY_LOCK:
+        existing = PROVIDER_NAMESPACES.get(namespace)
+        if existing is not None:
+            if existing == keys:
+                return
+            raise ValueError(f"Namespace {namespace!r} is already registered with different keys")
+        for nested, flat in keys.items():
+            # lists/custom_rulesets are implicit members of every
+            # namespace block — no provider owns the core sections, and
+            # several providers historically register them as non-phase
+            # keys, so mapping entries for them are tolerated but carry
+            # no ownership.
+            if nested in NAMESPACE_CORE_SECTIONS or flat in NAMESPACE_CORE_SECTIONS:
+                continue
+            owner = NAMESPACE_OF_KEY.get(flat)
+            if owner is not None and owner[0] != namespace:
+                raise ValueError(f"Key {flat!r} is already owned by namespace {owner[0]!r}")
+        PROVIDER_NAMESPACES[namespace] = dict(keys)
+        for nested, flat in keys.items():
+            if nested in NAMESPACE_CORE_SECTIONS or flat in NAMESPACE_CORE_SECTIONS:
+                continue
+            NAMESPACE_OF_KEY[flat] = (namespace, nested)
+        # The namespace itself and its scoped core sections are valid
+        # top-level keys wherever the flat view is inspected.
+        KNOWN_NON_PHASE_KEYS.add(namespace)
+        for section in NAMESPACE_CORE_SECTIONS:
+            KNOWN_NON_PHASE_KEYS.add(f"{namespace}:{section}")
+
+
+def iter_scoped_sections(data: dict, section: str):
+    """Yield ``(namespace, value)`` pairs for *section* in a flat zone view.
+
+    Multi-provider files carry the core sections per namespace
+    (``"<ns>:lists"``); single-provider and legacy files carry them
+    plain (yielded with namespace ``None``).
+    """
+    if section in data:
+        yield None, data[section]
+    for key, value in data.items():
+        ns, sep, name = key.partition(":")
+        if sep and name == section and ns in PROVIDER_NAMESPACES:
+            yield ns, value
+
+
+def unregister_namespace(namespace: str) -> None:
+    """Remove a namespace registration (for test teardown)."""
+    with _REGISTRY_LOCK:
+        keys = PROVIDER_NAMESPACES.pop(namespace, None)
+        if keys:
+            for flat in keys.values():
+                entry = NAMESPACE_OF_KEY.get(flat)
+                if entry is not None and entry[0] == namespace:
+                    del NAMESPACE_OF_KEY[flat]
+        KNOWN_NON_PHASE_KEYS.discard(namespace)
+        for section in NAMESPACE_CORE_SECTIONS:
+            KNOWN_NON_PHASE_KEYS.discard(f"{namespace}:{section}")
+
+
+# ---------------------------------------------------------------------------
 # Provider-registered API field sets
 # ---------------------------------------------------------------------------
 

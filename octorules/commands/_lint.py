@@ -394,6 +394,15 @@ def cmd_lint_file(
             print("Lint: 0 issue(s) found.", file=sys.stderr)
         return 0
 
+    # Flatten provider-namespace blocks so lint rules see the canonical keys.
+    from octorules.config import ConfigError, normalize_zone_format
+
+    try:
+        desired = normalize_zone_format(desired, source=path.name)
+    except ConfigError as e:
+        log.error("%s", e)
+        return 1
+
     zone_name = path.stem
     plan_tier = "enterprise"
 

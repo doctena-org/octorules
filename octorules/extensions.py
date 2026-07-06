@@ -12,12 +12,24 @@ without coupling the core to any specific provider.  Six registries:
 
 Extension plans are stored generically in ``ZonePlan.extension_plans``
 as ``dict[str, list]``, keyed by extension name (e.g. ``"page_shield"``).
+
+Besides the registries, this module provides the shared data model and
+plan-output formatter for *settings extensions* — provider sections that
+diff a flat ``{field: value}`` dict of desired YAML settings against live
+zone configuration: :class:`SettingsChange`, :class:`SettingsPlan`, and
+:class:`SettingsFormatter`.  :func:`make_synthetic_phase` supports
+extensions that plan non-standard rulesets (custom rulesets, lists,
+Page Shield).
 """
 
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field as _dc_field
 from typing import TYPE_CHECKING, Protocol
+
+from octorules.phases import Phase
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -426,3 +438,202 @@ def get_format_extensions() -> dict[str, FormatExtension]:
     """Return a snapshot of the registered format extensions."""
     with _REGISTRY_LOCK:
         return dict(_format_extensions)
+
+
+# ---------------------------------------------------------------------------
+# Synthetic phases for extension plans
+# ---------------------------------------------------------------------------
+def make_synthetic_phase(
+    prefix: str,
+    name: str,
+    provider_id: str,
+    *,
+    zone_level: bool = False,
+    account_level: bool = True,
+) -> Phase:
+    """Create a synthetic Phase for non-standard rulesets (custom, lists, page shield)."""
+    return Phase(
+        friendly_name=f"{prefix}:{name}",
+        provider_id=provider_id,
+        default_action=None,
+        zone_level=zone_level,
+        account_level=account_level,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Settings extensions — shared data model
+# ---------------------------------------------------------------------------
+@dataclass
+class SettingsChange:
+    """A single field change in a settings section."""
+
+    field: str
+    current: object
+    desired: object
+
+    @property
+    def has_changes(self) -> bool:
+        return self.current != self.desired
+
+
+@dataclass
+class SettingsPlan:
+    """Plan for all field-level changes in a settings section."""
+
+    changes: list[SettingsChange] = _dc_field(default_factory=list)
+    # Fields declared in YAML that the live config does not expose
+    # (plan/product gated) -- reported as notes, never as changes.
+    unsupported: list[str] = _dc_field(default_factory=list)
+
+    @property
+    def has_changes(self) -> bool:
+        return any(c.has_changes for c in self.changes)
+
+    @property
+    def total_changes(self) -> int:
+        return sum(1 for c in self.changes if c.has_changes)
+
+
+class SettingsFormatter:
+    """Formats settings diffs for plan output.
+
+    Parameterised by the concrete *plan_type* (so each formatter only
+    renders its own plans), the YAML-facing *prefix* used in change
+    labels, and the *phase* / *provider_id* strings used in report mode.
+
+    An empty *prefix* renders each change's ``field`` as the whole label —
+    for providers whose fields already carry a section path
+    (e.g. ``"bot_detection.execution_mode"``).
+    """
+
+    def __init__(self, plan_type: type, prefix: str, phase: str, provider_id: str) -> None:
+        self._plan_type = plan_type
+        self._prefix = prefix
+        self._phase = phase
+        self._provider_id = provider_id
+
+    def _label(self, field: str) -> str:
+        return f"{self._prefix}.{field}" if self._prefix else field
+
+    def _active_plans(self, plans: list):
+        for plan in plans:
+            if isinstance(plan, self._plan_type) and (plan.has_changes or plan.unsupported):
+                yield plan
+
+    def format_text(self, plans: list, use_color: bool) -> list[str]:
+        from octorules._color import Pen
+
+        p = Pen(use_color)
+        lines: list[str] = []
+        for plan in self._active_plans(plans):
+            for change in plan.changes:
+                if not change.has_changes:
+                    continue
+                label = self._label(change.field)
+                line = f"  ~ {label}: {change.current!r} -> {change.desired!r}"
+                lines.append(p.warning(line))
+            for name in plan.unsupported:
+                line = (
+                    f"  # {self._label(name)}: declared in YAML but not exposed"
+                    " on this zone -- ignored"
+                )
+                lines.append(p.muted(line))
+        return lines
+
+    def format_json(self, plans: list) -> list[dict]:
+        result: list[dict] = []
+        for plan in self._active_plans(plans):
+            changes = []
+            for change in plan.changes:
+                if not change.has_changes:
+                    continue
+                changes.append(
+                    {
+                        "field": change.field,
+                        "current": change.current,
+                        "desired": change.desired,
+                    }
+                )
+            entry: dict = {}
+            if changes:
+                entry["changes"] = changes
+            if plan.unsupported:
+                entry["unsupported"] = list(plan.unsupported)
+            if entry:
+                result.append(entry)
+        return result
+
+    def format_markdown(
+        self, plans: list, pending_diffs: list[list[tuple[str, object, object]]]
+    ) -> list[str]:
+        from octorules.formatter import md_escape
+
+        lines: list[str] = []
+        for plan in self._active_plans(plans):
+            for change in plan.changes:
+                if not change.has_changes:
+                    continue
+                label = md_escape(self._label(change.field))
+                cur = md_escape(repr(change.current))
+                des = md_escape(repr(change.desired))
+                lines.append(f"| ~ | {label} | | {cur} -> {des} |")
+            for name in plan.unsupported:
+                label = md_escape(self._label(name))
+                lines.append(f"| # | {label} | | not exposed on this zone -- ignored |")
+        return lines
+
+    def format_html(self, plans: list, lines: list[str]) -> tuple[int, int, int, int]:
+        from html import escape as html_escape
+
+        from octorules.formatter import HTML_TABLE_HEADER, html_summary_row
+
+        total_modifies = 0
+        for plan in self._active_plans(plans):
+            lines.extend(HTML_TABLE_HEADER)
+            plan_modifies = 0
+            for change in plan.changes:
+                if not change.has_changes:
+                    continue
+                plan_modifies += 1
+                label = html_escape(self._label(change.field))
+                cur = html_escape(repr(change.current))
+                des = html_escape(repr(change.desired))
+                lines.append("  <tr>")
+                lines.append("    <td>Modify</td>")
+                lines.append(f"    <td>{label}</td>")
+                lines.append(f"    <td>{cur} &rarr; {des}</td>")
+                lines.append("  </tr>")
+            for name in plan.unsupported:
+                label = html_escape(self._label(name))
+                lines.append("  <tr>")
+                lines.append("    <td>Note</td>")
+                lines.append(f"    <td>{label}</td>")
+                lines.append("    <td>not exposed on this zone -- ignored</td>")
+                lines.append("  </tr>")
+            lines.extend(html_summary_row(0, 0, plan_modifies, 0))
+            lines.append("</table>")
+            total_modifies += plan_modifies
+        return 0, 0, total_modifies, 0
+
+    def format_report(self, plans: list, zone_has_drift: bool, phases_data: list[dict]) -> bool:
+        total_modifies = 0
+        for plan in plans:
+            if not isinstance(plan, self._plan_type) or not plan.has_changes:
+                continue
+            total_modifies += plan.total_changes
+        if total_modifies:
+            zone_has_drift = True
+            phases_data.append(
+                {
+                    "phase": self._phase,
+                    "provider_id": self._provider_id,
+                    "status": "drifted",
+                    "yaml_rules": 0,
+                    "live_rules": 0,
+                    "adds": 0,
+                    "removes": 0,
+                    "modifies": total_modifies,
+                }
+            )
+        return zone_has_drift

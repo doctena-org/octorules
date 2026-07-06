@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octorules"
-version = "0.31.0"
+version = "0.32.0"
 description = "WAF rules as code — manage rules across providers declaratively"
 license = "Apache-2.0"
 requires-python = ">=3.10"
@@ -33,15 +33,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Install octorules[wirefilter] for full expression lint coverage.
-# Without it, expression validation uses a regex fallback that can only
-# extract field/function names, missing syntax errors, type mismatches,
-# and invalid operators that wirefilter catches.
 cloudflare = [
     "octorules-cloudflare>=0.1",
-]
-wirefilter = [
-    "octorules-wirefilter>=0.3.2,<1.0",
 ]
 dev = [
     "pytest>=7.0",

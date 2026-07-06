@@ -58,8 +58,10 @@ def _plan_single_zone(
 ) -> tuple[str, ZonePlan, dict, dict]:
     """Plan a single zone. Returns (zone_name, zone_plan, desired, current)."""
     zone_cfg = config.zones[zone_name]
-    scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
-    all_desired = config.load_zone_rules(zone_name)
+    scope = Scope(zone_id=zone_cfg.zone_id_for(target_name), label=zone_name)
+    # Scope the flat view to this provider's namespace — in a
+    # multi-provider zone file each target plans only its own sections.
+    all_desired = _helpers_mod._provider_view(config.load_zone_rules(zone_name), provider)
 
     # Warn about unsupported features early (uses already-loaded data)
     for yaml_key, feature in _FEATURE_KEYS.items():
@@ -250,7 +252,9 @@ def _plan_account(
 
     account_label = slugify(acct_name)
     scope = Scope(account_id=provider.account_id, label=provider.account_name)
-    all_desired = config.load_account_rules(provider.account_name)
+    all_desired = _helpers_mod._provider_view(
+        config.load_account_rules(provider.account_name), provider
+    )
     desired = _filter_desired_by_phase(all_desired, phase_filter)
     provider_ids = _phase_filter_to_provider_ids(phase_filter)
 

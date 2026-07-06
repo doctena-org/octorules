@@ -13,6 +13,7 @@ from octorules.plan_output import PlanText
 from octorules.planner import RuleDict
 from octorules.provider.base import SUPPORTS_CUSTOM_RULESETS, SUPPORTS_LISTS
 from octorules.provider.exceptions import ProviderAuthError, ProviderError
+from octorules.provider.utils import apply_parallel
 from octorules.provider.utils import format_api_error as _format_api_error
 
 log = logging.getLogger(__name__)
@@ -66,13 +67,64 @@ def _get_zones(config: Config, zone_filter: list[str] | None) -> list[str]:
 
 
 def _validate_phases(phases: list[str] | None) -> list[str] | None:
-    """Validate phase names against known phases. Raises ConfigError if invalid."""
+    """Validate phase names against known phases. Raises ConfigError if invalid.
+
+    Accepts the flat friendly name (``waf_custom_rules``) and the dotted
+    namespace form (``aws.waf_custom_rules``); dotted names resolve to
+    their flat equivalent in the returned list.
+    """
     if not phases:
         return None
+    from octorules.phases import PROVIDER_NAMESPACES
+
+    resolved: list[str] = []
     for p in phases:
+        if "." in p:
+            ns, _, nested = p.partition(".")
+            mapping = PROVIDER_NAMESPACES.get(ns)
+            if mapping and nested in mapping and mapping[nested] in PHASE_BY_NAME:
+                resolved.append(mapping[nested])
+                continue
         if p not in PHASE_BY_NAME:
             raise ConfigError(unknown_phase_message(p))
-    return phases
+        resolved.append(p)
+    return resolved
+
+
+def _provider_view(all_desired: dict, provider: object) -> dict:
+    """Scope a zone's flat rules view to *provider*'s namespace.
+
+    Multi-provider zone files flatten to one merged dict whose keys are
+    globally unique; each provider plans only the sections its namespace
+    owns, plus the shared and unowned keys.  ``"<ns>:lists"``-style
+    scoped core sections are unwrapped for the owning provider and
+    hidden from the others.  Providers without a ``NAMESPACE`` (or with
+    an unregistered one) see the full view — the pre-namespace behavior.
+    """
+    from octorules.phases import (
+        NAMESPACE_CORE_SECTIONS,
+        NAMESPACE_OF_KEY,
+        PROVIDER_NAMESPACES,
+    )
+
+    ns = getattr(provider, "NAMESPACE", None)
+    if not ns or ns not in PROVIDER_NAMESPACES:
+        return all_desired
+    view: dict = {}
+    for key, value in all_desired.items():
+        owner = NAMESPACE_OF_KEY.get(key)
+        if owner is not None:
+            if owner[0] == ns:
+                view[key] = value
+            continue
+        if ":" in key:
+            key_ns, _, section = key.partition(":")
+            if key_ns in PROVIDER_NAMESPACES and section in NAMESPACE_CORE_SECTIONS:
+                if key_ns == ns:
+                    view[section] = value
+                continue
+        view[key] = value
+    return view
 
 
 def _filter_desired_by_phase(
@@ -198,64 +250,10 @@ def _map_ordered(
         return _run(ex)
 
 
-def _apply_parallel(
-    tasks: list[tuple[str, Callable[[], None]]],
-    max_workers: int = 0,
-) -> tuple[list[str], str | None]:
-    """Run independent API-call tasks, collecting successes.
-
-    Each task is ``(label, fn)`` where *fn()* performs the API call and raises
-    on failure.  Returns ``(successful_labels, first_error_message)``.
-
-    * ``ProviderAuthError`` -> cancel remaining, re-raise.
-    * First ``ProviderError`` / ``TimeoutError`` -> record
-      error; in the parallel path remaining in-flight tasks still finish so we
-      collect as many successes as possible.  In the sequential path we stop
-      immediately (matching the original serial behaviour).
-    """
-    if not tasks:
-        return [], None
-
-    def _run_one(label: str, fn: Callable[[], None]) -> tuple[str, str | None]:
-        try:
-            fn()
-        except ProviderAuthError:
-            raise
-        except ProviderError as e:
-            return label, _format_api_error(e)
-        except TimeoutError as e:
-            return label, str(e)
-        return label, None
-
-    # Sequential fast-path (isinstance guard: test mocks may pass non-int)
-    if not isinstance(max_workers, int) or max_workers <= 1 or len(tasks) <= 1:
-        successes: list[str] = []
-        for label, fn in tasks:
-            label, error = _run_one(label, fn)
-            if error:
-                return successes, f"{label}: {error}"
-            successes.append(label)
-        return successes, None
-
-    # Parallel path
-    successes = []
-    first_error: str | None = None
-    workers = min(max_workers, len(tasks))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_run_one, lbl, fn): lbl for lbl, fn in tasks}
-        for future in as_completed(futures):
-            try:
-                label, error = future.result()
-            except ProviderAuthError:
-                for f in futures:
-                    f.cancel()
-                raise
-            if error:
-                if first_error is None:
-                    first_error = f"{label}: {error}"
-            else:
-                successes.append(label)
-    return successes, first_error
+# Deprecated alias — apply_parallel moved to octorules.provider.utils
+# (beside fetch_parallel); kept importable from here so released provider
+# versions keep working until their adopted releases land.
+_apply_parallel = apply_parallel
 
 
 def _run_staged_tasks(

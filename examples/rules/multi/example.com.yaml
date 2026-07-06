@@ -1,269 +1,270 @@
 # Cloudflare rules for example.com
 #
 # Cloudflare has 23 phases.  This file demonstrates the most commonly used
-# ones.  Phase names are the YAML top-level keys; each phase contains a list
-# of rules.  Every rule needs at least "ref" and "expression".
+# ones.  Phase names are nested under the "cloudflare:" block; each phase
+# contains a list of rules.  Every rule needs at least "ref" and "expression".
 #
 # Expression syntax: Cloudflare wirefilter — see
 # https://developers.cloudflare.com/ruleset-engine/rules-language/
 
-# ---------------------------------------------------------------------------
-# Redirect Rules — HTTP 3xx redirects
-# ---------------------------------------------------------------------------
-redirect_rules:
-  - ref: blog-redirect
-    description: "Redirect /blog to blog subdomain"
-    expression: 'starts_with(http.request.uri.path, "/blog/")'
-    action_parameters:
-      from_value:
-        target_url:
-          expression: 'concat("https://blog.example.com", http.request.uri.path)'
-        status_code: 301
+cloudflare:
+  # ---------------------------------------------------------------------------
+  # Redirect Rules — HTTP 3xx redirects
+  # ---------------------------------------------------------------------------
+  redirect_rules:
+    - ref: blog-redirect
+      description: "Redirect /blog to blog subdomain"
+      expression: 'starts_with(http.request.uri.path, "/blog/")'
+      action_parameters:
+        from_value:
+          target_url:
+            expression: 'concat("https://blog.example.com", http.request.uri.path)'
+          status_code: 301
 
-  - ref: www-redirect
-    description: "Redirect www to apex"
-    expression: 'http.host eq "www.example.com"'
-    action_parameters:
-      from_value:
-        target_url:
-          expression: 'concat("https://example.com", http.request.uri)'
-        status_code: 301
+    - ref: www-redirect
+      description: "Redirect www to apex"
+      expression: 'http.host eq "www.example.com"'
+      action_parameters:
+        from_value:
+          target_url:
+            expression: 'concat("https://example.com", http.request.uri)'
+          status_code: 301
 
-# ---------------------------------------------------------------------------
-# URL Rewrite Rules — rewrite request URI before origin
-# ---------------------------------------------------------------------------
-url_rewrite_rules:
-  - ref: strip-trailing-slash
-    description: "Remove trailing slashes"
-    expression: 'ends_with(http.request.uri.path, "/") and http.request.uri.path ne "/"'
-    action_parameters:
-      uri:
-        path:
-          expression: 'regex_replace(http.request.uri.path, "/$", "")'
+  # ---------------------------------------------------------------------------
+  # URL Rewrite Rules — rewrite request URI before origin
+  # ---------------------------------------------------------------------------
+  url_rewrite_rules:
+    - ref: strip-trailing-slash
+      description: "Remove trailing slashes"
+      expression: 'ends_with(http.request.uri.path, "/") and http.request.uri.path ne "/"'
+      action_parameters:
+        uri:
+          path:
+            expression: 'regex_replace(http.request.uri.path, "/$", "")'
 
-# ---------------------------------------------------------------------------
-# Request Header Rules — modify request headers sent to origin
-# ---------------------------------------------------------------------------
-request_header_rules:
-  - ref: add-true-client-ip
-    description: "Forward real client IP to origin"
-    expression: "true"
-    action_parameters:
-      headers:
-        X-Real-IP:
-          operation: set
-          # Wrapped in concat() so the value renders as a string; Cloudflare's
-          # transform language accepts bare references but wirefilter's filter
-          # parser requires a function-call wrapper for value expressions.
-          expression: concat(ip.src)
+  # ---------------------------------------------------------------------------
+  # Request Header Rules — modify request headers sent to origin
+  # ---------------------------------------------------------------------------
+  request_header_rules:
+    - ref: add-true-client-ip
+      description: "Forward real client IP to origin"
+      expression: "true"
+      action_parameters:
+        headers:
+          X-Real-IP:
+            operation: set
+            # Wrapped in concat() so the value renders as a string; Cloudflare's
+            # transform language accepts bare references but wirefilter's filter
+            # parser requires a function-call wrapper for value expressions.
+            expression: concat(ip.src)
 
-# ---------------------------------------------------------------------------
-# Response Header Rules — modify response headers sent to client
-# ---------------------------------------------------------------------------
-response_header_rules:
-  - ref: add-security-headers
-    description: "Standard security headers"
-    expression: "true"
-    action_parameters:
-      headers:
-        X-Content-Type-Options:
-          operation: set
-          value: nosniff
-        X-Frame-Options:
-          operation: set
-          value: DENY
-        Referrer-Policy:
-          operation: set
-          value: strict-origin-when-cross-origin
+  # ---------------------------------------------------------------------------
+  # Response Header Rules — modify response headers sent to client
+  # ---------------------------------------------------------------------------
+  response_header_rules:
+    - ref: add-security-headers
+      description: "Standard security headers"
+      expression: "true"
+      action_parameters:
+        headers:
+          X-Content-Type-Options:
+            operation: set
+            value: nosniff
+          X-Frame-Options:
+            operation: set
+            value: DENY
+          Referrer-Policy:
+            operation: set
+            value: strict-origin-when-cross-origin
 
-# ---------------------------------------------------------------------------
-# Config Rules — settings overrides per request
-# ---------------------------------------------------------------------------
-config_rules:
-  - ref: disable-apps-for-api
-    description: "Disable Cloudflare Apps on API routes"
-    expression: 'starts_with(http.request.uri.path, "/api/")'
-    action_parameters:
-      automatic_https_rewrites: false
-      rocket_loader: false
+  # ---------------------------------------------------------------------------
+  # Config Rules — settings overrides per request
+  # ---------------------------------------------------------------------------
+  config_rules:
+    - ref: disable-apps-for-api
+      description: "Disable Cloudflare Apps on API routes"
+      expression: 'starts_with(http.request.uri.path, "/api/")'
+      action_parameters:
+        automatic_https_rewrites: false
+        rocket_loader: false
 
-# ---------------------------------------------------------------------------
-# Origin Rules — route to different origins
-# ---------------------------------------------------------------------------
-origin_rules:
-  - ref: api-to-backend
-    description: "Route API traffic to api-backend.example.com"
-    expression: 'starts_with(http.request.uri.path, "/api/")'
-    action_parameters:
-      host_header: api-backend.example.com
-      origin:
-        host: api-backend.example.com
-        port: 443
+  # ---------------------------------------------------------------------------
+  # Origin Rules — route to different origins
+  # ---------------------------------------------------------------------------
+  origin_rules:
+    - ref: api-to-backend
+      description: "Route API traffic to api-backend.example.com"
+      expression: 'starts_with(http.request.uri.path, "/api/")'
+      action_parameters:
+        host_header: api-backend.example.com
+        origin:
+          host: api-backend.example.com
+          port: 443
 
-# ---------------------------------------------------------------------------
-# Cache Rules — cache settings per request
-# ---------------------------------------------------------------------------
-cache_rules:
-  - ref: cache-static-assets
-    description: "Cache static assets for 24h"
-    expression: 'http.request.uri.path.extension in {"jpg" "png" "css" "js" "woff2" "svg"}'
-    action_parameters:
-      cache: true
-      edge_ttl:
-        mode: override_origin
-        default: 86400
-      browser_ttl:
-        mode: override_origin
-        default: 3600
+  # ---------------------------------------------------------------------------
+  # Cache Rules — cache settings per request
+  # ---------------------------------------------------------------------------
+  cache_rules:
+    - ref: cache-static-assets
+      description: "Cache static assets for 24h"
+      expression: 'http.request.uri.path.extension in {"jpg" "png" "css" "js" "woff2" "svg"}'
+      action_parameters:
+        cache: true
+        edge_ttl:
+          mode: override_origin
+          default: 86400
+        browser_ttl:
+          mode: override_origin
+          default: 3600
 
-  - ref: bypass-cache-api
-    description: "Never cache API responses"
-    expression: 'starts_with(http.request.uri.path, "/api/")'
-    action_parameters:
-      cache: false
+    - ref: bypass-cache-api
+      description: "Never cache API responses"
+      expression: 'starts_with(http.request.uri.path, "/api/")'
+      action_parameters:
+        cache: false
 
-# ---------------------------------------------------------------------------
-# WAF Custom Rules — firewall block/challenge/allow
-# ---------------------------------------------------------------------------
-waf_custom_rules:
-  - ref: block-bad-bots
-    description: "Block known bad user agents"
-    expression: |-
-      lower(http.user_agent) contains "sqlmap" or
-      lower(http.user_agent) contains "nikto"
-    action: block
+  # ---------------------------------------------------------------------------
+  # WAF Custom Rules — firewall block/challenge/allow
+  # ---------------------------------------------------------------------------
+  waf_custom_rules:
+    - ref: block-bad-bots
+      description: "Block known bad user agents"
+      expression: |-
+        lower(http.user_agent) contains "sqlmap" or
+        lower(http.user_agent) contains "nikto"
+      action: block
 
-  - ref: challenge-high-risk-countries
-    description: "Managed challenge for high-risk geolocations"
-    expression: 'ip.src.country in {"RU" "CN" "KP"}'
-    action: managed_challenge
+    - ref: challenge-high-risk-countries
+      description: "Managed challenge for high-risk geolocations"
+      expression: 'ip.src.country in {"RU" "CN" "KP"}'
+      action: managed_challenge
 
-  - ref: allow-internal-ips
-    description: "Skip WAF for internal monitoring"
-    # Note: list names must be wirefilter-safe identifiers — use underscores,
-    # not dashes. `$internal-ips` would parse as `$internal MINUS ips`.
-    expression: 'ip.src in $internal_ips'
-    action: skip
-    action_parameters:
-      phases:
-        - http_request_firewall_custom
-        - http_request_firewall_managed
-        - http_ratelimit
+    - ref: allow-internal-ips
+      description: "Skip WAF for internal monitoring"
+      # Note: list names must be wirefilter-safe identifiers — use underscores,
+      # not dashes. `$internal-ips` would parse as `$internal MINUS ips`.
+      expression: 'ip.src in $internal_ips'
+      action: skip
+      action_parameters:
+        phases:
+          - http_request_firewall_custom
+          - http_request_firewall_managed
+          - http_ratelimit
 
-  # This rule is kept in YAML for documentation but not deployed.
-  - ref: experimental-geo-block
-    description: "Testing geo-block — not ready for production"
-    expression: 'ip.src.country in {"XX"}'
-    action: block
-    octorules:
-      ignored: true
+    # This rule is kept in YAML for documentation but not deployed.
+    - ref: experimental-geo-block
+      description: "Testing geo-block — not ready for production"
+      expression: 'ip.src.country in {"XX"}'
+      action: block
+      octorules:
+        ignored: true
 
-  # Target-specific rules — in multi-target setups, restrict to specific
-  # provider instances.  "included" and "excluded" are mutually exclusive.
-  - ref: prod-only-waf
-    description: "Only deploy to cf-prod target, skip cf-staging"
-    expression: 'ip.src in $blocklist'
-    action: block
-    octorules:
-      included:
-        - cf-prod
+    # Target-specific rules — in multi-target setups, restrict to specific
+    # provider instances.  "included" and "excluded" are mutually exclusive.
+    - ref: prod-only-waf
+      description: "Only deploy to cf-prod target, skip cf-staging"
+      expression: 'ip.src in $blocklist'
+      action: block
+      octorules:
+        included:
+          - cf-prod
 
-  - ref: skip-staging-challenge
-    description: "Deploy everywhere except cf-staging"
-    expression: 'ip.src.country in {"RU" "CN"}'
-    action: managed_challenge
-    octorules:
-      excluded:
-        - cf-staging
+    - ref: skip-staging-challenge
+      description: "Deploy everywhere except cf-staging"
+      expression: 'ip.src.country in {"RU" "CN"}'
+      action: managed_challenge
+      octorules:
+        excluded:
+          - cf-staging
 
-# ---------------------------------------------------------------------------
-# Rate Limiting Rules
-# ---------------------------------------------------------------------------
-rate_limiting_rules:
-  - ref: api-rate-limit
-    description: "Limit API to 100 req/min per IP"
-    expression: 'starts_with(http.request.uri.path, "/api/")'
-    action: block
-    action_parameters:
-      response:
-        status_code: 429
-        content_type: application/json
-        content: '{"error": "rate_limited"}'
-    ratelimit:
-      characteristics:
-        - ip.src
-      period: 60
-      requests_per_period: 100
-      mitigation_timeout: 60
+  # ---------------------------------------------------------------------------
+  # Rate Limiting Rules
+  # ---------------------------------------------------------------------------
+  rate_limiting_rules:
+    - ref: api-rate-limit
+      description: "Limit API to 100 req/min per IP"
+      expression: 'starts_with(http.request.uri.path, "/api/")'
+      action: block
+      action_parameters:
+        response:
+          status_code: 429
+          content_type: application/json
+          content: '{"error": "rate_limited"}'
+      ratelimit:
+        characteristics:
+          - ip.src
+        period: 60
+        requests_per_period: 100
+        mitigation_timeout: 60
 
-# ---------------------------------------------------------------------------
-# Compression Rules
-# ---------------------------------------------------------------------------
-compression_rules:
-  - ref: compress-api-json
-    description: "Enable gzip for API JSON responses"
-    # `[*] contains "x"` is wirefilter's elementwise comparison: it produces
-    # an Array<Bool> from the multi-valued header, which `any()` reduces to
-    # a single Bool. Don't re-reference the array inside a two-arg `any()` —
-    # that's a type error.
-    expression: |-
-      starts_with(http.request.uri.path, "/api/") and
-      any(http.response.headers["content-type"][*] contains "application/json")
-    action_parameters:
-      algorithms:
-        - gzip
-        - zstd
+  # ---------------------------------------------------------------------------
+  # Compression Rules
+  # ---------------------------------------------------------------------------
+  compression_rules:
+    - ref: compress-api-json
+      description: "Enable gzip for API JSON responses"
+      # `[*] contains "x"` is wirefilter's elementwise comparison: it produces
+      # an Array<Bool> from the multi-valued header, which `any()` reduces to
+      # a single Bool. Don't re-reference the array inside a two-arg `any()` —
+      # that's a type error.
+      expression: |-
+        starts_with(http.request.uri.path, "/api/") and
+        any(http.response.headers["content-type"][*] contains "application/json")
+      action_parameters:
+        algorithms:
+          - gzip
+          - zstd
 
-# ---------------------------------------------------------------------------
-# Custom Rulesets — account-level managed rulesets
-# ---------------------------------------------------------------------------
-custom_rulesets:
-  # Replace `id` with your actual 32-char hex ruleset UUID. Discover it
-  # with `octorules dump` or via the Cloudflare API. Custom rulesets are
-  # account-level resources with stable IDs that octorules cannot create —
-  # they must be created in the Cloudflare dashboard or via the API first.
-  - id: 00000000000000000000000000000000
-    name: shared-waf-rules
-    phase: http_request_firewall_custom
-    rules:
-      - ref: block-scanners
-        expression: 'cf.threat_score > 50'
-        action: block
+  # ---------------------------------------------------------------------------
+  # Custom Rulesets — account-level managed rulesets
+  # ---------------------------------------------------------------------------
+  custom_rulesets:
+    # Replace `id` with your actual 32-char hex ruleset UUID. Discover it
+    # with `octorules dump` or via the Cloudflare API. Custom rulesets are
+    # account-level resources with stable IDs that octorules cannot create —
+    # they must be created in the Cloudflare dashboard or via the API first.
+    - id: 00000000000000000000000000000000
+      name: shared-waf-rules
+      phase: http_request_firewall_custom
+      rules:
+        - ref: block-scanners
+          expression: 'cf.threat_score > 50'
+          action: block
 
-# ---------------------------------------------------------------------------
-# Lists — account-level IP/ASN/hostname lists
-# ---------------------------------------------------------------------------
-lists:
-  # List names must be wirefilter-safe identifiers (letters, digits, underscores).
-  # Dashes parse as the subtraction operator in expression references like
-  # `ip.src in $internal_ips`.
-  - name: internal_ips
-    kind: ip
-    description: "Internal monitoring IPs"
-    items:
-      - 10.0.0.0/8
-      - 172.16.0.0/12
-      - 192.168.0.0/16
+  # ---------------------------------------------------------------------------
+  # Lists — account-level IP/ASN/hostname lists
+  # ---------------------------------------------------------------------------
+  lists:
+    # List names must be wirefilter-safe identifiers (letters, digits, underscores).
+    # Dashes parse as the subtraction operator in expression references like
+    # `ip.src in $internal_ips`.
+    - name: internal_ips
+      kind: ip
+      description: "Internal monitoring IPs"
+      items:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
 
-  - name: blocklist
-    kind: ip
-    description: "Blocked IP ranges referenced by prod-only-waf rule"
-    items:
-      - 198.51.100.0/24  # RFC 5737 documentation prefix — placeholder
+    - name: blocklist
+      kind: ip
+      description: "Blocked IP ranges referenced by prod-only-waf rule"
+      items:
+        - 198.51.100.0/24  # RFC 5737 documentation prefix — placeholder
 
-  - name: blocked_asns
-    kind: asn
-    description: "Blocked autonomous systems"
-    items:
-      - 12345
-      - 67890
+    - name: blocked_asns
+      kind: asn
+      description: "Blocked autonomous systems"
+      items:
+        - 12345
+        - 67890
 
-# ---------------------------------------------------------------------------
-# Page Shield Policies — Content Security Policy management
-# ---------------------------------------------------------------------------
-page_shield_policies:
-  - description: "Default CSP — restrict scripts to self"
-    action: allow
-    expression: "true"
-    enabled: true
-    value: "script-src 'self'; style-src 'self' 'unsafe-inline'"
+  # ---------------------------------------------------------------------------
+  # Page Shield Policies — Content Security Policy management
+  # ---------------------------------------------------------------------------
+  page_shield_policies:
+    - description: "Default CSP — restrict scripts to self"
+      action: allow
+      expression: "true"
+      enabled: true
+      value: "script-src 'self'; style-src 'self' 'unsafe-inline'"

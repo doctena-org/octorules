@@ -400,7 +400,7 @@ def _apply_zone_changes(
         pmap_key = (zp.zone_name, zp.target)
         if zp.zone_name in config.zones:
             zone_cfg = config.zones[zp.zone_name]
-            scope = Scope(zone_id=zone_cfg.zone_id, label=zp.zone_name)
+            scope = Scope(zone_id=zone_cfg.zone_id_for(zp.target), label=zp.zone_name)
             prov = (
                 provider_map[pmap_key]
                 if provider_map and pmap_key in provider_map

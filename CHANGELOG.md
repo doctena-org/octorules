@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] - 2026-07-06
+
+### Added
+- **Nested zone-file format**: providers register a zone-file namespace
+  and all their sections nest under one block (e.g.
+  `cloudflare: {waf_custom_rules: […], bot_management: {…}}`). The flat
+  spelling keeps working with a deprecation warning;
+  `dump` emits the nested format.
+- **Multi-provider zone files**: a zone may target providers of
+  different classes (`targets: [cloudflare, aws]`) — one file carries
+  each provider's sections, and every target plans, syncs, and resolves
+  its own zone identity. Per-target `zone_names:` in the config maps a
+  zone to differently-named provider resources (e.g. a Web ACL).
+- `--phase` accepts the dotted namespace form (e.g.
+  `aws.waf_custom_rules`) alongside the flat names.
+- Settings-extension framework in `octorules.extensions`:
+  `SettingsChange`, `SettingsPlan`, `SettingsFormatter`.
+- Previously private helpers are now public: `make_synthetic_phase()`
+  (`octorules.extensions`), `normalize_value()` (`octorules.planner`),
+  `apply_parallel()` (`octorules.provider.utils`), `literalize()`
+  (`octorules.dumper`), `change_to_dict()`, `md_change_row()`,
+  `md_escape()`, `html_render_changes()`, `html_summary_row()`,
+  `HTML_TABLE_HEADER` (`octorules.formatter`). The underscore names
+  remain as deprecated aliases.
+
+### Removed
+- The `octorules[wirefilter]` extra (nothing in core used it).
+
 ## [0.31.0] - 2026-07-15
 
 ### Added

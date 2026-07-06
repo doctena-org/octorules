@@ -7,7 +7,10 @@ import yaml
 
 from octorules.pathutil import validate_path_within
 from octorules.phases import (
+    NAMESPACE_CORE_SECTIONS,
+    NAMESPACE_OF_KEY,
     PHASE_BY_PROVIDER_ID,
+    PROVIDER_NAMESPACES,
     get_api_fields,
 )
 
@@ -157,6 +160,9 @@ def dump_zone_rules(
     if extra_sections:
         output.update(extra_sections)
 
+    # Dump emits the nested zone-file format.
+    output = _nest_output(output)
+
     try:
         output_dir.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -195,6 +201,45 @@ def dump_zone_rules(
     return output_path
 
 
+def _nest_output(output: dict) -> dict:
+    """Group flat keys under their provider namespaces for writing.
+
+    Dump always emits the nested format: keys owned by a registered
+    namespace move under that namespace's block, and when exactly one
+    namespace is involved the core ``lists``/``custom_rulesets``
+    sections nest with it (round-tripping through the loader's
+    single-namespace rule).  Unowned keys stay top-level; with no
+    registered namespaces the output is unchanged.
+    """
+    owned = {k: NAMESPACE_OF_KEY[k] for k in output if k in NAMESPACE_OF_KEY}
+    scoped: dict[str, tuple[str, str]] = {}
+    for key in output:
+        ns, sep, section = key.partition(":")
+        if sep and section in NAMESPACE_CORE_SECTIONS and ns in PROVIDER_NAMESPACES:
+            scoped[key] = (ns, section)
+    if not owned and not scoped:
+        return output
+    namespaces = sorted({ns for ns, _ in owned.values()} | {ns for ns, _ in scoped.values()})
+    single_ns = namespaces[0] if len(namespaces) == 1 else None
+    nested: dict = {}
+    blocks: dict[str, dict] = {ns: {} for ns in namespaces}
+    for key, value in output.items():
+        if key in owned:
+            ns, nested_key = owned[key]
+            blocks[ns][nested_key] = value
+        elif key in scoped:
+            ns, section = scoped[key]
+            blocks[ns][section] = value
+        elif single_ns is not None and key in NAMESPACE_CORE_SECTIONS:
+            blocks[single_ns][key] = value
+        else:
+            nested[key] = value
+    for ns in namespaces:
+        if blocks[ns]:
+            nested[ns] = blocks[ns]
+    return nested
+
+
 def _add_blank_lines(text: str) -> str:
     """Add blank lines between top-level sections and between items within sections."""
     lines = text.split("\n")
@@ -226,6 +271,23 @@ def _literalize(value: object) -> object:
     if isinstance(value, list):
         return [_literalize(item) for item in value]
     return value
+
+
+def literalize(value: object, *, block: bool = False) -> object:
+    """Prepare *value* for inclusion in YAML dump output.
+
+    Recursively converts multiline strings — including inside nested dicts
+    and lists — to YAML literal block style.  With ``block=True``, *value*
+    must be a string and is always rendered as a literal block with
+    trailing whitespace stripped from each line (PyYAML rejects block
+    style otherwise) — for strings that were pre-formatted for display
+    (e.g. long CSP values).
+    """
+    if block:
+        if not isinstance(value, str):
+            raise TypeError(f"block=True requires a string, got {type(value).__name__}")
+        return _LiteralStr(_strip_trailing_whitespace(value))
+    return _literalize(value)
 
 
 def _ensure_ref(rule: dict) -> dict:

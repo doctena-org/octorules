@@ -13,6 +13,11 @@ from pathlib import Path
 import yaml
 
 from octorules.pathutil import validate_path_within
+from octorules.phases import (
+    NAMESPACE_CORE_SECTIONS,
+    NAMESPACE_OF_KEY,
+    PROVIDER_NAMESPACES,
+)
 from octorules.plan_output import PLAN_OUTPUT_CLASSES, PlanOutput
 
 log = logging.getLogger(__name__)
@@ -114,6 +119,67 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
                 loader.dispose()
     except yaml.YAMLError as e:
         raise ConfigError(f"Invalid YAML in {path}: {e}") from e
+
+
+def normalize_zone_format(data: dict, *, source: str = "") -> dict:
+    """Normalize a zone rules mapping to the canonical flat form.
+
+    Provider namespace blocks (``cloudflare: {waf_custom_rules: […],
+    bot_management: {…}}``) flatten through the registered namespace
+    mappings — internal keys never change, the nested form is syntax.
+    The legacy flat spelling keeps working with a deprecation warning;
+    the same section in both forms raises :class:`ConfigError`.
+
+    ``lists`` / ``custom_rulesets`` inside a namespace stay plain while
+    the file uses a single namespace; with several namespaces they become
+    ``"<ns>:lists"`` etc. so each provider keeps its own, and top-level
+    spellings of those sections are rejected as ambiguous.
+    """
+    label = source or "zone rules"
+    flat_owned = sorted({NAMESPACE_OF_KEY[k][0] for k in data if k in NAMESPACE_OF_KEY})
+    if flat_owned:
+        log.warning(
+            "%s: provider sections use the deprecated flat spelling — nest them under %s",
+            label,
+            ", ".join(f"'{ns}:'" for ns in flat_owned),
+        )
+
+    namespaces = [k for k in data if k in PROVIDER_NAMESPACES]
+    if not namespaces:
+        return data
+
+    if len(namespaces) > 1:
+        for section in NAMESPACE_CORE_SECTIONS:
+            if section in data:
+                raise ConfigError(
+                    f"{label}: top-level {section!r} is ambiguous in a multi-provider"
+                    f" file — nest it under one of: {', '.join(sorted(namespaces))}"
+                )
+
+    # Preserve the ContextDict wrapper (file:line context) when rebuilding.
+    result: dict = ContextDict(context=data.context) if isinstance(data, ContextDict) else {}
+    result.update({k: v for k, v in data.items() if k not in PROVIDER_NAMESPACES})
+    for ns in namespaces:
+        block = data[ns]
+        if not isinstance(block, dict):
+            raise ConfigError(
+                f"{label}: namespace {ns!r} must be a mapping, got {type(block).__name__}"
+            )
+        mapping = PROVIDER_NAMESPACES[ns]
+        for member, value in block.items():
+            if member in NAMESPACE_CORE_SECTIONS:
+                target = member if len(namespaces) == 1 else f"{ns}:{member}"
+            elif member in mapping:
+                target = mapping[member]
+            else:
+                log.warning("%s: unknown key %r in namespace %r", label, member, ns)
+                target = f"{ns}:{member}"
+            if target in result:
+                raise ConfigError(
+                    f"{label}: section {target!r} is present both flat and nested under {ns!r}"
+                )
+            result[target] = value
+    return result
 
 
 def _load_class(dotted_path: str, label: str = "class") -> type:
@@ -238,6 +304,14 @@ class ProcessorConfig:
 class ZoneConfig:
     name: str
     zone_id: str | None = None
+    # Per-target provider-resource ids (multi-provider zones: each target
+    # resolves its own).  ``zone_id`` keeps the first target's id for
+    # single-target consumers.
+    zone_ids: dict[str, str] = field(default_factory=dict)
+    # Per-target provider-resource NAME overrides — e.g. the AWS Web ACL
+    # guarding doctena.com can't be named "doctena.com":
+    #   zone_names: {aws: doctena-com-alb}
+    zone_names: dict[str, str] = field(default_factory=dict)
     sources: list[str] = field(default_factory=list)
     targets: list[str] = field(default_factory=list)
     processors: list[str] = field(default_factory=list)
@@ -246,6 +320,18 @@ class ZoneConfig:
     delete_threshold: float = 30.0
     update_threshold: float = 30.0
     min_existing: int = 3
+
+    def zone_id_for(self, target: str | None) -> str | None:
+        """Provider-resource id for *target*, falling back to ``zone_id``."""
+        if target is not None and target in self.zone_ids:
+            return self.zone_ids[target]
+        return self.zone_id
+
+    def zone_name_for(self, target: str | None) -> str:
+        """Provider-resource name for *target*, falling back to the zone name."""
+        if target is not None:
+            return self.zone_names.get(target, self.name)
+        return self.name
 
 
 def _parse_zone(
@@ -304,6 +390,25 @@ def _parse_zone(
                 f"'zones.{zone_name}' must specify 'targets' when multiple providers "
                 f"are configured (providers: {', '.join(sorted(providers))}){zd_ctx}"
             )
+
+    # Per-target provider-resource name overrides
+    raw_zone_names = zone_data.get("zone_names", {})
+    if raw_zone_names is None:
+        raw_zone_names = {}
+    if not isinstance(raw_zone_names, dict):
+        raise ConfigError(f"'zones.{zone_name}.zone_names' must be a mapping{zd_ctx}")
+    zone_names: dict[str, str] = {}
+    for target_key, resource_name in raw_zone_names.items():
+        if target_key not in targets:
+            raise ConfigError(
+                f"'zones.{zone_name}.zone_names' references {target_key!r}, which is"
+                f" not one of the zone's targets{zd_ctx}"
+            )
+        if not isinstance(resource_name, str) or not resource_name:
+            raise ConfigError(
+                f"'zones.{zone_name}.zone_names.{target_key}' must be a non-empty string{zd_ctx}"
+            )
+        zone_names[target_key] = resource_name
 
     raw_dry_run = zone_data.get("always_dry_run", False)
     if not isinstance(raw_dry_run, bool):
@@ -386,6 +491,7 @@ def _parse_zone(
         "allow_unmanaged",
         "safety",
         "zone_id",
+        "zone_names",
     }
     unknown_zone_keys = set(zone_data.keys()) - _KNOWN_ZONE_KEYS
     for key in sorted(unknown_zone_keys):
@@ -393,6 +499,7 @@ def _parse_zone(
 
     return ZoneConfig(
         name=zone_name,
+        zone_names=zone_names,
         sources=sources,
         targets=targets,
         processors=processors,
@@ -831,6 +938,7 @@ class Config:
             raise ConfigError(
                 f"Rules file {rules_file} is not a YAML mapping (got {type(data).__name__})"
             )
+        data = normalize_zone_format(data, source=rules_file.name)
 
         # Re-acquire lock to write caches. Another thread may have
         # loaded the same file concurrently — that's harmless (same
@@ -952,49 +1060,74 @@ def resolve_zone_ids(
     if not to_resolve:
         return
 
-    # Build per-zone resolve functions
-    if callable(resolve_fn):
-        per_zone_fn: dict[str, Callable[[str], str]] = {n: resolve_fn for n in to_resolve}
-    else:
-        per_zone_fn = {}
-        for name, cfg in to_resolve.items():
-            target = cfg.targets[0] if cfg.targets else None
-            if target and target in resolve_fn:
-                per_zone_fn[name] = resolve_fn[target]
+    # Build (zone, target) work items: each target resolves the zone's
+    # provider-resource name for that target (``zone_names`` override,
+    # defaulting to the zone name).  The first target is *primary*: its
+    # failure aborts (the pre-existing contract) and its id also lands in
+    # ``zone_cfg.zone_id``; a secondary target's failure only warns and
+    # that target falls back to the primary id at Scope time.
+    ItemT = tuple[str, str | None, Callable[[str], str], str, bool]
+    items: list[ItemT] = []
+    for name, cfg in to_resolve.items():
+        if callable(resolve_fn):
+            first = cfg.targets[0] if cfg.targets else None
+            items.append((name, first, resolve_fn, cfg.zone_name_for(first), True))
+            continue
+        if not cfg.targets:
+            if len(resolve_fn) == 1:
+                items.append((name, None, next(iter(resolve_fn.values())), name, True))
+                continue
+            raise ConfigError(f"Zone {name!r} has no target provider; cannot resolve zone ID")
+        for idx, target in enumerate(cfg.targets):
+            if target in resolve_fn:
+                fn = resolve_fn[target]
             elif len(resolve_fn) == 1:
-                per_zone_fn[name] = next(iter(resolve_fn.values()))
+                fn = next(iter(resolve_fn.values()))
             else:
                 raise ConfigError(f"Zone {name!r} has no target provider; cannot resolve zone ID")
+            items.append((name, target, fn, cfg.zone_name_for(target), idx == 0))
 
     workers = max_workers if max_workers is not None else config.max_workers
-    log.debug("Resolving %d zone(s) with %d workers", len(to_resolve), workers)
-
-    def _resolve_one(zone_name: str) -> str:
-        try:
-            return per_zone_fn[zone_name](zone_name)
-        except ConfigError:
-            raise
-        except Exception as e:
-            raise ConfigError(f"Failed to resolve zone {zone_name!r}: {e}") from e
-
+    log.debug("Resolving %d zone target(s) with %d workers", len(items), workers)
     t0 = time.monotonic()
 
-    if workers <= 1 or len(to_resolve) <= 1:
-        for zone_name, zone_cfg in to_resolve.items():
-            zone_cfg.zone_id = _resolve_one(zone_name)
-            log.debug("Resolved %s -> %s", zone_name, zone_cfg.zone_id)
-        log.debug(
-            "Zone resolution complete: %d zone(s) in %.1fs", len(to_resolve), time.monotonic() - t0
-        )
-        return
+    def _resolve_item(item: ItemT) -> str | None:
+        name, target, fn, resource, primary = item
+        try:
+            return fn(resource)
+        except Exception as e:
+            if primary:
+                if isinstance(e, ConfigError):
+                    raise
+                raise ConfigError(f"Failed to resolve zone {name!r}: {e}") from e
+            log.warning(
+                "Could not resolve zone %s for target %s (%s); that target"
+                " falls back to the primary target's id",
+                name,
+                target,
+                e,
+            )
+            return None
 
-    with ThreadPoolExecutor(max_workers=min(workers, len(to_resolve))) as executor:
-        futures = {executor.submit(_resolve_one, name): name for name in to_resolve}
-        for future in as_completed(futures):
-            zone_name = futures[future]
-            zone_id = future.result()
-            to_resolve[zone_name].zone_id = zone_id
-            log.debug("Resolved %s -> %s", zone_name, zone_id)
+    def _store(item: ItemT, zone_id: str | None) -> None:
+        name, target, _fn, _resource, primary = item
+        if zone_id is None:
+            return
+        cfg = to_resolve[name]
+        if target is not None:
+            cfg.zone_ids[target] = zone_id
+        if primary:
+            cfg.zone_id = zone_id
+        log.debug("Resolved %s (%s) -> %s", name, target or "-", zone_id)
+
+    if workers <= 1 or len(items) <= 1:
+        for item in items:
+            _store(item, _resolve_item(item))
+    else:
+        with ThreadPoolExecutor(max_workers=min(workers, len(items))) as executor:
+            futures = {executor.submit(_resolve_item, it): it for it in items}
+            for future in as_completed(futures):
+                _store(futures[future], future.result())
 
     log.debug(
         "Zone resolution complete: %d zone(s) in %.1fs", len(to_resolve), time.monotonic() - t0

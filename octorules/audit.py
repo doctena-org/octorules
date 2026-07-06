@@ -917,12 +917,24 @@ AUDIT_FORMATTERS: dict[str, Any] = {
 
 
 def _build_list_ip_map(rules_data: dict) -> dict[str, list[str]]:
-    """Build a map from list name to IP CIDRs from the ``lists`` section."""
-    lists_section = rules_data.get("lists")
-    if not isinstance(lists_section, list):
-        return {}
+    """Build a map from list name to IP CIDRs from the ``lists`` sections.
+
+    Multi-provider files carry lists per namespace — audit aggregates
+    every provider's lists (cross-layer IP checks want all of them),
+    qualifying names with the namespace to keep them distinct.
+    """
+    from octorules.phases import iter_scoped_sections
 
     ip_map: dict[str, list[str]] = {}
+    for ns, lists_section in iter_scoped_sections(rules_data, "lists"):
+        if not isinstance(lists_section, list):
+            continue
+        _collect_list_ips(lists_section, ip_map, prefix=f"{ns}:" if ns else "")
+    return ip_map
+
+
+def _collect_list_ips(lists_section: list, ip_map: dict[str, list[str]], *, prefix: str) -> None:
+    """Collect IP-kind list CIDRs from one ``lists`` section into *ip_map*."""
     for lst in lists_section:
         if not isinstance(lst, dict):
             continue
@@ -942,8 +954,7 @@ def _build_list_ip_map(rules_data: dict) -> dict[str, list[str]]:
                 if isinstance(ip, str):
                     cidrs.append(ip)
         if cidrs:
-            ip_map[name] = cidrs
-    return ip_map
+            ip_map[prefix + name] = cidrs
 
 
 def _extract_unreferenced_list_ips(
@@ -998,14 +1009,22 @@ def audit_zone_rules(
 
     # Resolve list_refs → IPs from the lists section
     ip_map = _build_list_ip_map(rules_data)
+    # Multi-provider files qualify list names with their namespace
+    # ("cloudflare:blocked-ips") while rules reference the bare name —
+    # index by bare name so refs resolve either way.  A bare name shared
+    # by several namespaces resolves to all of them (conservative for
+    # the overlap checks; audit can't attribute a rule to a namespace).
+    by_bare: dict[str, list[str]] = {}
+    for full_name in ip_map:
+        bare = full_name.partition(":")[2] or full_name
+        by_bare.setdefault(bare, []).append(full_name)
     referenced_lists: set[str] = set()
     for info in all_infos:
         if info.list_refs:
             for list_name in info.list_refs:
-                cidrs = ip_map.get(list_name)
-                if cidrs:
-                    info.ip_ranges.extend(cidrs)
-                    referenced_lists.add(list_name)
+                for key in by_bare.get(list_name, ()):
+                    info.ip_ranges.extend(ip_map[key])
+                    referenced_lists.add(key)
 
     # Include unreferenced lists as standalone pseudo-rules
     all_infos.extend(_extract_unreferenced_list_ips(ip_map, referenced_lists))

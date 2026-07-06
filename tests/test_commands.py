@@ -698,7 +698,7 @@ class TestMultiTarget:
         # Should not raise
         _validate_multi_target(config, {"cf-prod": prov1, "cf-staging": prov2})
 
-    def test_validate_multi_target_different_class_fails(self, tmp_path):
+    def test_validate_multi_target_different_class_without_namespace_fails(self, tmp_path):
         class ProviderA:
             pass
 
@@ -717,8 +717,30 @@ class TestMultiTarget:
                 "example.com": ZoneConfig(name="example.com", targets=["cloudflare", "aws"]),
             },
         )
-        with pytest.raises(ConfigError, match="different provider classes"):
+        with pytest.raises(ConfigError, match="NAMESPACE"):
             _validate_multi_target(config, {"cloudflare": ProviderA(), "aws": ProviderB()})
+
+    def test_validate_multi_target_different_class_with_namespaces_passes(self, tmp_path):
+        class ProviderA:
+            NAMESPACE = "provider_a"
+
+        class ProviderB:
+            NAMESPACE = "provider_b"
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        config = Config(
+            rules_dir=rules_dir,
+            providers={
+                "cloudflare": ProviderConfig(name="cloudflare"),
+                "aws": ProviderConfig(name="aws"),
+            },
+            zones={
+                "example.com": ZoneConfig(name="example.com", targets=["cloudflare", "aws"]),
+            },
+        )
+        # Should not raise — both classes declare a zone-file namespace.
+        _validate_multi_target(config, {"cloudflare": ProviderA(), "aws": ProviderB()})
 
     def test_provider_map_tuple_key(self):
         """provider_map uses (zone_name, target) tuple keys."""

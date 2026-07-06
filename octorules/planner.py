@@ -10,6 +10,11 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
 from octorules.expression import normalize_expression
+
+# Deprecated alias — make_synthetic_phase moved to octorules.extensions;
+# kept importable from here so released provider versions keep working
+# until their adopted releases land.
+from octorules.extensions import make_synthetic_phase as _make_synthetic_phase
 from octorules.phases import (
     KNOWN_NON_PHASE_KEYS,
     PHASE_BY_NAME,
@@ -211,11 +216,13 @@ class RuleValidationError(Exception):
 
 # Keys whose string values need whitespace normalization for comparison.
 # Includes wirefilter expressions and CSP value strings (which the dumper
-# may reformat as multi-line block scalars).
+# may reformat as multi-line block scalars).  Generic across providers:
+# rules that carry none of these keys are never touched, so the set is
+# inert for providers without expression-shaped fields.
 _NORMALIZE_KEYS = frozenset({"expression", "counting_expression", "value"})
 
 
-def _normalize_value(v: object, *, key: str = "") -> object:
+def normalize_value(v: object, *, key: str = "") -> object:
     """Normalize a value for comparison.
 
     Only applies expression normalization to known expression keys.
@@ -223,6 +230,10 @@ def _normalize_value(v: object, *, key: str = "") -> object:
     if key in _NORMALIZE_KEYS and isinstance(v, str):
         return normalize_expression(v)
     return v
+
+
+# Deprecated alias for the public name above.
+_normalize_value = normalize_value
 
 
 def normalize_rule(rule: RuleDict) -> RuleDict:
@@ -235,7 +246,7 @@ def normalize_rule(rule: RuleDict) -> RuleDict:
             continue
         if k == "action_parameters" and isinstance(v, dict) and ap_excluded:
             v = {ak: av for ak, av in v.items() if ak not in ap_excluded}
-        result[k] = _normalize_value(v, key=k)
+        result[k] = normalize_value(v, key=k)
     return result
 
 
@@ -603,24 +614,6 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
             raise RuleValidationError(f"Duplicate ref {ref!r} in custom ruleset {label!r}")
         seen_refs.add(ref)
         _validate_octorules_meta(rule, ref)
-
-
-def _make_synthetic_phase(
-    prefix: str,
-    name: str,
-    provider_id: str,
-    *,
-    zone_level: bool = False,
-    account_level: bool = True,
-) -> Phase:
-    """Create a synthetic Phase for non-standard rulesets (custom, lists, page shield)."""
-    return Phase(
-        friendly_name=f"{prefix}:{name}",
-        provider_id=provider_id,
-        default_action=None,
-        zone_level=zone_level,
-        account_level=account_level,
-    )
 
 
 def diff_custom_ruleset(

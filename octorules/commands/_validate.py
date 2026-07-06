@@ -9,7 +9,7 @@ from octorules.commands._helpers import (
 )
 from octorules.config import Config
 from octorules.extensions import call_validate_extensions
-from octorules.phases import KNOWN_NON_PHASE_KEYS, get_phase
+from octorules.phases import KNOWN_NON_PHASE_KEYS, get_phase, iter_scoped_sections
 from octorules.planner import (
     RuleValidationError,
     prepare_desired_rules,
@@ -62,9 +62,11 @@ def cmd_validate(
                 msg = f"  {zone_name}/{friendly_name}: {e}"
                 errors.append(msg)
 
-        # Validate custom_rulesets entries
-        custom_rulesets = desired.get("custom_rulesets", [])
-        if isinstance(custom_rulesets, list):
+        # Validate custom_rulesets entries (plain and namespace-scoped)
+        for ns, custom_rulesets in iter_scoped_sections(desired, "custom_rulesets"):
+            if not isinstance(custom_rulesets, list):
+                continue
+            section_label = f"{ns}:custom_rulesets" if ns else "custom_rulesets"
             for i, entry in enumerate(custom_rulesets):
                 try:
                     validate_custom_ruleset(entry, i)
@@ -75,12 +77,14 @@ def cmd_validate(
                     lines.append(msg)
                     validated_count += 1
                 except RuleValidationError as e:
-                    msg = f"  {zone_name}/custom_rulesets: {e}"
+                    msg = f"  {zone_name}/{section_label}: {e}"
                     errors.append(msg)
 
-        # Validate lists entries
-        lists_entries = desired.get("lists")
-        if isinstance(lists_entries, list):
+        # Validate lists entries (plain and namespace-scoped)
+        for ns, lists_entries in iter_scoped_sections(desired, "lists"):
+            if not isinstance(lists_entries, list):
+                continue
+            section_label = f"{ns}:lists" if ns else "lists"
             for i, entry in enumerate(lists_entries):
                 try:
                     validate_list_entry(entry, i)
@@ -91,7 +95,7 @@ def cmd_validate(
                     lines.append(msg)
                     validated_count += 1
                 except RuleValidationError as e:
-                    msg = f"  {zone_name}/lists: {e}"
+                    msg = f"  {zone_name}/{section_label}: {e}"
                     errors.append(msg)
 
         # Validate extension entries (e.g. page_shield_policies)

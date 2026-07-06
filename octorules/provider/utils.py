@@ -210,3 +210,66 @@ def fetch_parallel(
             if pair is not None:
                 results[pair[0]] = pair[1]
     return results, failed
+
+
+# ---------------------------------------------------------------------------
+# Parallel apply orchestrator
+# ---------------------------------------------------------------------------
+def apply_parallel(
+    tasks: list[tuple[str, Callable[[], None]]],
+    max_workers: int = 0,
+) -> tuple[list[str], str | None]:
+    """Run independent API-call tasks, collecting successes.
+
+    Each task is ``(label, fn)`` where *fn()* performs the API call and raises
+    on failure.  Returns ``(successful_labels, first_error_message)``.
+
+    * ``ProviderAuthError`` -> cancel remaining, re-raise.
+    * First ``ProviderError`` / ``TimeoutError`` -> record
+      error; in the parallel path remaining in-flight tasks still finish so we
+      collect as many successes as possible.  In the sequential path we stop
+      immediately (matching the original serial behaviour).
+    """
+    if not tasks:
+        return [], None
+
+    def _run_one(label: str, fn: Callable[[], None]) -> tuple[str, str | None]:
+        try:
+            fn()
+        except ProviderAuthError:
+            raise
+        except ProviderError as e:
+            return label, format_api_error(e)
+        except TimeoutError as e:
+            return label, str(e)
+        return label, None
+
+    # Sequential fast-path (isinstance guard: test mocks may pass non-int)
+    if not isinstance(max_workers, int) or max_workers <= 1 or len(tasks) <= 1:
+        successes: list[str] = []
+        for label, fn in tasks:
+            label, error = _run_one(label, fn)
+            if error:
+                return successes, f"{label}: {error}"
+            successes.append(label)
+        return successes, None
+
+    # Parallel path
+    successes = []
+    first_error: str | None = None
+    workers = min(max_workers, len(tasks))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_run_one, lbl, fn): lbl for lbl, fn in tasks}
+        for future in as_completed(futures):
+            try:
+                label, error = future.result()
+            except ProviderAuthError:
+                for f in futures:
+                    f.cancel()
+                raise
+            if error:
+                if first_error is None:
+                    first_error = f"{label}: {error}"
+            else:
+                successes.append(label)
+    return successes, first_error

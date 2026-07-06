@@ -84,6 +84,10 @@ class LintContext:
 
     file_path: str = ""
     zone_name: str = ""
+    # Most-permissive default: lint assumes every plan-gated feature is
+    # available, so entitlement checks only fire when a stricter tier is
+    # set explicitly.  Semantics are generic (vocabulary is CF-derived);
+    # providers without tiered plans never read it.
     plan_tier: str = "enterprise"  # free, pro, business, enterprise
     severity_filter: Severity = Severity.INFO  # show this severity and above
     phase_filter: list[str] | None = None
@@ -294,6 +298,36 @@ def lint_zone_file(
     for plugin in get_registered_plugins():
         if target_plugins is not None and plugin.name not in target_plugins:
             continue
-        plugin.lint_fn(rules_data, ctx)
+        plugin.lint_fn(_plugin_view(rules_data, plugin.name), ctx)
 
     return ctx
+
+
+def _plugin_view(rules_data: dict[str, Any], plugin_name: str) -> dict[str, Any]:
+    """Unwrap a plugin's namespace-scoped core sections.
+
+    Multi-provider files store ``lists`` / ``custom_rulesets`` per
+    namespace (``"cloudflare:lists"``) while lint rules read the plain
+    keys — each plugin gets its own sections unwrapped and the other
+    namespaces' scoped sections hidden.  A plugin's name equals its
+    provider's zone-file namespace by the package-name convention.
+    Files without scoped sections (all single-provider files) pass
+    through unchanged.
+    """
+    from octorules.phases import NAMESPACE_CORE_SECTIONS, PROVIDER_NAMESPACES
+
+    scoped = [
+        k
+        for k in rules_data
+        if ":" in k
+        and k.partition(":")[0] in PROVIDER_NAMESPACES
+        and k.partition(":")[2] in NAMESPACE_CORE_SECTIONS
+    ]
+    if not scoped:
+        return rules_data
+    view = {k: v for k, v in rules_data.items() if k not in scoped}
+    for key in scoped:
+        ns, _, section = key.partition(":")
+        if ns == plugin_name:
+            view[section] = rules_data[key]
+    return view

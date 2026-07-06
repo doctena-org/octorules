@@ -11,7 +11,6 @@ from octorules.commands._helpers import (
     _future_result_or_default,
     _phase_filter_to_provider_ids,
 )
-from octorules.commands._providers import _get_zone_provider
 from octorules.config import Config, slugify
 from octorules.dumper import dump_zone_rules
 from octorules.extensions import call_dump_extensions
@@ -57,25 +56,34 @@ def cmd_dump(
 
     def _fetch_and_dump(zone_name: str) -> tuple[str, Path | None, str | None]:
         zone_cfg = config.zones[zone_name]
-        provider = _get_zone_provider(zone_cfg, providers)
-        scope = Scope(zone_id=zone_cfg.zone_id, label=zone_name)
 
-        try:
-            rules = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
-        except ProviderAuthError:
-            raise
-        except ProviderError as e:
-            return zone_name, None, _format_api_error(e)
-
-        # Call extension dump hooks (e.g. Page Shield)
-        ext_data = call_dump_extensions(scope, provider, out_dir)
+        # A multi-provider zone dumps every distinct provider class's
+        # sections into one nested file; same-class duplicate targets
+        # (multi-account) dump once, from the first target.
+        seen_classes: set[type] = set()
+        merged_rules: dict = {}
+        merged_ext: dict = {}
+        for target, provider in _providers_mod._get_zone_providers(zone_cfg, providers):
+            if type(provider) in seen_classes:
+                continue
+            seen_classes.add(type(provider))
+            scope = Scope(zone_id=zone_cfg.zone_id_for(target), label=zone_name)
+            try:
+                rules = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
+            except ProviderAuthError:
+                raise
+            except ProviderError as e:
+                return zone_name, None, _format_api_error(e)
+            merged_rules.update(rules)
+            # Call extension dump hooks (e.g. Page Shield)
+            merged_ext.update(call_dump_extensions(scope, provider, out_dir))
 
         result = dump_zone_rules(
             zone_name,
-            rules,
+            merged_rules,
             out_dir,
             lists_dir=lists_dir,
-            extra_sections=ext_data,
+            extra_sections=merged_ext or None,
         )
         return zone_name, result, None
 
