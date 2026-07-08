@@ -17,10 +17,14 @@ from octorules.expression import normalize_expression
 from octorules.extensions import make_synthetic_phase as _make_synthetic_phase
 from octorules.phases import (
     KNOWN_NON_PHASE_KEYS,
+    NAMESPACE_CORE_SECTIONS,
+    NAMESPACE_OF_KEY,
     PHASE_BY_NAME,
     PHASE_BY_PROVIDER_ID,
+    PROVIDER_NAMESPACES,
     RENAMED_PHASES,
     Phase,
+    display_phase_name,
     get_api_fields,
     get_phase,
     unknown_phase_message,
@@ -354,18 +358,46 @@ def validate_rules(rules: list[RuleDict], phase: Phase) -> None:
     """
     seen_refs: set[str] = set()
     for i, rule in enumerate(rules):
-        ctx = f"Rule at index {i} in {phase.friendly_name!r}"
+        ctx = f"Rule at index {i} in {display_phase_name(phase.friendly_name)!r}"
         ref = _require_string_field(rule, "ref", ctx)
         if ref in seen_refs:
-            raise RuleValidationError(f"Duplicate ref {ref!r} in {phase.friendly_name!r}")
+            raise RuleValidationError(
+                f"Duplicate ref {ref!r} in {display_phase_name(phase.friendly_name)!r}"
+            )
         seen_refs.add(ref)
         # Validate octorules metadata
         _validate_octorules_meta(rule, ref)
 
 
-def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
-    """Warn about unknown top-level keys in a zone rules file."""
-    # Warn about renamed phases (they still work via aliases but are deprecated)
+def check_zone_sections(
+    rules_data: dict,
+    zone_name: str,
+    *,
+    target_namespaces: frozenset[str] | None = None,
+    strict: bool = False,
+) -> None:
+    """Check the top-level sections of a zone rules file.
+
+    Renamed phases get a deprecation warning (they still work via
+    aliases).  Sections that would be skipped at plan time — unknown
+    keys, and sections owned by a provider namespace the zone does not
+    target — are warned about, or raise :class:`ConfigError` when
+    *strict* is true (``strict_sections``).
+
+    *target_namespaces* is the set of ``NAMESPACE`` values of the
+    zone's target providers.  ``None`` disables the namespace-coverage
+    check: it means at least one target declares no namespace, and such
+    a target sees every section.
+    """
+    from octorules.config import ConfigError
+
+    def _emit(message: str) -> None:
+        if strict:
+            raise ConfigError(f"{message} (strict_sections)")
+        log.warning("%s", message)
+
+    # Renamed phases still work via aliases — deprecation warning only,
+    # even in strict mode (the section IS managed).
     for key in sorted(set(rules_data.keys()) & RENAMED_PHASES.keys()):
         new_name = RENAMED_PHASES[key]
         log.warning(
@@ -375,10 +407,44 @@ def warn_unknown_phase_keys(rules_data: dict, zone_name: str) -> None:
             new_name,
             zone_name,
         )
-    # Warn about truly unknown phases
+
     unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys() - KNOWN_NON_PHASE_KEYS
     for key in sorted(unknown):
-        log.warning("%s in rules for %s", unknown_phase_message(key), zone_name)
+        ns, sep, member = key.partition(":")
+        if sep and ns in PROVIDER_NAMESPACES:
+            # Scoped key kept by normalize_zone_format: a core section
+            # for a namespace, or an unknown namespace member.
+            if target_namespaces is not None and ns not in target_namespaces:
+                _emit(
+                    f"Section {member!r} in rules for {zone_name} belongs to"
+                    f" provider namespace {ns!r}, which the zone does not"
+                    f" target — it will not be managed"
+                )
+            elif member not in NAMESPACE_CORE_SECTIONS:
+                _emit(
+                    f"Unknown key {member!r} in namespace {ns!r} in rules"
+                    f" for {zone_name} — it will not be managed"
+                )
+            continue
+        _emit(f"{unknown_phase_message(key)} in rules for {zone_name}")
+
+    if target_namespaces is None:
+        return
+    for key in sorted(rules_data.keys()):
+        owner = NAMESPACE_OF_KEY.get(key)
+        owner_ns = owner[0] if owner is not None else None
+        if owner_ns is None and ":" in key:
+            # Scoped core sections ("aws:lists") are registered known keys,
+            # so they bypass the unknown check above — resolve their owner.
+            key_ns, _, section = key.partition(":")
+            if key_ns in PROVIDER_NAMESPACES and section in NAMESPACE_CORE_SECTIONS:
+                owner_ns = key_ns
+        if owner_ns is not None and owner_ns not in target_namespaces:
+            _emit(
+                f"Section {display_phase_name(key)!r} in rules for {zone_name}"
+                f" belongs to provider namespace {owner_ns!r}, which the zone"
+                f" does not target — it will not be managed"
+            )
 
 
 def _rules_by_ref(rules: list[RuleDict]) -> dict[str, RuleDict]:
@@ -532,8 +598,6 @@ def plan_zone(
     """Compute the full plan for a zone across all phases."""
     zone_plan = ZonePlan(zone_name=zone_name)
 
-    warn_unknown_phase_keys(desired_rules_by_phase, zone_name)
-
     # Process phases that appear in desired config
     processed_provider_ids: set[str] = set()
     for friendly_name, desired_rules in desired_rules_by_phase.items():
@@ -573,6 +637,8 @@ def validate_custom_ruleset(entry: dict, index: int) -> None:
     ``capacity`` is required for creates (AWS WAF).
     """
     ctx = f"custom_rulesets[{index}]"
+    if not isinstance(entry, dict):
+        raise RuleValidationError(f"{ctx} must be a mapping (got {type(entry).__name__})")
     # id is optional: present = existing ruleset (update), absent = create
     rid = entry.get("id")
     if rid is not None:
@@ -870,7 +936,7 @@ def check_safety(
             update_phases.append(label)
 
     for pp in zone_plan.phase_plans:
-        _tally(pp.changes, pp.phase.friendly_name)
+        _tally(pp.changes, display_phase_name(pp.phase.friendly_name))
     for crp in zone_plan.custom_ruleset_plans:
         _tally(crp.changes, f"custom_ruleset:{crp.ruleset_name}", extra_deletes=int(crp.delete))
     for lp in zone_plan.list_plans:
@@ -1003,6 +1069,8 @@ def validate_list_entry(entry: dict, index: int) -> None:
     each item must have the field matching kind, no duplicate identity values.
     """
     ctx = f"lists[{index}]"
+    if not isinstance(entry, dict):
+        raise RuleValidationError(f"{ctx} must be a mapping (got {type(entry).__name__})")
     name = _require_string_field(entry, "name", ctx)
     ctx_name = f"{ctx} ({name!r})"
     kind = _require_string_field(entry, "kind", ctx_name)
@@ -1016,6 +1084,11 @@ def validate_list_entry(entry: dict, index: int) -> None:
         raise RuleValidationError(f"{ctx_name} 'items' must be a list")
     seen: set[str] = set()
     for i, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise RuleValidationError(
+                f"{ctx_name} item at index {i} must be a mapping"
+                f" (got {type(item).__name__} — e.g. '- ip: 10.0.0.0/8', not '- 10.0.0.0/8')"
+            )
         identity = _item_identity(item, kind)
         if not identity:
             raise RuleValidationError(

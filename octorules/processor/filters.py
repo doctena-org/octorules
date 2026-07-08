@@ -54,8 +54,24 @@ class PhaseFilter:
             raise ConfigError("PhaseFilter: 'include' and 'exclude' are mutually exclusive")
         if not include and not exclude:
             raise ConfigError("PhaseFilter: one of 'include' or 'exclude' is required")
-        self._include = set(include) if include else None
-        self._exclude = set(exclude) if exclude else None
+
+        def _resolve(names: list[str]) -> set[str]:
+            # Accept the dotted namespace form alongside the flat name.
+            from octorules.phases import PROVIDER_NAMESPACES
+
+            resolved = set()
+            for name in names:
+                if "." in name:
+                    ns, _, nested = name.partition(".")
+                    mapping = PROVIDER_NAMESPACES.get(ns)
+                    if mapping and nested in mapping:
+                        resolved.add(mapping[nested])
+                        continue
+                resolved.add(name)
+            return resolved
+
+        self._include = _resolve(include) if include else None
+        self._exclude = _resolve(exclude) if exclude else None
 
     def process_desired(self, zone_name: str, desired: dict, provider: "BaseProvider") -> dict:
         if self._include is not None:

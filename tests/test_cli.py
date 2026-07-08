@@ -219,6 +219,45 @@ class TestCmdPlan:
         assert result == 0
 
     @patch("octorules.commands._providers._init_providers")
+    def test_plan_strict_sections_aborts_before_api(self, mock_init_provs, sample_config):
+        """manager.strict_sections escalates an unknown section to ConfigError."""
+        mock_prov = MagicMock(spec=BaseProvider)
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("typo_rules:\n  - ref: r1\n    expression: 'true'\n")
+        sample_config.strict_sections = True
+        with pytest.raises(ConfigError, match="strict_sections"):
+            cmd_plan(sample_config, ["example.com"])
+        mock_prov.get_all_phase_rules.assert_not_called()
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_plan_zone_override_disables_strict(self, mock_init_provs, sample_config, caplog):
+        """zones.<name>.strict_sections: false wins over the manager flag."""
+        mock_prov = MagicMock(spec=BaseProvider)
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        mock_prov.get_all_phase_rules.return_value = {}
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("typo_rules:\n  - ref: r1\n    expression: 'true'\n")
+        sample_config.strict_sections = True
+        sample_config.zones["example.com"].strict_sections = False
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            result = cmd_plan(sample_config, ["example.com"])
+        assert result == 0
+        assert "typo_rules" in caplog.text
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_plan_strict_sections_unsupported_feature(self, mock_init_provs, sample_config):
+        """strict_sections also escalates the unsupported-feature skip."""
+        mock_prov = MagicMock(spec=BaseProvider)
+        mock_prov.SUPPORTS = frozenset()  # supports nothing
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
+        rules_file = sample_config.rules_dir / "example.com.yaml"
+        rules_file.write_text("lists:\n  - name: blocked\n    kind: ip\n    items: []\n")
+        sample_config.strict_sections = True
+        with pytest.raises(ConfigError, match="does not support"):
+            cmd_plan(sample_config, ["example.com"])
+
+    @patch("octorules.commands._providers._init_providers")
     def test_with_changes_returns_2(self, mock_init_provs, sample_config):
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
@@ -512,19 +551,21 @@ class TestCmdSync:
 
     @patch("octorules.commands._providers._init_providers")
     def test_sync_reads_rules_once(self, mock_init_provs, sample_config):
-        """Sync should read zone rules YAML only once, not re-read during apply."""
+        """Sync should parse the zone rules YAML only once, not re-read during apply."""
+        from octorules import config as config_module
+
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
 
-        with patch.object(
-            sample_config, "load_zone_rules", wraps=sample_config.load_zone_rules
-        ) as spy:
+        # load_zone_rules is called more than once (section check + planning)
+        # but the file must hit the YAML parser only once — the cache serves
+        # every later consumer, including the apply phase.
+        with patch.object(config_module, "_yaml_load", wraps=config_module._yaml_load) as spy:
             cmd_sync(sample_config, ["example.com"])
-            # Should only be called once (during planning), not again during apply
-            spy.assert_called_once_with("example.com")
+            spy.assert_called_once()
 
 
 class TestCmdDump:
@@ -3404,44 +3445,6 @@ class TestQuietFlag:
             with patch("octorules.commands._audit._ensure_provider_loaded"):
                 result = cmd_audit(sample_config, ["example.com"])
             assert result == 0
-            assert capsys.readouterr().out == ""
-        finally:
-            set_quiet(False)
-
-    def test_quiet_preserves_report_file_output(self, tmp_path, sample_config):
-        """--quiet does not suppress print_report when writing to a file handle."""
-        from octorules._context import set_quiet
-        from octorules.formatter import print_report
-
-        report_data = {
-            "zones": [],
-            "summary": {"total_zones": 0, "in_sync": 0, "drifted": 0},
-        }
-        out_file = tmp_path / "report.csv"
-
-        set_quiet(True)
-        try:
-            with open(out_file, "w") as fh:
-                print_report(report_data, file=fh, fmt="csv")
-            assert out_file.exists()
-            content = out_file.read_text()
-            assert "Zone" in content  # CSV header present
-        finally:
-            set_quiet(False)
-
-    def test_quiet_suppresses_report_stdout(self, capsys):
-        """--quiet suppresses print_report to stdout."""
-        from octorules._context import set_quiet
-        from octorules.formatter import print_report
-
-        report_data = {
-            "zones": [],
-            "summary": {"total_zones": 0, "in_sync": 0, "drifted": 0},
-        }
-
-        set_quiet(True)
-        try:
-            print_report(report_data, fmt="csv")
             assert capsys.readouterr().out == ""
         finally:
             set_quiet(False)

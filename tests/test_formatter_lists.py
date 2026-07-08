@@ -3,7 +3,6 @@
 import json
 
 from octorules.formatter import (
-    build_report_data,
     format_plan_html,
     format_plan_json,
     format_plan_markdown,
@@ -205,36 +204,3 @@ class TestListFormatting:
         assert "list: blocked_ips (ip)" in output
         assert "<table>" in output
         assert "Create" in output
-
-    def test_report_includes_lists(self):
-        lp = ListPlan(
-            list_name="blocked_ips",
-            list_id="list-123",
-            list_kind="ip",
-            changes=[RuleChange(ChangeType.ADD, "1.2.3.4", REDIRECT_PHASE)],
-            prepared_items=[{"ip": "1.2.3.4"}],
-        )
-        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
-        data = build_report_data([zp], {"test.com": {}}, {"test.com": {}})
-        zone = data["zones"][0]
-        list_phases = [p for p in zone["phases"] if p["phase"].startswith("list:")]
-        assert len(list_phases) == 1
-        assert list_phases[0]["phase"] == "list:blocked_ips"
-        assert list_phases[0]["status"] == "drifted"
-        assert list_phases[0]["adds"] == 1
-
-    def test_report_in_sync_list(self):
-        """List with no changes should show in_sync in report."""
-        lp = ListPlan(
-            list_name="stable_list",
-            list_id="list-999",
-            list_kind="ip",
-            changes=[],  # no changes
-            prepared_items=[{"ip": "1.1.1.1"}],
-        )
-        zp = ZonePlan(zone_name="test.com", list_plans=[lp])
-        data = build_report_data([zp], {"test.com": {}}, {"test.com": {}})
-        zone = data["zones"][0]
-        list_phases = [p for p in zone["phases"] if p["phase"].startswith("list:")]
-        assert len(list_phases) == 1
-        assert list_phases[0]["status"] == "in_sync"

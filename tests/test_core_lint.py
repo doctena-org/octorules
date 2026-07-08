@@ -1,8 +1,10 @@
-"""Tests for core lint rules (CORE002, CORE003, CORE004, CORE006)."""
+"""Tests for core lint rules (CORE002, CORE003, CORE004, CORE006, CORE011)."""
+
+import pytest
 
 from octorules.commands._lint import _core_lint_orphaned_files, _core_lint_zone
 from octorules.config import Config, ZoneConfig
-from octorules.linter.engine import LintContext, Severity
+from octorules.linter.engine import LintContext, LintResult, Severity
 from octorules.testing.lint import assert_lint, assert_no_lint
 
 
@@ -223,3 +225,332 @@ class TestCore002OrphanedFiles:
         )
         results = _core_lint_orphaned_files(config, ["example.com"])
         assert len(results) == 0
+
+
+# ---------------------------------------------------------------------------
+# CORE007: Phase section fails the plan-time prepare pipeline
+# ---------------------------------------------------------------------------
+class TestCore007PrepareFailures:
+    def test_missing_ref_errors(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {"redirect_rules": [{"expression": "true", "action": "redirect"}]}
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE007", severity=Severity.ERROR)
+        core007 = next(r for r in ctx.results if r.rule_id == "CORE007")
+        assert "ref" in core007.message
+        assert core007.phase == "redirect_rules"
+
+    def test_duplicate_ref_errors(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {
+            "redirect_rules": [
+                {"ref": "dup", "expression": "true", "action": "redirect"},
+                {"ref": "dup", "expression": "false", "action": "redirect"},
+            ]
+        }
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE007")
+        assert "dup" in next(r for r in ctx.results if r.rule_id == "CORE007").message
+
+    def test_valid_rules_pass(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {"redirect_rules": [{"ref": "r1", "expression": "true", "action": "redirect"}]}
+        _core_lint_zone(desired, ctx)
+        assert_no_lint(ctx, "CORE007")
+
+    def test_ignored_rules_still_validated(self):
+        """Ignored rules go through ref validation before being filtered."""
+        ctx = LintContext(zone_name="test.com")
+        desired = {
+            "redirect_rules": [
+                {"expression": "true", "action": "redirect", "octorules": {"ignored": True}}
+            ]
+        }
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE007")
+
+    def test_unknown_section_is_not_core007(self):
+        ctx = LintContext(zone_name="test.com")
+        _core_lint_zone({"typo_rules": [{"no": "ref"}]}, ctx)
+        assert_no_lint(ctx, "CORE007")
+
+    def test_prepare_does_not_mutate_input(self):
+        """Prepare hooks must not leak into the shared rules cache."""
+        rules = [{"ref": "r1", "expression": "true\n  and true", "action": "redirect"}]
+        desired = {"redirect_rules": rules}
+        before = repr(desired)
+        _core_lint_zone(desired, LintContext(zone_name="test.com"))
+        assert repr(desired) == before
+
+
+# ---------------------------------------------------------------------------
+# CORE008 / CORE009: malformed lists / custom_rulesets entries
+# ---------------------------------------------------------------------------
+class TestCore008ListsShape:
+    def test_missing_kind_errors(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {"lists": [{"name": "office", "items": []}]}
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE008", severity=Severity.ERROR)
+        assert "lists" in next(r for r in ctx.results if r.rule_id == "CORE008").message
+
+    def test_missing_name_errors(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {"lists": [{"kind": "ip", "items": []}]}
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE008")
+
+    def test_valid_entry_passes(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {"lists": [{"name": "office", "kind": "ip", "items": [{"ip": "10.0.0.1"}]}]}
+        _core_lint_zone(desired, ctx)
+        assert_no_lint(ctx, "CORE008")
+
+    def test_non_list_section_ignored(self):
+        ctx = LintContext(zone_name="test.com")
+        _core_lint_zone({"lists": "nonsense"}, ctx)
+        assert_no_lint(ctx, "CORE008")
+
+    def test_string_item_errors_instead_of_crashing(self):
+        """Bare-string items are a shape error, not an AttributeError."""
+        ctx = LintContext(zone_name="test.com")
+        desired = {"lists": [{"name": "office", "kind": "ip", "items": ["10.0.0.0/8"]}]}
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE008")
+        assert "mapping" in next(r for r in ctx.results if r.rule_id == "CORE008").message
+
+
+class TestCore009CustomRulesetsShape:
+    def test_missing_required_rule_field_errors(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {
+            "custom_rulesets": [
+                {
+                    "name": "Block attackers",
+                    "phase": "http_request_firewall_custom",
+                    "capacity": 10,
+                    "rules": [{"ref": "r1", "expression": "true"}],  # no action
+                }
+            ]
+        }
+        _core_lint_zone(desired, ctx)
+        assert_lint(ctx, "CORE009", severity=Severity.ERROR)
+
+    def test_valid_ruleset_passes(self):
+        ctx = LintContext(zone_name="test.com")
+        desired = {
+            "custom_rulesets": [
+                {
+                    "name": "Block attackers",
+                    "phase": "http_request_firewall_custom",
+                    "capacity": 10,
+                    "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
+                }
+            ]
+        }
+        _core_lint_zone(desired, ctx)
+        assert_no_lint(ctx, "CORE009")
+
+
+# ---------------------------------------------------------------------------
+# CORE010: extension section fails its registered validation hook
+# ---------------------------------------------------------------------------
+class TestCore010ExtensionValidation:
+    def test_extension_errors_surface_as_lint_results(self):
+        from octorules.extensions import (
+            register_validate_extension,
+            unregister_validate_extension,
+        )
+
+        def _hook(desired, zone_name, errors, lines):
+            if "broken_section" in desired:
+                errors.append(f"  {zone_name}/broken_section: entry 0 is invalid")
+
+        register_validate_extension(_hook)
+        try:
+            ctx = LintContext(zone_name="test.com")
+            _core_lint_zone({"broken_section": [{}]}, ctx)
+            assert_lint(ctx, "CORE010", severity=Severity.ERROR)
+            core010 = next(r for r in ctx.results if r.rule_id == "CORE010")
+            assert "broken_section" in core010.message
+        finally:
+            unregister_validate_extension(_hook)
+
+    def test_clean_extension_section_passes(self):
+        ctx = LintContext(zone_name="test.com")
+        _core_lint_zone({"redirect_rules": []}, ctx)
+        assert_no_lint(ctx, "CORE010")
+
+
+class TestCoreRuleSuppressions:
+    def test_core007_file_wide_suppression(self):
+        ctx = LintContext(zone_name="test.com", suppressions={"*": {"CORE007"}})
+        desired = {"redirect_rules": [{"expression": "true", "action": "redirect"}]}
+        _core_lint_zone(desired, ctx)
+        assert_no_lint(ctx, "CORE007")
+        assert ctx.suppressed_count == 1
+
+
+class TestCoreRuleRobustness:
+    """Lint is a reporting tool — hook/validator exceptions become findings."""
+
+    def test_core007_hook_exception_reported_not_raised(self):
+        from octorules.phases import Phase, register_phase, unregister_phase
+
+        def _boom(rule, phase):
+            raise AttributeError("hook exploded")
+
+        register_phase(
+            Phase(
+                friendly_name="boom_rules",
+                provider_id="test_boom_rules",
+                default_action="block",
+                prepare_rule=_boom,
+            )
+        )
+        try:
+            ctx = LintContext(zone_name="test.com")
+            _core_lint_zone(
+                {"boom_rules": [{"ref": "r", "expression": "true", "action": "block"}]}, ctx
+            )
+            assert_lint(ctx, "CORE007")
+            assert (
+                "AttributeError" in next(r for r in ctx.results if r.rule_id == "CORE007").message
+            )
+        finally:
+            unregister_phase("boom_rules")
+
+    def test_core008_non_mapping_entry_reported_not_raised(self):
+        ctx = LintContext(zone_name="test.com")
+        _core_lint_zone({"lists": [42]}, ctx)
+        assert_lint(ctx, "CORE008")
+        assert "mapping" in next(r for r in ctx.results if r.rule_id == "CORE008").message
+
+    def test_core009_non_mapping_entry_reported_not_raised(self):
+        ctx = LintContext(zone_name="test.com")
+        _core_lint_zone({"custom_rulesets": [42]}, ctx)
+        assert_lint(ctx, "CORE009")
+        assert "mapping" in next(r for r in ctx.results if r.rule_id == "CORE009").message
+
+    def test_core010_raising_hook_reported_not_raised(self):
+        from octorules.extensions import (
+            register_validate_extension,
+            unregister_validate_extension,
+        )
+
+        def _bad_hook(desired, zone_name, errors, lines):
+            raise RuntimeError("broken hook")
+
+        register_validate_extension(_bad_hook)
+        try:
+            ctx = LintContext(zone_name="test.com")
+            _core_lint_zone({"redirect_rules": []}, ctx)
+            assert_lint(ctx, "CORE010")
+            assert "RuntimeError" in next(r for r in ctx.results if r.rule_id == "CORE010").message
+        finally:
+            unregister_validate_extension(_bad_hook)
+
+
+# ---------------------------------------------------------------------------
+# CORE011: unknown zone-file section (would not be managed)
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def fake_namespace():
+    """Register a throwaway provider namespace and yield its name."""
+    from octorules.phases import register_namespace, unregister_namespace
+
+    register_namespace("core11prov", {"waf_custom_rules": "core11prov_waf_custom_rules"})
+    yield "core11prov"
+    unregister_namespace("core11prov")
+
+
+class TestCore011UnknownSection:
+    """Sections plan/sync skip outright must fail lint on their own.
+
+    Provider plugins cannot own this check: ``cmd_lint`` routes each file
+    to its target provider's plugin only, and four of the five providers
+    ship no file-level unknown-section rule — so a typo'd section used to
+    lint completely clean.
+    """
+
+    def test_unknown_bare_key_is_error(self):
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({"totally_bogus_section": [{"ref": "r1"}]}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1, severity=Severity.ERROR)
+        assert "totally_bogus_section" in found[0].message
+        assert "will not be managed" in found[0].message
+
+    def test_near_miss_key_suggests_the_real_phase(self):
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({"redirect_rulez": []}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1, severity=Severity.ERROR)
+        assert "redirect_rules" in found[0].suggestion
+
+    def test_known_phase_and_non_phase_keys_are_clean(self):
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone(
+            {"redirect_rules": [{"ref": "r1"}], "lists": [], "custom_rulesets": []}, ctx
+        )
+        assert_no_lint(ctx, "CORE011")
+
+    def test_registered_namespace_and_scoped_core_sections_are_clean(self, fake_namespace):
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone(
+            {fake_namespace: {}, f"{fake_namespace}:lists": [], "redirect_rules": []}, ctx
+        )
+        assert_no_lint(ctx, "CORE011")
+
+    def test_unknown_namespace_member_reports_the_dotted_spelling(self, fake_namespace):
+        """The author wrote a nested member, so the diagnostic must echo
+        the nesting rather than the internal ``ns:member`` scoped key."""
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({f"{fake_namespace}:waf_custom_rulez": []}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1, severity=Severity.ERROR)
+        assert f"'{fake_namespace}.waf_custom_rulez'" in found[0].message
+        assert f"{fake_namespace}:" not in found[0].message
+        assert f"not a section of the '{fake_namespace}' namespace" in found[0].message
+
+    def test_mistyped_namespace_member_suggests_a_member(self, fake_namespace):
+        """Suggestions must come from the namespace's own member names.
+        Matching a nested member against the flat registry would miss for
+        every provider whose nested spelling drops a flat prefix."""
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({f"{fake_namespace}:waf_custom_rulez": []}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1)
+        assert f"Did you mean '{fake_namespace}.waf_custom_rules'?" in found[0].message
+        assert found[0].suggestion == f"Rename to '{fake_namespace}.waf_custom_rules'"
+
+    def test_mistyped_scoped_core_section_suggests_it(self, fake_namespace):
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({f"{fake_namespace}:listz": []}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1)
+        assert f"Did you mean '{fake_namespace}.lists'?" in found[0].message
+
+    def test_defers_to_a_plugin_that_already_reported_the_key(self):
+        """CF010 names the exact replacement for a removed alias; a generic
+        CORE011 on the same key would be a second error for one defect."""
+        ctx = LintContext(zone_name="example.com")
+        ctx.add(
+            LintResult(
+                rule_id="CF010",
+                severity=Severity.ERROR,
+                message="Phase 'waf_managed_exceptions' has been renamed",
+                phase="waf_managed_exceptions",
+            )
+        )
+        _core_lint_zone({"waf_managed_exceptions": []}, ctx)
+        assert_no_lint(ctx, "CORE011")
+
+    def test_still_fires_for_keys_no_plugin_claimed(self):
+        ctx = LintContext(zone_name="example.com")
+        ctx.add(
+            LintResult(
+                rule_id="CF010",
+                severity=Severity.ERROR,
+                message="unrelated",
+                phase="some_other_key",
+            )
+        )
+        _core_lint_zone({"some_other_key": [], "an_unclaimed_typo": []}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1)
+        assert "an_unclaimed_typo" in found[0].message

@@ -309,14 +309,17 @@ class ZoneConfig:
     # single-target consumers.
     zone_ids: dict[str, str] = field(default_factory=dict)
     # Per-target provider-resource NAME overrides — e.g. the AWS Web ACL
-    # guarding doctena.com can't be named "doctena.com":
-    #   zone_names: {aws: doctena-com-alb}
+    # guarding example.com can't be named "example.com" (Web ACL names are
+    # restricted to [A-Za-z0-9_-]):
+    #   zone_names: {aws: example-com-alb}
     zone_names: dict[str, str] = field(default_factory=dict)
     sources: list[str] = field(default_factory=list)
     targets: list[str] = field(default_factory=list)
     processors: list[str] = field(default_factory=list)
     always_dry_run: bool = False
     allow_unmanaged: bool = False
+    # Per-zone override of manager.strict_sections; None inherits.
+    strict_sections: bool | None = None
     delete_threshold: float = 30.0
     update_threshold: float = 30.0
     min_existing: int = 3
@@ -410,6 +413,17 @@ def _parse_zone(
             )
         zone_names[target_key] = resource_name
 
+    # A template expands to every discovered zone, so one provider-resource
+    # name would make all of them drive the same resource — each zone's plan
+    # would then render the others' rules as deletions.  Reject rather than
+    # silently drop it at expansion time.
+    if zone_name == "*" and zone_names:
+        raise ConfigError(
+            f"'zones.*.zone_names' is not supported on a zone template — a"
+            f" provider-resource name cannot be shared across discovered zones;"
+            f" set zone_names on each explicit zone{zd_ctx}"
+        )
+
     raw_dry_run = zone_data.get("always_dry_run", False)
     if not isinstance(raw_dry_run, bool):
         raise ConfigError(
@@ -425,6 +439,14 @@ def _parse_zone(
             f" (got {type(raw_unmanaged).__name__}){zd_ctx}"
         )
     allow_unmanaged = raw_unmanaged
+
+    raw_strict = zone_data.get("strict_sections")
+    if raw_strict is not None and not isinstance(raw_strict, bool):
+        raise ConfigError(
+            f"'zones.{zone_name}.strict_sections' must be a boolean"
+            f" (got {type(raw_strict).__name__}){zd_ctx}"
+        )
+    strict_sections = raw_strict
 
     # Parse and validate processors list
     raw_processors = zone_data.get("processors", [])
@@ -490,6 +512,7 @@ def _parse_zone(
         "always_dry_run",
         "allow_unmanaged",
         "safety",
+        "strict_sections",
         "zone_id",
         "zone_names",
     }
@@ -505,6 +528,7 @@ def _parse_zone(
         processors=processors,
         always_dry_run=always_dry_run,
         allow_unmanaged=allow_unmanaged,
+        strict_sections=strict_sections,
         delete_threshold=delete_threshold,
         update_threshold=update_threshold,
         min_existing=min_existing,
@@ -536,6 +560,8 @@ class Config:
     lists_dir: Path | None = None
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
     max_workers: int = 1
+    # Escalate skipped zone-file sections from warnings to ConfigError.
+    strict_sections: bool = False
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     processors: dict[str, ProcessorConfig] = field(default_factory=dict)
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
@@ -550,6 +576,13 @@ class Config:
     def __post_init__(self) -> None:
         if self.lists_dir is None:
             self.lists_dir = Path(self.rules_dir) / "custom_lists"
+
+    def strict_sections_for(self, zone_name: str) -> bool:
+        """Effective ``strict_sections`` for *zone_name* (zone override wins)."""
+        zone = self.zones.get(zone_name)
+        if zone is not None and zone.strict_sections is not None:
+            return zone.strict_sections
+        return self.strict_sections
 
     def expand_templates(self, discovered: dict[str, list[str]]) -> None:
         """Expand zone templates with discovered zone names.
@@ -573,6 +606,7 @@ class Config:
                         processors=list(template.processors),
                         always_dry_run=template.always_dry_run,
                         allow_unmanaged=template.allow_unmanaged,
+                        strict_sections=template.strict_sections,
                         delete_threshold=template.delete_threshold,
                         update_threshold=template.update_threshold,
                         min_existing=template.min_existing,
@@ -858,6 +892,14 @@ class Config:
         if max_workers < 1:
             raise ConfigError(f"'manager.max_workers' must be >= 1{mgr_ctx}")
 
+        raw_strict = manager_section.get("strict_sections", False)
+        if not isinstance(raw_strict, bool):
+            raise ConfigError(
+                f"'manager.strict_sections' must be a boolean"
+                f" (got {type(raw_strict).__name__}){mgr_ctx}"
+            )
+        strict_sections = raw_strict
+
         raw_plan_outputs = manager_section.get("plan_outputs")
         if raw_plan_outputs is not None:
             if not isinstance(raw_plan_outputs, dict):
@@ -891,6 +933,7 @@ class Config:
             lists_dir=lists_dir,
             zones=zones,
             max_workers=max_workers,
+            strict_sections=strict_sections,
             providers=providers,
             processors=processors,
             plan_outputs=plan_outputs,

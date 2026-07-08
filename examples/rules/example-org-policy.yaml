@@ -1,4 +1,5 @@
-# Google Cloud Armor rules for security policy "my-security-policy"
+# Google Cloud Armor rules for security policy "example-org-policy",
+# guarding the example.org load balancer
 #
 # Cloud Armor uses CEL expressions and priority-based rule ordering.
 # The "ref" field maps to the rule priority (as a string).

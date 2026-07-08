@@ -70,7 +70,7 @@ class TestCleanRule:
     def test_multiline_expression_uses_block_style(self, tmp_path):
         """Multiline expressions with trailing spaces must use YAML block style."""
         expr = (
-            '(http.host eq "dev.doctena.fr" and \n'
+            '(http.host eq "dev.example.com" and \n'
             '        not http.request.uri.path contains "." and \n'
             '        not starts_with(http.request.uri.path, "/api"))'
         )
@@ -89,12 +89,12 @@ class TestCleanRule:
         # Must use block style (|-), not double-quoted with \n escapes
         assert "|-" in text
         assert "\\n" not in text
-        assert '"dev.doctena.fr"' in text
+        assert '"dev.example.com"' in text
         # Trailing whitespace stripped, round-trip preserves meaning
         data = yaml.safe_load(text)
         dumped_expr = data["url_rewrite_rules"][0]["expression"]
         assert "\n" in dumped_expr
-        assert "dev.doctena.fr" in dumped_expr
+        assert "dev.example.com" in dumped_expr
         # No trailing spaces on any line
         for line in dumped_expr.split("\n"):
             assert line == line.rstrip()
@@ -827,7 +827,7 @@ class TestRoundTripResilience:
         from octorules.planner import plan_zone
 
         expr_with_trailing = (
-            '(http.host eq "dev.doctena.fr" and \n'
+            '(http.host eq "dev.example.com" and \n'
             '        not http.request.uri.path contains "." and \n'
             '        not starts_with(http.request.uri.path, "/api"))'
         )

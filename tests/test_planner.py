@@ -5,8 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from octorules.config import ZoneConfig
-from octorules.phases import get_phase
+from octorules.config import ConfigError, ZoneConfig
+from octorules.phases import (
+    get_phase,
+    register_namespace,
+    register_non_phase_key,
+    unregister_namespace,
+    unregister_non_phase_key,
+)
 from octorules.planner import (
     ChangeType,
     PhasePlan,
@@ -18,6 +24,7 @@ from octorules.planner import (
     _rule_matches_target,
     _rules_by_ref,
     check_safety,
+    check_zone_sections,
     compute_checksum,
     diff_custom_ruleset,
     diff_phase,
@@ -27,7 +34,6 @@ from octorules.planner import (
     prepare_desired_rules,
     validate_custom_ruleset,
     validate_rules,
-    warn_unknown_phase_keys,
 )
 
 REDIRECT_PHASE = get_phase("redirect_rules")
@@ -136,48 +142,48 @@ class TestValidateRules:
         validate_rules(rules, REDIRECT_PHASE)  # Should not raise
 
 
-class TestWarnUnknownPhaseKeys:
+class TestCheckZoneSections:
     def test_no_warnings_for_valid_keys(self, caplog):
         rules_data = {"redirect_rules": [], "cache_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert caplog.text == ""
 
     def test_warns_on_unknown_key(self, caplog):
         rules_data = {"redirect_rules": [], "typo_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert "typo_rules" in caplog.text
         assert "example.com" in caplog.text
 
     def test_multiple_unknown_keys_sorted(self, caplog):
         rules_data = {"zzz_rules": [], "aaa_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "test.com")
+            check_zone_sections(rules_data, "test.com")
         assert caplog.text.index("aaa_rules") < caplog.text.index("zzz_rules")
 
     def test_empty_data(self, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys({}, "example.com")
+            check_zone_sections({}, "example.com")
         assert caplog.text == ""
 
     def test_close_typo_suggests(self, caplog):
         rules_data = {"redirect_rule": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert "Did you mean" in caplog.text
         assert "redirect_rules" in caplog.text
 
     def test_no_match_lists_valid(self, caplog):
         rules_data = {"zzz_totally_wrong": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert "Valid phases:" in caplog.text
 
     def test_provider_id_suggests_friendly_name(self, caplog):
         rules_data = {"http_request_dynamic_redirect": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert "Did you mean" in caplog.text
         assert "redirect_rules" in caplog.text
 
@@ -187,7 +193,7 @@ class TestWarnUnknownPhaseKeys:
             "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}]
         }
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert "renamed" in caplog.text
         assert "waf_managed_rules" in caplog.text
         assert "deprecated" in caplog.text
@@ -196,8 +202,114 @@ class TestWarnUnknownPhaseKeys:
         """Renamed phase should NOT show generic 'Unknown phase' message."""
         rules_data = {"waf_managed_exceptions": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert "Unknown phase" not in caplog.text
+
+
+class TestCheckZoneSectionsStrict:
+    def test_unknown_key_raises(self):
+        with pytest.raises(ConfigError, match="strict_sections"):
+            check_zone_sections({"typo_rules": []}, "example.com", strict=True)
+
+    def test_error_names_the_key(self):
+        with pytest.raises(ConfigError, match="typo_rules"):
+            check_zone_sections({"typo_rules": []}, "example.com", strict=True)
+
+    def test_valid_keys_pass(self):
+        check_zone_sections(
+            {"redirect_rules": [], "lists": [], "custom_rulesets": []},
+            "example.com",
+            strict=True,
+        )
+
+    def test_renamed_phase_stays_a_warning(self, caplog):
+        """Aliases still work — the section IS managed, so strict must not raise."""
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections({"waf_managed_exceptions": []}, "example.com", strict=True)
+        assert "renamed" in caplog.text
+
+
+@pytest.fixture
+def alpha_namespace():
+    register_namespace("alphaprov", {"shield": "alpha_shield"})
+    register_non_phase_key("alpha_shield")
+    yield
+    unregister_non_phase_key("alpha_shield")
+    unregister_namespace("alphaprov")
+
+
+class TestCheckZoneSectionsNamespaces:
+    def test_non_target_owned_section_warns(self, alpha_namespace, caplog):
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections(
+                {"alpha_shield": {}},
+                "example.com",
+                target_namespaces=frozenset({"betaprov"}),
+            )
+        assert "alphaprov" in caplog.text
+        assert "will not be managed" in caplog.text
+
+    def test_target_owned_section_is_silent(self, alpha_namespace, caplog):
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections(
+                {"alpha_shield": {}},
+                "example.com",
+                target_namespaces=frozenset({"alphaprov"}),
+            )
+        assert caplog.text == ""
+
+    def test_no_namespace_info_disables_coverage_check(self, alpha_namespace, caplog):
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections({"alpha_shield": {}}, "example.com")
+        assert caplog.text == ""
+
+    def test_non_target_owned_section_strict_raises(self, alpha_namespace):
+        with pytest.raises(ConfigError, match="alphaprov"):
+            check_zone_sections(
+                {"alpha_shield": {}},
+                "example.com",
+                target_namespaces=frozenset({"betaprov"}),
+                strict=True,
+            )
+
+    def test_scoped_core_section_non_target_warns(self, alpha_namespace, caplog):
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections(
+                {"alphaprov:lists": []},
+                "example.com",
+                target_namespaces=frozenset({"betaprov"}),
+            )
+        assert "alphaprov.lists" in caplog.text
+        assert "will not be managed" in caplog.text
+
+    def test_scoped_core_section_target_is_silent(self, alpha_namespace, caplog):
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections(
+                {"alphaprov:lists": []},
+                "example.com",
+                target_namespaces=frozenset({"alphaprov"}),
+            )
+        assert caplog.text == ""
+
+    def test_unknown_namespace_member_warns(self, alpha_namespace, caplog):
+        """normalize_zone_format keeps unknown members as scoped keys."""
+        with caplog.at_level(logging.WARNING, logger="octorules"):
+            check_zone_sections(
+                {"alphaprov:weird": []},
+                "example.com",
+                target_namespaces=frozenset({"alphaprov"}),
+            )
+        assert "weird" in caplog.text
+        assert "alphaprov" in caplog.text
+
+    def test_unknown_namespace_member_strict_raises(self, alpha_namespace):
+        with pytest.raises(ConfigError, match="weird"):
+            check_zone_sections(
+                {"alphaprov:weird": []},
+                "example.com",
+                target_namespaces=frozenset({"alphaprov"}),
+                strict=True,
+            )
 
 
 class TestPrepareDesiredRules:
@@ -2473,3 +2585,30 @@ class TestRequireField:
         from octorules.planner import _require_string_field
 
         assert _require_string_field({"name": "ok"}, "name", "context") == "ok"
+
+
+class TestCoreSectionsAreAlwaysKnown:
+    """``lists`` / ``custom_rulesets`` are core-owned section names.
+
+    Only Cloudflare registered them as non-phase keys, so on aws (which
+    registers ``custom_rulesets`` alone), azure, google and bunny a plain
+    ``lists:`` section was treated as an unknown phase — a warning at
+    plan time and, under ``strict_sections: true``, a hard abort on a
+    perfectly valid file.  Whether a provider can *manage* them is a
+    separate question, answered by the SUPPORTS_* capability check.
+    """
+
+    def test_plain_core_sections_are_not_unknown(self):
+        from octorules.phases import KNOWN_NON_PHASE_KEYS, NAMESPACE_CORE_SECTIONS
+
+        assert NAMESPACE_CORE_SECTIONS <= KNOWN_NON_PHASE_KEYS
+
+    def test_strict_mode_does_not_abort_on_plain_core_sections(self):
+        # No provider registers plain "lists"; strict must still accept it.
+        check_zone_sections({"lists": [], "custom_rulesets": []}, "example.com", strict=True)
+
+    def test_unknown_section_still_aborts_in_strict_mode(self):
+        from octorules.config import ConfigError
+
+        with pytest.raises(ConfigError):
+            check_zone_sections({"listz": []}, "example.com", strict=True)

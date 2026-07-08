@@ -180,9 +180,21 @@ def unregister_phase(friendly_name: str) -> None:
 # Providers register their keys via ``register_non_phase_key()``.
 # ---------------------------------------------------------------------------
 
+# Core sections a namespace block may carry without an explicit mapping.
+# Core owns them outright — it ships their validators (CORE008/CORE009,
+# ``validate_list_entry``, ``validate_custom_ruleset``) and the
+# ``lists_dir`` config — so they are valid section *names* everywhere,
+# whether or not a provider happens to register them.  Whether a given
+# provider can actually manage them is a separate question, answered by
+# the SUPPORTS_LISTS / SUPPORTS_CUSTOM_RULESETS capability check at plan
+# time; treating them as unknown sections here made a plain ``lists:``
+# section abort plan under ``strict_sections`` on every provider that
+# didn't register it (aws, azure, google, bunny).
+NAMESPACE_CORE_SECTIONS = frozenset({"lists", "custom_rulesets"})
+
 # Mutable set — mutated **in-place** so that code which did
 # ``from octorules.phases import KNOWN_NON_PHASE_KEYS`` sees updates.
-KNOWN_NON_PHASE_KEYS: set[str] = set()
+KNOWN_NON_PHASE_KEYS: set[str] = set(NAMESPACE_CORE_SECTIONS)
 
 
 def register_non_phase_key(key: str) -> None:
@@ -213,9 +225,6 @@ PROVIDER_NAMESPACES: dict[str, dict[str, str]] = {}
 # flat_key -> (namespace, nested_key) — derived, for dump grouping and
 # key-ownership checks.  Mutated in place like the other derived maps.
 NAMESPACE_OF_KEY: dict[str, tuple[str, str]] = {}
-
-# Core sections a namespace block may carry without an explicit mapping.
-NAMESPACE_CORE_SECTIONS = frozenset({"lists", "custom_rulesets"})
 
 
 def register_namespace(namespace: str, keys: dict[str, str]) -> None:
@@ -352,12 +361,54 @@ def suggest_phase(name: str) -> str | None:
     return matches[0] if matches else None
 
 
+def suggest_namespace_member(namespace: str, member: str) -> str | None:
+    """Closest nested member name within *namespace*, or None.
+
+    Separate from :func:`suggest_phase` because the candidate set differs:
+    nested member names are not the flat friendly names (google nests
+    ``custom_rules`` for flat ``gcloud_armor_custom_rules``), so matching
+    a mistyped member against the flat registry would miss for every
+    provider whose nested spelling drops a flat prefix.
+    """
+    mapping = PROVIDER_NAMESPACES.get(namespace)
+    if not mapping:
+        return None
+    candidates = sorted(set(mapping) | NAMESPACE_CORE_SECTIONS)
+    matches = get_close_matches(member, candidates, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def display_phase_name(name: str) -> str:
+    """Human-facing spelling of a phase or section key.
+
+    Namespace-owned keys render in the dotted form
+    (``bunny_waf_custom_rules`` → ``bunny.waf_custom_rules``).  Any key
+    scoped to a registered namespace renders dotted too — core sections
+    (``cloudflare:lists`` → ``cloudflare.lists``) and unknown members
+    alike (``cloudflare:waf_managed_exceptionz`` →
+    ``cloudflare.waf_managed_exceptionz``), so diagnostics echo the
+    nesting the author actually wrote instead of the internal scoped
+    spelling.  Everything else — bare phases, synthetic names,
+    pseudo-refs such as ``list:<ns>:<name>`` — is returned unchanged.
+    Display only: registry keys, zone-data keys, and checksums keep the
+    flat spelling.
+    """
+    owner = NAMESPACE_OF_KEY.get(name)
+    if owner is not None:
+        return f"{owner[0]}.{owner[1]}"
+    ns, sep, member = name.partition(":")
+    if sep and ns in PROVIDER_NAMESPACES:
+        return f"{ns}.{member}"
+    return name
+
+
 def unknown_phase_message(name: str) -> str:
     """Build a human-readable error message for an unknown phase name."""
     hint = suggest_phase(name)
     if hint:
-        return f"Unknown phase {name!r}. Did you mean {hint!r}?"
-    return f"Unknown phase {name!r}. Valid phases: {', '.join(ALL_FRIENDLY_NAMES)}"
+        return f"Unknown phase {name!r}. Did you mean {display_phase_name(hint)!r}?"
+    valid = ", ".join(sorted(display_phase_name(n) for n in ALL_FRIENDLY_NAMES))
+    return f"Unknown phase {name!r}. Valid phases: {valid}"
 
 
 def get_phase(friendly_name: str) -> Phase:

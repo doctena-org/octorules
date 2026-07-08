@@ -58,7 +58,7 @@ zones:
 
 The `env/` prefix resolves values from environment variables at runtime — keep secrets out of YAML. This is the built-in secret handler; see [Secret handlers](#secret-handlers) for pluggable backends (Vault, AWS Secrets Manager, etc.).
 
-> **Examples** — the [`examples/`](examples/) directory here contains the multi-provider orchestration config (`config.yaml`) plus representative rules under `rules/multi/`. **Complete, per-phase single-provider examples live in each provider package's own `examples/` directory** — see [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare/tree/main/examples), [octorules-aws](https://github.com/doctena-org/octorules-aws/tree/main/examples), [octorules-azure](https://github.com/doctena-org/octorules-azure/tree/main/examples), [octorules-google](https://github.com/doctena-org/octorules-google/tree/main/examples), and [octorules-bunny](https://github.com/doctena-org/octorules-bunny/tree/main/examples). Start there rather than writing config from scratch.
+> **Examples** — the [`examples/`](examples/) directory here contains the multi-provider orchestration config (`config.yaml`) plus representative rules under `rules/`. **Complete, per-phase single-provider examples live in each provider package's own `examples/` directory** — see [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare/tree/main/examples), [octorules-aws](https://github.com/doctena-org/octorules-aws/tree/main/examples), [octorules-azure](https://github.com/doctena-org/octorules-azure/tree/main/examples), [octorules-google](https://github.com/doctena-org/octorules-google/tree/main/examples), and [octorules-bunny](https://github.com/doctena-org/octorules-bunny/tree/main/examples). Start there rather than writing config from scratch.
 
 All keys under a provider section (except `class` and `safety`) are forwarded as keyword arguments to the provider constructor — octodns-style passthrough. See each provider's documentation for available settings.
 
@@ -70,7 +70,7 @@ To manage rules across multiple providers, add each provider as a named section 
 
 A zone can target multiple providers. List multiple names under `targets:` — octorules plans and applies independently for each. Two modes:
 
-- **Same class** (e.g. two Cloudflare accounts, or prod + staging): the same rules go to every target, with per-rule `octorules: {included/excluded}` steering. Requires explicit `class:` since auto-discovery can't distinguish two instances of the same provider.
+- **Same class** (e.g. two Cloudflare accounts): the same rules go to every target, with per-rule `octorules: {included/excluded}` steering. Requires explicit `class:` since auto-discovery can't distinguish two instances of the same provider.
 - **Different classes** (e.g. `targets: [cloudflare, aws]` — an edge WAF and an origin WAF for the same domain): the zone file carries one namespace block per provider, and each target plans, syncs, and resolves its own zone identity from its own sections. Every bundled provider supports this; a custom provider class must declare a zone-file `NAMESPACE`. Use `zone_names:` when a provider names the underlying resource differently (see [Defining rules](#defining-rules)).
 
 See [`examples/config.yaml`](examples/config.yaml) for a commented example.
@@ -96,8 +96,9 @@ zones:
 ```
 
 ```yaml
-# rules/example.com.yaml
-redirect_rules: !include shared/redirects.yaml
+# rules/example-org-policy.yaml
+google:
+  redirect_rules: !include shared/redirects.yaml
 ```
 
 Includes resolve relative to the file containing the directive. Nested includes and circular include detection are supported. Includes are confined to the directory tree of the parent file.
@@ -109,12 +110,12 @@ Create a rules file for each zone. The filename must match the zone name used as
 | Provider | Zone concept | Example zone name | Rules file |
 |---|---|---|---|
 | Cloudflare | DNS domain | `example.com` | `<rules-dir>/example.com.yaml` |
-| AWS WAF | Web ACL name | `my-web-acl` | `<rules-dir>/my-web-acl.yaml` |
-| Google Cloud Armor | Security policy name | `my-security-policy` | `<rules-dir>/my-security-policy.yaml` |
-| Azure WAF | WAF policy name | `my-waf-policy` | `<rules-dir>/my-waf-policy.yaml` |
-| Bunny Shield | Pull zone name | `my-pull-zone` | `<rules-dir>/my-pull-zone.yaml` |
+| AWS WAF | Web ACL name | `example-com-alb` | `<rules-dir>/example-com-alb.yaml` |
+| Google Cloud Armor | Security policy name | `example-org-policy` | `<rules-dir>/example-org-policy.yaml` |
+| Azure WAF | WAF policy name | `apiexamplewaf` | `<rules-dir>/apiexamplewaf.yaml` |
+| Bunny Shield | Pull zone name | `static-example-com` | `<rules-dir>/static-example-com.yaml` |
 
-The mapping is: `zones.<name>` in `config.yaml` → `<rules-dir>/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID. `<rules-dir>` defaults to `./rules/` and is set under `providers.rules.directory` — point it wherever each customer's rules live (the [`examples/`](examples/) directory here ships `rules/multi/` for the multi-provider `config.yaml`; each provider package ships its own single-provider example under its `examples/` directory).
+The mapping is: `zones.<name>` in `config.yaml` → `<rules-dir>/<name>.yaml` on disk → `resolve_zone_id("<name>")` at runtime, which resolves the name to the provider's internal ID. `<rules-dir>` defaults to `./rules/` and is set under `providers.rules.directory` — point it wherever each customer's rules live (the [`examples/`](examples/) directory here ships `rules/` for the multi-provider `config.yaml`; each provider package ships its own single-provider example under its `examples/` directory).
 
 Each rule requires a **`ref`** (stable identifier, unique within a phase) and an **`expression`** (provider-specific filter expression). Optional fields include `description`, `enabled` (defaults to `true`), `action`, and `action_parameters`. Phase names, available actions, and expression syntax are provider-specific — see your provider's documentation and that provider package's own `examples/` directory for complete per-provider examples.
 
@@ -130,7 +131,7 @@ cloudflare:
     enable_js: false
 ```
 
-The flat spelling (provider sections as top-level keys) still loads but is deprecated. A zone may target providers of **different classes** (`targets: [cloudflare, aws]`) — its file then carries one namespace block per provider, and each target plans, syncs, and resolves its own zone identity independently (layered WAF stacks: e.g. an edge WAF and an origin WAF for the same domain). When the providers name the underlying resource differently, map it per target with `zone_names`:
+A zone may target providers of **different classes** (`targets: [cloudflare, aws]`) — its file then carries one namespace block per provider, and each target plans, syncs, and resolves its own zone identity independently (layered WAF stacks: e.g. an edge WAF and an origin WAF for the same domain). When the providers name the underlying resource differently, map it per target with `zone_names`:
 
 ```yaml
 zones:
@@ -149,13 +150,18 @@ Rules support an `octorules:` key for per-rule metadata that controls octorules 
 **Ignoring rules** — keep a rule in YAML (for documentation, version control, review) while skipping it during plan/sync:
 
 ```yaml
-waf_custom_rules:
-  - ref: experimental-geo-block
-    description: "Testing geo-block — not ready for production"
-    expression: 'ip.geoip.country in {"RU" "CN"}'
-    action: block
-    octorules:
-      ignored: true
+bunny:
+  waf_custom_rules:
+    - ref: "Block scrapers"
+      description: "Testing bot heuristics — not ready for production"
+      action: block
+      severity: error
+      conditions:
+        - variable: user_agent
+          operator: contains
+          value: scraper
+      octorules:
+        ignored: true
 ```
 
 Ignored rules are still validated and linted (catch errors before un-ignoring), but are invisible to the planner on both sides — they produce no ADD/MODIFY/REMOVE changes, and if the rule exists upstream it will not be deleted or overwritten. This matches the octodns convention: the rule can be edited manually on the provider without octorules interfering.
@@ -163,25 +169,26 @@ Ignored rules are still validated and linted (catch errors before un-ignoring), 
 **Targeting providers** — in multi-provider or multi-target setups, restrict a rule to specific targets:
 
 ```yaml
-waf_custom_rules:
-  # Only deploy to Cloudflare
-  - ref: cf-specific-rule
-    expression: 'http.request.uri.path matches "^/api/.*"'
-    action: block
-    octorules:
-      included:
-        - cloudflare
+cloudflare:
+  waf_custom_rules:
+    # Only deploy to Cloudflare
+    - ref: cf-specific-rule
+      expression: 'http.request.uri.path matches "^/api/.*"'
+      action: block
+      octorules:
+        included:
+          - cloudflare
 
-  # Deploy everywhere EXCEPT staging
-  - ref: prod-only-rule
-    expression: 'ip.src in $blocklist'
-    action: block
-    octorules:
-      excluded:
-        - cf-staging
+    # Deploy everywhere EXCEPT cf-account-b
+    - ref: scoped-rule
+      expression: 'ip.src in $blocklist'
+      action: block
+      octorules:
+        excluded:
+          - cf-account-b
 ```
 
-`included` and `excluded` are mutually exclusive (matching octodns convention). Names match the provider config key (e.g. `cloudflare`, `aws`, `cf-prod`). Rules without `included`/`excluded` apply to all targets.
+`included` and `excluded` are mutually exclusive (matching octodns convention). Names match the provider config key (e.g. `cloudflare`, `aws`, `cf-account-b`). Rules without `included`/`excluded` apply to all targets.
 
 The `octorules:` key is always stripped before sending rules to the provider API.
 
@@ -190,20 +197,21 @@ The `octorules:` key is always stripped before sending rules to the provider API
 Complex expressions can use YAML block scalars (`|-`) for readability. octorules normalizes whitespace (collapsing newlines and indentation to single spaces outside quoted strings) before sending to the provider and before linting, so formatting is purely cosmetic:
 
 ```yaml
-waf_custom_rules:
-  - ref: geo-block
-    description: Block by country outside active regions
-    action: block
-    expression: |-
-      (ip.geoip.asnum in {
-        9009
-        64080
-      } and not ip.geoip.country in {
-        "AT"
-        "BE"
-        "DE"
-        "FR"
-      })
+cloudflare:
+  waf_custom_rules:
+    - ref: geo-block
+      description: Block by country outside active regions
+      action: block
+      expression: |-
+        (ip.geoip.asnum in {
+          9009
+          64080
+        } and not ip.geoip.country in {
+          "AT"
+          "BE"
+          "DE"
+          "FR"
+        })
 ```
 
 Use `|-` (strip trailing newline) rather than `|` (preserves trailing newline).
@@ -370,6 +378,21 @@ Suppression comments work like shellcheck — add `# octorules:disable=CF015` (c
 | CORE003 | WARNING | All rules in a phase are disabled (2+ rules, all `enabled: false`) |
 | CORE004 | WARNING | Same `ref` string used in multiple phases within a zone |
 | CORE006 | INFO | Rules file contains no actual rules (all phases empty) |
+| CORE007 | ERROR | Phase section fails the plan-time prepare pipeline (would abort `plan`/`sync`) |
+| CORE008 | ERROR | Malformed `lists` entry |
+| CORE009 | ERROR | Malformed `custom_rulesets` entry |
+| CORE010 | ERROR | Extension section fails its validation hook (e.g. Page Shield policies) |
+| CORE011 | ERROR | Unknown zone-file section — `plan`/`sync` would skip it entirely |
+
+CORE007 executes the same `prepare_desired_rules()` pipeline `plan` and `sync`
+run — provider prepare hooks included — so a file that lints clean cannot die
+in prepare at plan time.
+
+CORE011 mirrors that skip set: a top-level key that is neither a registered
+phase nor a known section, or a member a provider namespace does not define
+(`cloudflare.waf_custom_rulez`), is silently unmanaged at plan time, so lint
+fails on it. It defers to a provider rule that already reported the same key,
+and suggests the closest valid name.
 
 Provider-specific rules (CF, WA, GA, AZ, BN prefixes) are documented in each provider's `docs/lint.md`.
 
@@ -389,7 +412,7 @@ These checks run at config load time and emit log warnings or raise errors. They
 Dry-run: shows what would change without touching the provider. Exit code 2 when changes are detected (with `--exit-code`). Output format and destination are controlled via `manager.plan_outputs` in the config file (defaults to text on stdout).
 
 ```bash
-octorules plan [--zone example.com] [--phase redirect_rules] [--checksum] [--exit-code]
+octorules plan [--zone example.com] [--phase cloudflare.redirect_rules] [--checksum] [--exit-code]
 ```
 
 ### `octorules sync --doit`
@@ -397,7 +420,7 @@ octorules plan [--zone example.com] [--phase redirect_rules] [--checksum] [--exi
 Applies changes to the provider. Requires `--doit` as a safety flag. Atomic PUT per phase, fail-fast on errors.
 
 ```bash
-octorules sync --doit [--zone example.com] [--phase redirect_rules] [--checksum HASH] [--force]
+octorules sync --doit [--zone example.com] [--phase cloudflare.redirect_rules] [--checksum HASH] [--force]
 ```
 
 | Flag | Description |
@@ -487,10 +510,11 @@ the file) is file-wide:
 ```yaml
 # octorules:accept=zone-drift          # file-wide (before any rule)
 
-waf_custom_rules:
-  # octorules:accept=ip-overlap,cdn-ranges   # scoped to the rule below
-  - ref: r1
-    expression: ...
+aws:
+  waf_custom_rules:
+    # octorules:accept=ip-overlap,cdn-ranges   # scoped to the rule below
+    - ref: r1
+      Statement: ...
 ```
 
 To scope an acceptance to a finding on a **list** (whose finding ref is
@@ -523,7 +547,7 @@ octorules versions
 |------|-------------|
 | `--config PATH` | Path to config file (default: `config.yaml`) |
 | `--zone NAME` | Process only specified zone(s); can be repeated (default: all) |
-| `--phase NAME` | Limit to specific phase(s); can be repeated. Accepts flat names and the dotted namespace form (`aws.waf_custom_rules`) |
+| `--phase NAME` | Limit to specific phase(s) by dotted name (`aws.waf_custom_rules`); can be repeated |
 | `--scope SCOPE` | Scope: `all` (default), `zones`, or `account` |
 | `--debug` | Enable debug logging |
 | `--quiet` | Suppress all informational stdout output (plan tables, lint results, audit findings). Only errors and the exit code are reported. File output (`--output`) is unaffected |
@@ -595,6 +619,8 @@ processors:
 
 manager:
   max_workers: 4                     # Parallel processing (default: 1)
+  strict_sections: true              # Error instead of warn when a zone-file
+                                     # section would be skipped (default: false)
   plan_outputs:                      # Config-driven plan output
     text:
       class: octorules.plan_output.PlanText
@@ -612,6 +638,7 @@ zones:
       - my_proc
     allow_unmanaged: false           # Keep rules not in YAML (default: false)
     always_dry_run: true             # Never apply changes (default: false)
+    strict_sections: false           # Per-zone override of the manager flag
     zone_names:                      # Per-target provider-resource name
       my_provider: some-resource     # (defaults to the zone name)
     safety:                          # Per-zone overrides
@@ -623,6 +650,12 @@ zones:
     targets:
       - my_provider
 ```
+
+By default, a zone-file section that nothing will manage — an unknown or
+misspelled key, or a section owned by a provider the zone doesn't target —
+is skipped with a warning. `strict_sections: true` turns those skips into
+hard errors before any API call, so a typo can't silently unmanage its
+rules. Renamed-phase aliases still work and only warn.
 
 ## Programmatic usage
 

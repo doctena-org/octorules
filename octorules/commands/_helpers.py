@@ -127,6 +127,24 @@ def _provider_view(all_desired: dict, provider: object) -> dict:
     return view
 
 
+def _namespace_set(providers) -> frozenset[str] | None:
+    """Registered ``NAMESPACE`` values of *providers* (classes or instances).
+
+    Returns ``None`` when any entry lacks a registered namespace — such a
+    provider sees the full zone view (see :func:`_provider_view`), so
+    section coverage cannot be judged.
+    """
+    from octorules.phases import PROVIDER_NAMESPACES
+
+    namespaces: set[str] = set()
+    for prov in providers:
+        ns = getattr(prov, "NAMESPACE", None)
+        if not ns or ns not in PROVIDER_NAMESPACES:
+            return None
+        namespaces.add(ns)
+    return frozenset(namespaces)
+
+
 def _filter_desired_by_phase(
     desired: dict[str, list[RuleDict]], phases: list[str] | None
 ) -> dict[str, list[RuleDict]]:

@@ -1,4 +1,5 @@
-# Bunny Shield rules for pull zone "my-pull-zone"
+# Bunny Shield rules for pull zone "static-example-com",
+# serving static.example.com
 #
 # Bunny Shield provides custom WAF rules, rate limiting, access lists,
 # edge rules, managed rule overrides, shield-level configuration

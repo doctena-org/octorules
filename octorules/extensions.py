@@ -91,10 +91,6 @@ class FormatExtension(Protocol):
         """Append HTML to *lines*. Return (creates, removes, modifies, reorders)."""
         ...
 
-    def format_report(self, plans: list, zone_has_drift: bool, phases_data: list[dict]) -> bool:
-        """Append report entries to *phases_data*. Return updated zone_has_drift."""
-        ...
-
 
 # ---------------------------------------------------------------------------
 # Hook signature validation
@@ -499,19 +495,17 @@ class SettingsFormatter:
     """Formats settings diffs for plan output.
 
     Parameterised by the concrete *plan_type* (so each formatter only
-    renders its own plans), the YAML-facing *prefix* used in change
-    labels, and the *phase* / *provider_id* strings used in report mode.
+    renders its own plans) and the YAML-facing *prefix* used in change
+    labels.
 
     An empty *prefix* renders each change's ``field`` as the whole label —
     for providers whose fields already carry a section path
     (e.g. ``"bot_detection.execution_mode"``).
     """
 
-    def __init__(self, plan_type: type, prefix: str, phase: str, provider_id: str) -> None:
+    def __init__(self, plan_type: type, prefix: str) -> None:
         self._plan_type = plan_type
         self._prefix = prefix
-        self._phase = phase
-        self._provider_id = provider_id
 
     def _label(self, field: str) -> str:
         return f"{self._prefix}.{field}" if self._prefix else field
@@ -615,25 +609,3 @@ class SettingsFormatter:
             lines.append("</table>")
             total_modifies += plan_modifies
         return 0, 0, total_modifies, 0
-
-    def format_report(self, plans: list, zone_has_drift: bool, phases_data: list[dict]) -> bool:
-        total_modifies = 0
-        for plan in plans:
-            if not isinstance(plan, self._plan_type) or not plan.has_changes:
-                continue
-            total_modifies += plan.total_changes
-        if total_modifies:
-            zone_has_drift = True
-            phases_data.append(
-                {
-                    "phase": self._phase,
-                    "provider_id": self._provider_id,
-                    "status": "drifted",
-                    "yaml_rules": 0,
-                    "live_rules": 0,
-                    "adds": 0,
-                    "removes": 0,
-                    "modifies": total_modifies,
-                }
-            )
-        return zone_has_drift

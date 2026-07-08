@@ -24,8 +24,31 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
     CORE003: All rules in a phase have ``enabled: false``.
     CORE004: Same ref string used in multiple phases.
     CORE006: Rules file has no actual rules (all phases empty).
+    CORE007: A phase section fails the plan-time prepare pipeline.
+    CORE008: Malformed ``lists`` entry.
+    CORE009: Malformed ``custom_rulesets`` entry.
+    CORE010: An extension section fails its registered validation hook.
+    CORE011: A section plan/sync would skip entirely.
     """
-    from octorules.phases import KNOWN_NON_PHASE_KEYS
+    import copy
+
+    from octorules.extensions import call_validate_extensions
+    from octorules.phases import (
+        KNOWN_NON_PHASE_KEYS,
+        PHASE_BY_NAME,
+        PROVIDER_NAMESPACES,
+        display_phase_name,
+        get_phase,
+        iter_scoped_sections,
+        suggest_namespace_member,
+        suggest_phase,
+    )
+    from octorules.planner import (
+        RuleValidationError,
+        prepare_desired_rules,
+        validate_custom_ruleset,
+        validate_list_entry,
+    )
 
     all_refs: dict[str, list[str]] = {}  # ref -> list of phase names
     total_rules = 0
@@ -80,6 +103,118 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
                 rule_id="CORE006",
                 severity=Severity.INFO,
                 message="Rules file contains no rules (all phases empty)",
+            )
+        )
+
+    # CORE007: run the real plan-time prepare pipeline per phase section —
+    # the same code plan/sync executes, so lint reproduces prepare-time
+    # failures offline. The deep copy keeps provider prepare hooks away
+    # from the shared rules cache that later plan runs read.
+    for phase_name, rules in desired.items():
+        if phase_name in KNOWN_NON_PHASE_KEYS or not isinstance(rules, list):
+            continue
+        try:
+            phase = get_phase(phase_name)
+        except KeyError:
+            continue  # unknown sections are flagged at plan time
+        try:
+            prepare_desired_rules(copy.deepcopy(rules), phase)
+        except Exception as e:
+            detail = str(e) if isinstance(e, RuleValidationError) else repr(e)
+            ctx.add(
+                LintResult(
+                    rule_id="CORE007",
+                    severity=Severity.ERROR,
+                    message=f"Section fails plan-time prepare: {detail}",
+                    phase=phase_name,
+                )
+            )
+
+    # CORE008/CORE009: shape checks for core sections (plain and
+    # namespace-scoped) — the same validators plan runs.
+    for rule_id, section, validate in (
+        ("CORE008", "lists", validate_list_entry),
+        ("CORE009", "custom_rulesets", validate_custom_ruleset),
+    ):
+        for ns, entries in iter_scoped_sections(desired, section):
+            if not isinstance(entries, list):
+                continue
+            label = f"{ns}.{section}" if ns else section
+            for i, entry in enumerate(entries):
+                try:
+                    validate(entry, i)
+                except Exception as e:
+                    detail = str(e) if isinstance(e, RuleValidationError) else repr(e)
+                    if isinstance(entry, dict):
+                        ctx.set_location(entry)
+                    ctx.add(
+                        LintResult(
+                            rule_id=rule_id,
+                            severity=Severity.ERROR,
+                            message=f"{label}: {detail}",
+                        )
+                    )
+                    ctx.clear_location()
+
+    # CORE011: sections plan/sync would skip outright.  The condition
+    # mirrors the plan-time skip set exactly (`check_zone_sections`):
+    # anything that is neither a registered phase (aliases included) nor a
+    # known non-phase key is silently unmanaged, so lint must fail on it —
+    # provider plugins cannot own this check because only the zone's own
+    # target plugin runs, and four of the five providers have no file-level
+    # unknown-section rule at all.
+    # A plugin that already reported on a key knows more about it than core
+    # does — CF010's removed-alias table and CF014's provider-id spellings
+    # both name the exact replacement — so don't stack a generic error on
+    # top.  Plugins run before this pass, so their findings are already in
+    # ctx.results.  (A plugin finding the user suppressed is treated as
+    # claimed too; suppress CORE011 alongside it if the section is
+    # deliberate.)
+    claimed = {r.phase for r in ctx.results if r.phase}
+    for key in sorted(desired):
+        if key in PHASE_BY_NAME or key in KNOWN_NON_PHASE_KEYS or key in claimed:
+            continue
+        ns, sep, member = key.partition(":")
+        if sep and ns in PROVIDER_NAMESPACES:
+            message = (
+                f"Unknown section {display_phase_name(key)!r} — {member!r} is not a"
+                f" section of the {ns!r} namespace; it will not be managed"
+            )
+            # Match against the namespace's own member names, not the flat
+            # registry — nested spellings differ from flat friendly names.
+            hint = suggest_namespace_member(ns, member)
+            dotted = f"{ns}.{hint}" if hint else ""
+            suggestion = f"Rename to {dotted!r}" if hint else ""
+            if hint:
+                message += f". Did you mean {dotted!r}?"
+        else:
+            message = f"Unknown top-level section {key!r} — it will not be managed"
+            hint = suggest_phase(key)
+            suggestion = f"Rename to {display_phase_name(hint)!r}" if hint else ""
+            if hint:
+                message += f". Did you mean {display_phase_name(hint)!r}?"
+        ctx.add(
+            LintResult(
+                rule_id="CORE011",
+                severity=Severity.ERROR,
+                message=message,
+                phase=key,
+                suggestion=suggestion,
+            )
+        )
+
+    # CORE010: registered validate-extension hooks (e.g. Page Shield).
+    ext_errors: list[str] = []
+    try:
+        call_validate_extensions(desired, ctx.zone_name, ext_errors, [])
+    except Exception as e:
+        ext_errors.append(f"validate extension raised: {e!r}")
+    for err in ext_errors:
+        ctx.add(
+            LintResult(
+                rule_id="CORE010",
+                severity=Severity.ERROR,
+                message=err.strip(),
             )
         )
 

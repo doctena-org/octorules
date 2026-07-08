@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [0.32.0] - 2026-07-06
+## [0.32.0] - 2026-07-26
 
 ### Added
 - **Nested zone-file format**: providers register a zone-file namespace
@@ -17,7 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   different classes (`targets: [cloudflare, aws]`) — one file carries
   each provider's sections, and every target plans, syncs, and resolves
   its own zone identity. Per-target `zone_names:` in the config maps a
-  zone to differently-named provider resources (e.g. a Web ACL).
+  zone to differently-named provider resources (e.g. a Web ACL); it is
+  rejected on the `*` zone template, where one name cannot serve every
+  discovered zone.
 - `--phase` accepts the dotted namespace form (e.g.
   `aws.waf_custom_rules`) alongside the flat names.
 - Settings-extension framework in `octorules.extensions`:
@@ -29,9 +31,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `md_escape()`, `html_render_changes()`, `html_summary_row()`,
   `HTML_TABLE_HEADER` (`octorules.formatter`). The underscore names
   remain as deprecated aliases.
+- `strict_sections: true` (manager-level, per-zone override) — zone-file
+  sections that would be skipped (unknown keys, sections of a provider
+  the zone doesn't target, unsupported features) fail `plan`/`sync`
+  during planning instead of warning. Renamed-phase aliases still only
+  warn.
+- Lint runs the plan-time pipeline offline: CORE007 (phase section
+  fails `prepare_desired_rules`), CORE008/CORE009 (malformed `lists` /
+  `custom_rulesets` entries), CORE010 (extension section fails its
+  validation hook), CORE011 (ERROR — a section `plan` would skip, either
+  an unknown top-level key or an unknown member of a provider namespace).
+
+### Changed
+- Refreshed the bundled CDN range snapshots (Google Cloud 1045→1047,
+  Google Front End 345→348, Bunny 980→984, Azure Front Door 464→465
+  CIDRs). Three of those are own-edge sets — `audit` may report a new
+  non-suppressible `cdn-ranges` error on an unchanged rule.
+- Phase names display in the dotted namespace form everywhere
+  (`bunny.waf_custom_rules`) — lint text/JSON/SARIF, plan output, and log
+  messages. **The `phase` value in lint JSON and SARIF output changes
+  spelling**; `PhaseFilter` and `--phase` take either form as input.
+- Sections owned by a provider namespace the zone doesn't target now
+  warn at plan time (previously skipped silently).
 
 ### Removed
 - The `octorules[wirefilter]` extra (nothing in core used it).
+- The dead drift-report formatters (`build_report_data`,
+  `format_report_csv`, `format_report_json`, `print_report`) and the
+  `FormatExtension.format_report` hook (orphaned since 0.24.0).
+- `cmd_validate` (unreachable since 0.24.0; the CORE007–CORE010 lint
+  rules cover its checks).
 
 ## [0.31.0] - 2026-07-15
 

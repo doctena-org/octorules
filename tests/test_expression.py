@@ -175,16 +175,16 @@ class TestProductionExpressions:
 
     def test_wp_admin_block_scalar(self):
         expr = (
-            '(http.host eq "www.doctena.com")\nand (http.request.uri.path contains "/wp-admin")\n'
+            '(http.host eq "www.example.com")\nand (http.request.uri.path contains "/wp-admin")\n'
         )
         expected = (
-            '(http.host eq "www.doctena.com") and (http.request.uri.path contains "/wp-admin")'
+            '(http.host eq "www.example.com") and (http.request.uri.path contains "/wp-admin")'
         )
         assert normalize_expression(expr) == expected
 
     def test_trailing_newline_only(self):
-        expr = '(http.host eq "doctena.be")\n'
-        expected = '(http.host eq "doctena.be")'
+        expr = '(http.host eq "example.org")\n'
+        expected = '(http.host eq "example.org")'
         assert normalize_expression(expr) == expected
 
 

@@ -1,4 +1,4 @@
-"""Tests for the public settings-extension framework and the 0.31.0 public API.
+"""Tests for the public settings-extension framework and the publicized API.
 
 Covers the SettingsChange/SettingsPlan/SettingsFormatter data model and
 formatter (lifted from octorules-cloudflare's private ``_settings_base``),
@@ -24,12 +24,7 @@ class _BetaPlan(SettingsPlan):
 
 
 def _alpha_formatter(prefix: str = "alpha") -> SettingsFormatter:
-    return SettingsFormatter(
-        plan_type=_AlphaPlan,
-        prefix=prefix,
-        phase="alpha",
-        provider_id="test_alpha",
-    )
+    return SettingsFormatter(plan_type=_AlphaPlan, prefix=prefix)
 
 
 class TestSettingsPlanDefaults:
@@ -59,7 +54,6 @@ class TestFormatterPlanTypeGating:
         fmt = _alpha_formatter()
         assert fmt.format_text([foreign], use_color=False) == []
         assert fmt.format_json([foreign]) == []
-        assert fmt.format_report([foreign], False, []) is False
 
 
 class TestFormatterLabels:
@@ -114,29 +108,6 @@ class TestFormatterOutputs:
         assert "<td>Note</td>" in joined
         assert "<td>alpha.gated</td>" in joined
         assert joined.count("</table>") == 1
-
-    def test_format_report_appends_drift_entry(self):
-        plan = _AlphaPlan(
-            changes=[
-                SettingsChange(field="a", current=1, desired=2),
-                SettingsChange(field="b", current=1, desired=2),
-            ]
-        )
-        phases_data: list[dict] = []
-        drifted = _alpha_formatter().format_report([plan], False, phases_data)
-        assert drifted is True
-        assert phases_data == [
-            {
-                "phase": "alpha",
-                "provider_id": "test_alpha",
-                "status": "drifted",
-                "yaml_rules": 0,
-                "live_rules": 0,
-                "adds": 0,
-                "removes": 0,
-                "modifies": 2,
-            }
-        ]
 
     def test_unsupported_only_plan_still_renders_notes(self):
         plan = _AlphaPlan(unsupported=["gated"])

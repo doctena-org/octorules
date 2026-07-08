@@ -1,7 +1,7 @@
 # octorules — multi-provider configuration example
 #
 # This config demonstrates all five providers managed from a single config,
-# with representative rules under rules/multi/ to show the orchestration shape.
+# with representative rules under rules/ to show the orchestration shape.
 # For complete, per-phase single-provider examples, see each provider package's
 # own examples/ directory:
 #   https://github.com/doctena-org/octorules-cloudflare/tree/main/examples
@@ -88,12 +88,11 @@ providers:
       min_existing: 3
 
   # Rules directory — every zone's rule file lives here as
-  # `<zone-name>.yaml`. In production each file is the source of truth
-  # for one zone (managed by one provider). The examples directory
-  # uses symlinks under `rules/multi/` back to per-provider subdirs so
-  # there's one canonical source for each zone's rules.
+  # `<zone-name>.yaml`. Each file is the source of truth for one zone;
+  # a zone that targets several providers carries one namespace block
+  # per provider in the same file (see rules/example.com.yaml).
   rules:
-    directory: ./rules/multi
+    directory: ./rules
 
 # ---------------------------------------------------------------------------
 # Processors — transform or filter rules in the plan/sync pipeline
@@ -138,6 +137,9 @@ processors:
 # ---------------------------------------------------------------------------
 manager:
   max_workers: 4               # Parallel zone/phase processing (default: 1)
+  strict_sections: false       # true: error (instead of warn) when a zone-file
+                               # section would be skipped unmanaged; each zone
+                               # can override with its own strict_sections key
   plan_outputs:
     text:
       class: octorules.plan_output.PlanText
@@ -159,8 +161,8 @@ manager:
 # network_firewall_managed, network_firewall_ratelimit, network_firewall_ids).
 #
 # Account rules files are loaded from the configured rules directory by
-# slugified account name — here, rules/multi/<account-slug>.yaml (e.g. an
-# account named "Example Account" -> rules/multi/example-account.yaml).
+# slugified account name — here, rules/<account-slug>.yaml (e.g. an
+# account named "Example Account" -> rules/example-account.yaml).
 # See that file: bulk_redirect_rules is exemplified; the five Magic Transit
 # (L4) phases are documented but not exemplified (no offline L4 expression
 # schema).
@@ -173,20 +175,27 @@ manager:
 # the provider:
 #
 #   Cloudflare       — DNS domain (e.g. example.com)
-#   AWS WAF          — Web ACL name (e.g. my-web-acl)
-#   Google Cloud Armor — security policy name (e.g. my-security-policy)
-#   Azure WAF        — WAF policy name (e.g. my-waf-policy)
-#   Bunny Shield     — pull zone name (e.g. my-pull-zone)
+#   AWS WAF          — Web ACL name (e.g. example-com-alb)
+#   Google Cloud Armor — security policy name (e.g. example-org-policy)
+#   Azure WAF        — WAF policy name (e.g. apiexamplewaf)
+#   Bunny Shield     — pull zone name (e.g. static-example-com)
 #
 # At runtime, resolve_zone_id("<name>") translates the name to the
 # provider's internal ID.
 zones:
-  # Cloudflare zone
+  # The main site — a true multi-provider zone: Cloudflare fronts the
+  # domain at the edge, AWS WAF guards the origin ALB behind it. One
+  # rules file (rules/example.com.yaml) carries both namespace blocks;
+  # each target plans and applies only its own. zone_names maps the
+  # zone to the differently-named Web ACL on the AWS side.
   example.com:
     sources:
       - rules
     targets:
       - cloudflare
+      - aws
+    zone_names:
+      aws: example-com-alb
     processors:
       - no_deletes
     safety:
@@ -194,44 +203,41 @@ zones:
       update_threshold: 30.0
       min_existing: 5
 
-  # AWS WAF Web ACL
-  my-web-acl:
-    sources:
-      - rules
-    targets:
-      - aws
-
-  # Google Cloud Armor security policy
-  my-security-policy:
+  # A second domain on Google Cloud — the zone name is the Cloud Armor
+  # security policy guarding the example.org load balancer.
+  example-org-policy:
     sources:
       - rules
     targets:
       - google
     always_dry_run: true       # Never apply changes (review-only)
 
-  # Azure WAF policy
-  my-waf-policy:
+  # api.example.com behind Azure Front Door — the zone name is the WAF
+  # policy name (Front Door policy names allow only alphanumerics and
+  # must start with a letter).
+  apiexamplewaf:
     sources:
       - rules
     targets:
       - azure
 
-  # Bunny Shield pull zone
-  my-pull-zone:
+  # static.example.com served by a Bunny pull zone — the zone name is
+  # the pull zone name.
+  static-example-com:
     sources:
       - rules
     targets:
       - bunny
 
-  # Multi-target — same zone deployed to two Cloudflare accounts.
+  # Multi-target — the same rules deployed to two Cloudflare accounts.
   # Each target produces its own plan.  Requires explicit "class:" since
   # auto-discovery can't distinguish two instances of the same provider.
-  # staging.example.com:
+  # example.net:
   #   sources:
   #     - rules
   #   targets:
-  #     - cf-prod
-  #     - cf-staging
+  #     - cf-account-a
+  #     - cf-account-b
 
   # Wildcard zone template — auto-discover zones from a specific
   # provider. The parser requires explicit `targets:` whenever the

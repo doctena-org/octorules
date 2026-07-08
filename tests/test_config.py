@@ -681,6 +681,73 @@ class TestMaxWorkers:
             Config.from_file(config_file)
 
 
+class TestStrictSections:
+    """Tests for manager.strict_sections and the per-zone override."""
+
+    def test_default_false(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg())
+        config = Config.from_file(config_file)
+        assert config.strict_sections is False
+        assert config.zones["example.com"].strict_sections is None
+        assert config.strict_sections_for("example.com") is False
+
+    def test_manager_true(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  strict_sections: true\n")
+        config = Config.from_file(config_file)
+        assert config.strict_sections is True
+        assert config.strict_sections_for("example.com") is True
+
+    def test_manager_invalid_type(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  strict_sections: definitely\n")
+        with pytest.raises(ConfigError, match="strict_sections.*must be a boolean"):
+            Config.from_file(config_file)
+
+    def test_zone_override_disables(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg(extra_zone="    strict_sections: false\n") + "manager:\n  strict_sections: true\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.zones["example.com"].strict_sections is False
+        assert config.strict_sections_for("example.com") is False
+
+    def test_zone_override_enables(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    strict_sections: true\n"))
+        config = Config.from_file(config_file)
+        assert config.strict_sections is False
+        assert config.strict_sections_for("example.com") is True
+
+    def test_zone_invalid_type(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    strict_sections: 1\n"))
+        with pytest.raises(ConfigError, match="strict_sections.*must be a boolean"):
+            Config.from_file(config_file)
+
+    def test_unknown_zone_falls_back_to_manager(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  strict_sections: true\n")
+        config = Config.from_file(config_file)
+        assert config.strict_sections_for("nonexistent.example") is True
+
+    def test_template_propagates_to_expanded_zones(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "x.com.yaml").write_text("redirect_rules: []\n")
+        config = Config(
+            rules_dir=rules_dir,
+            providers={"cloudflare": ProviderConfig(name="cloudflare")},
+            zone_templates={
+                "*": ZoneConfig(name="*", targets=["cloudflare"], strict_sections=True)
+            },
+        )
+        config.expand_templates({"cloudflare": ["x.com"]})
+        assert config.zones["x.com"].strict_sections is True
+
+
 class TestMaxRetries:
     """Tests for provider max_retries config parsing."""
 
@@ -1327,7 +1394,7 @@ class TestSlugify:
         assert slugify("Acme Corp") == "acme-corp"
 
     def test_special_characters(self):
-        assert slugify("Doctena S.A.") == "doctena-s-a"
+        assert slugify("Example S.A.") == "example-s-a"
 
     def test_already_slugified(self):
         assert slugify("my-account") == "my-account"

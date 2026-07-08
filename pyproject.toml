@@ -54,6 +54,7 @@ octorules = "octorules.cli:main"
 "octorules.data" = ["cdn_ranges/*.json"]
 
 [tool.setuptools.packages.find]
+include = ["octorules*"]
 
 [tool.ruff]
 target-version = "py310"

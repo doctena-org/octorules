@@ -1,7 +1,5 @@
 """Colored terminal output for plan results."""
 
-import csv
-import io
 import json
 import sys
 from collections.abc import Callable
@@ -13,7 +11,7 @@ import yaml
 from octorules._color import _CYAN, _GREEN, _RED, _YELLOW, Pen, supports_color
 from octorules.expression import format_expression_display
 from octorules.extensions import get_format_extensions
-from octorules.phases import PHASE_BY_NAME, PHASE_BY_PROVIDER_ID
+from octorules.phases import display_phase_name
 from octorules.planner import (
     ChangeType,
     CustomRulesetPlan,
@@ -22,7 +20,6 @@ from octorules.planner import (
     RuleChange,
     RuleDict,
     ZonePlan,
-    count_change_types,
 )
 
 _CHANGE_SYMBOLS: dict[ChangeType, str] = {
@@ -161,7 +158,9 @@ def format_phase_plan(phase_plan: PhasePlan, use_color: bool = True) -> list[str
     """Format a phase plan as lines of output."""
     p = Pen(use_color)
     lines = []
-    header = f"  {phase_plan.phase.friendly_name} ({phase_plan.phase.provider_id})"
+    header = (
+        f"  {display_phase_name(phase_plan.phase.friendly_name)} ({phase_plan.phase.provider_id})"
+    )
     lines.append(p.header(header))
     for change in phase_plan.changes:
         lines.extend(format_change(change, use_color))
@@ -287,7 +286,7 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
         for pp in zp.phase_plans:
             phase_plans.append(
                 {
-                    "phase": pp.phase.friendly_name,
+                    "phase": display_phase_name(pp.phase.friendly_name),
                     "provider_id": pp.phase.provider_id,
                     "changes": [change_to_dict(c) for c in pp.changes],
                 }
@@ -430,7 +429,9 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
         pending_diffs: list[list[tuple[str, object, object]]] = []
         for pp in zp.phase_plans:
             for c in pp.changes:
-                lines.append(md_change_row(c, pp.phase.friendly_name, pending_diffs))
+                lines.append(
+                    md_change_row(c, display_phase_name(pp.phase.friendly_name), pending_diffs)
+                )
         for crp in zp.custom_ruleset_plans:
             phase_label = f"custom_ruleset:{crp.ruleset_name}"
             if crp.create:
@@ -734,7 +735,7 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
         lines.append(f"<h2>{e(zp.display_name)}</h2>")
 
         for pp in zp.phase_plans:
-            lines.append(f"<h3>{e(pp.phase.friendly_name)}</h3>")
+            lines.append(f"<h3>{e(display_phase_name(pp.phase.friendly_name))}</h3>")
             lines.extend(HTML_TABLE_HEADER)
             creates, removes, modifies, reorders = html_render_changes(pp.changes, lines)
             lines.extend(html_summary_row(creates, removes, modifies, reorders))
@@ -874,223 +875,3 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
     else:
         summary = f"Total: {total_changes} change(s) across {len(zone_plans)} zone(s)."
         print(p.header(summary), file=summary_file)
-
-
-def build_report_data(
-    zone_plans: list[ZonePlan],
-    desired_by_zone: dict[str, dict],
-    current_by_zone: dict[str, dict],
-) -> dict:
-    """Build structured drift report data across all zones and phases.
-
-    Enumerates all phases present in either desired or current (not just changed
-    phases from ZonePlan), so in_sync phases are included in the report.
-    """
-    # Index phase plans by (zone, provider_id) for quick lookup
-    changes_index: dict[tuple[str, str], PhasePlan] = {}
-    cr_index: dict[tuple[str, str], CustomRulesetPlan] = {}
-    for zp in zone_plans:
-        for pp in zp.phase_plans:
-            changes_index[(zp.zone_name, pp.phase.provider_id)] = pp
-        for crp in zp.custom_ruleset_plans:
-            cr_index[(zp.zone_name, crp.ruleset_id)] = crp
-
-    zones_data = []
-    summary_in_sync = 0
-    summary_drifted = 0
-
-    for zp in zone_plans:
-        zone_name = zp.zone_name
-        desired = desired_by_zone.get(zp.plan_key, {})
-        current = current_by_zone.get(zp.plan_key, {})
-
-        # Build the union of all phases present in either desired or current
-        all_provider_ids: set[str] = set()
-        for friendly_name in desired:
-            if friendly_name in PHASE_BY_NAME:
-                all_provider_ids.add(PHASE_BY_NAME[friendly_name].provider_id)
-        for provider_id in current:
-            if provider_id in PHASE_BY_PROVIDER_ID:
-                all_provider_ids.add(provider_id)
-
-        phases_data = []
-        zone_has_drift = False
-
-        for provider_id in sorted(all_provider_ids):
-            if provider_id not in PHASE_BY_PROVIDER_ID:
-                continue
-            phase = PHASE_BY_PROVIDER_ID[provider_id]
-            friendly_name = phase.friendly_name
-
-            yaml_rules = len(desired.get(friendly_name, []))
-            live_rules = len(current.get(provider_id, []))
-
-            # Count changes from the phase plan if one exists
-            pp = changes_index.get((zone_name, provider_id))
-            adds, removes, modifies = count_change_types(pp.changes) if pp else (0, 0, 0)
-
-            # Determine status
-            has_yaml = friendly_name in desired
-            has_live = provider_id in current and len(current[provider_id]) > 0
-
-            if has_yaml and not has_live and yaml_rules > 0:
-                status = "yaml_only"
-            elif has_live and not has_yaml:
-                status = "live_only"
-            elif adds > 0 or removes > 0 or modifies > 0:
-                status = "drifted"
-            else:
-                status = "in_sync"
-
-            if status != "in_sync":
-                zone_has_drift = True
-
-            phases_data.append(
-                {
-                    "phase": friendly_name,
-                    "provider_id": provider_id,
-                    "status": status,
-                    "yaml_rules": yaml_rules,
-                    "live_rules": live_rules,
-                    "adds": adds,
-                    "removes": removes,
-                    "modifies": modifies,
-                }
-            )
-
-        # Include custom ruleset data in report
-        for crp in zp.custom_ruleset_plans:
-            cr_adds, cr_removes, cr_modifies = count_change_types(
-                crp.changes,
-                extra_creates=int(crp.create),
-                extra_removes=int(crp.delete),
-            )
-            cr_status = "drifted" if (cr_adds or cr_removes or cr_modifies) else "in_sync"
-            if cr_status != "in_sync":
-                zone_has_drift = True
-            phases_data.append(
-                {
-                    "phase": f"custom_ruleset:{crp.ruleset_name}",
-                    "provider_id": crp.phase,
-                    "status": cr_status,
-                    "yaml_rules": len(crp.prepared_rules) if crp.prepared_rules else 0,
-                    "live_rules": 0,
-                    "adds": cr_adds,
-                    "removes": cr_removes,
-                    "modifies": cr_modifies,
-                }
-            )
-
-        # Include list data in report
-        for lp in zp.list_plans:
-            lp_adds, lp_removes, lp_modifies = count_change_types(
-                lp.changes,
-                extra_creates=int(lp.create),
-                extra_removes=int(lp.delete),
-            )
-            if lp.description_change is not None:
-                lp_modifies += 1
-            lp_status = "drifted" if (lp_adds or lp_removes or lp_modifies) else "in_sync"
-            if lp_status != "in_sync":
-                zone_has_drift = True
-            phases_data.append(
-                {
-                    "phase": f"list:{lp.list_name}",
-                    "provider_id": "account_lists",
-                    "status": lp_status,
-                    "yaml_rules": len(lp.prepared_items) if lp.prepared_items else 0,
-                    "live_rules": 0,
-                    "adds": lp_adds,
-                    "removes": lp_removes,
-                    "modifies": lp_modifies,
-                }
-            )
-
-        # Include extension data in report
-        for ext_name, fmt in get_format_extensions().items():
-            ext_plans = zp.extension_plans.get(ext_name, [])
-            if ext_plans:
-                zone_has_drift = zone_has_drift or bool(
-                    fmt.format_report(ext_plans, zone_has_drift, phases_data)
-                )
-
-        zone_status = "drifted" if zone_has_drift else "in_sync"
-        if zone_status == "in_sync":
-            summary_in_sync += 1
-        else:
-            summary_drifted += 1
-
-        zones_data.append(
-            {
-                "zone": zone_name,
-                "status": zone_status,
-                "phases": phases_data,
-            }
-        )
-
-    return {
-        "zones": zones_data,
-        "summary": {
-            "total_zones": len(zone_plans),
-            "in_sync": summary_in_sync,
-            "drifted": summary_drifted,
-        },
-    }
-
-
-def format_report_csv(report_data: dict) -> str:
-    """Format report data as CSV with header, data rows, and summary comment."""
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    header = [
-        "Zone",
-        "Phase",
-        "Provider ID",
-        "Status",
-        "YAML Rules",
-        "Live Rules",
-        "Adds",
-        "Removes",
-        "Modifies",
-    ]
-    writer.writerow(header)
-    for zone in report_data["zones"]:
-        for phase in zone["phases"]:
-            writer.writerow(
-                [
-                    zone["zone"],
-                    phase["phase"],
-                    phase["provider_id"],
-                    phase["status"],
-                    phase["yaml_rules"],
-                    phase["live_rules"],
-                    phase["adds"],
-                    phase["removes"],
-                    phase["modifies"],
-                ]
-            )
-    s = report_data["summary"]
-    buf.write(
-        f"# Summary: {s['total_zones']} zones, {s['in_sync']} in_sync, {s['drifted']} drifted\n"
-    )
-    return buf.getvalue()
-
-
-def format_report_json(report_data: dict) -> str:
-    """Format report data as pretty-printed JSON."""
-    return json.dumps(report_data, indent=2)
-
-
-def print_report(report_data: dict, file: IO[str] | None = None, fmt: str = "csv") -> None:
-    """Print the drift report in the requested format."""
-    from octorules._context import is_quiet
-
-    if file is None:
-        if is_quiet():
-            return
-        file = sys.stdout
-
-    if fmt == "json":
-        print(format_report_json(report_data), file=file)
-    else:
-        print(format_report_csv(report_data), end="", file=file)

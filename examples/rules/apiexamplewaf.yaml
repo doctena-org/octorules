@@ -1,4 +1,6 @@
-# Azure WAF rules for policy "my-waf-policy"
+# Azure WAF rules for policy "apiexamplewaf", guarding api.example.com
+# behind Azure Front Door (Front Door WAF policy names allow only
+# alphanumerics and must start with a letter)
 #
 # Azure WAF supports Front Door and Application Gateway.  Set waf_type in
 # config.yaml to choose which.  Rules use matchConditions with operators

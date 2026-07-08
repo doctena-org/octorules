@@ -1,11 +1,19 @@
-# Cloudflare rules for example.com
+# example.com — a true multi-provider zone file.
 #
-# Cloudflare has 23 phases.  This file demonstrates the most commonly used
-# ones.  Phase names are nested under the "cloudflare:" block; each phase
-# contains a list of rules.  Every rule needs at least "ref" and "expression".
+# Cloudflare fronts the domain at the edge; AWS WAF guards the origin ALB
+# behind it.  The zone targets BOTH providers (config.yaml:
+# `targets: [cloudflare, aws]`), each provider plans and applies only its
+# own namespace block, and `zone_names` maps the zone to the
+# "example-com-alb" Web ACL on the AWS side.
 #
-# Expression syntax: Cloudflare wirefilter — see
+# The two layers cooperate: a Cloudflare request-header rule signs edge
+# traffic with X-Origin-Verify, and the first AWS rule blocks any request
+# that reaches the origin without that signature.
+#
+# Cloudflare expression syntax (wirefilter):
 # https://developers.cloudflare.com/ruleset-engine/rules-language/
+# AWS WAF statement reference:
+# https://docs.aws.amazon.com/waf/latest/developerguide/waf-rule-statements.html
 
 cloudflare:
   # ---------------------------------------------------------------------------
@@ -46,22 +54,34 @@ cloudflare:
   # Request Header Rules — modify request headers sent to origin
   # ---------------------------------------------------------------------------
   request_header_rules:
-    - ref: add-true-client-ip
-      description: "Forward real client IP to origin"
+    # octorules:disable=CF015
+    - ref: add-client-ip
+      description: "Forward the client IP to the origin"
       expression: "true"
       action_parameters:
         headers:
-          X-Real-IP:
+          X-Client-IP:
             operation: set
             # Wrapped in concat() so the value renders as a string; Cloudflare's
             # transform language accepts bare references but wirefilter's filter
             # parser requires a function-call wrapper for value expressions.
             expression: concat(ip.src)
 
+    # octorules:disable=CF015,CF100
+    - ref: add-origin-verify
+      description: "Sign edge traffic so the origin Web ACL can verify it"
+      expression: "true"
+      action_parameters:
+        headers:
+          X-Origin-Verify:
+            operation: set
+            value: rotate-me-shared-secret
+
   # ---------------------------------------------------------------------------
   # Response Header Rules — modify response headers sent to client
   # ---------------------------------------------------------------------------
   response_header_rules:
+    # octorules:disable=CF015
     - ref: add-security-headers
       description: "Standard security headers"
       expression: "true"
@@ -159,23 +179,24 @@ cloudflare:
       octorules:
         ignored: true
 
-    # Target-specific rules — in multi-target setups, restrict to specific
-    # provider instances.  "included" and "excluded" are mutually exclusive.
-    - ref: prod-only-waf
-      description: "Only deploy to cf-prod target, skip cf-staging"
+    # Target-specific rules — when a zone targets several same-class
+    # provider instances, restrict a rule to specific targets.
+    # "included" and "excluded" are mutually exclusive.
+    - ref: account-a-only
+      description: "Only deploy to the cf-account-a target"
       expression: 'ip.src in $blocklist'
       action: block
       octorules:
         included:
-          - cf-prod
+          - cf-account-a
 
-    - ref: skip-staging-challenge
-      description: "Deploy everywhere except cf-staging"
+    - ref: skip-account-b
+      description: "Deploy everywhere except the cf-account-b target"
       expression: 'ip.src.country in {"RU" "CN"}'
       action: managed_challenge
       octorules:
         excluded:
-          - cf-staging
+          - cf-account-b
 
   # ---------------------------------------------------------------------------
   # Rate Limiting Rules
@@ -223,7 +244,7 @@ cloudflare:
     # with `octorules dump` or via the Cloudflare API. Custom rulesets are
     # account-level resources with stable IDs that octorules cannot create —
     # they must be created in the Cloudflare dashboard or via the API first.
-    - id: 00000000000000000000000000000000
+    - id: "00000000000000000000000000000000"
       name: shared-waf-rules
       phase: http_request_firewall_custom
       rules:
@@ -242,29 +263,104 @@ cloudflare:
       kind: ip
       description: "Internal monitoring IPs"
       items:
-        - 10.0.0.0/8
-        - 172.16.0.0/12
-        - 192.168.0.0/16
+        - ip: 10.0.0.0/8
+        - ip: 172.16.0.0/12
+        - ip: 192.168.0.0/16
 
     - name: blocklist
       kind: ip
       description: "Blocked IP ranges referenced by prod-only-waf rule"
       items:
-        - 198.51.100.0/24  # RFC 5737 documentation prefix — placeholder
+        - ip: 198.51.100.0/24  # RFC 5737 documentation prefix — placeholder
 
     - name: blocked_asns
       kind: asn
       description: "Blocked autonomous systems"
       items:
-        - 12345
-        - 67890
+        - asn: 12345
+        - asn: 67890
 
   # ---------------------------------------------------------------------------
   # Page Shield Policies — Content Security Policy management
   # ---------------------------------------------------------------------------
   page_shield_policies:
+    # octorules:disable=CF015
     - description: "Default CSP — restrict scripts to self"
       action: allow
       expression: "true"
       enabled: true
       value: "script-src 'self'; style-src 'self' 'unsafe-inline'"
+
+# -----------------------------------------------------------------------------
+# AWS WAF (origin) — the Web ACL on the ALB behind Cloudflare.
+# Planned and applied by the aws target only; Cloudflare never sees it.
+# -----------------------------------------------------------------------------
+aws:
+  waf_custom_rules:
+    # The edge signs every request (see request_header_rules above);
+    # reject anything that reached the origin without the signature.
+    - ref: require-edge-header
+      Priority: 0
+      Action:
+        Block:
+          CustomResponse:
+            ResponseCode: 403
+      Statement:
+        NotStatement:
+          Statement:
+            ByteMatchStatement:
+              FieldToMatch:
+                SingleHeader:
+                  Name: x-origin-verify
+              PositionalConstraint: EXACTLY
+              SearchString: rotate-me-shared-secret
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: require-edge-header
+
+  waf_rate_rules:
+    # Origin-side backstop behind the edge rate limit above.
+    - ref: rate-limit-origin-api
+      Priority: 10
+      Action:
+        Block:
+          CustomResponse:
+            ResponseCode: 429
+      Statement:
+        RateBasedStatement:
+          Limit: 2000
+          AggregateKeyType: IP
+          ScopeDownStatement:
+            ByteMatchStatement:
+              FieldToMatch:
+                UriPath: {}
+              PositionalConstraint: STARTS_WITH
+              SearchString: /api/
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: rate-limit-origin-api
+
+  waf_managed_rules:
+    - ref: aws-common-rules
+      Priority: 100
+      Statement:
+        ManagedRuleGroupStatement:
+          VendorName: AWS
+          Name: AWSManagedRulesCommonRuleSet
+          # Pin a specific managed-rule version — unpinned groups
+          # auto-update and can change behaviour without notice.
+          Version: Version_2.0
+      OverrideAction:
+        None: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: aws-common-rules

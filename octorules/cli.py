@@ -139,9 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
         dest="phases",
         help=(
             "Only process specified phase(s); can be repeated"
-            " (e.g. --phase redirect_rules --phase cache_rules)."
-            " The dotted namespace form (e.g. aws.waf_custom_rules) is"
-            " also accepted. Also limits API calls to matching phases."
+            " (e.g. --phase cloudflare.redirect_rules"
+            " --phase aws.waf_custom_rules)."
+            " Also limits API calls to matching phases."
         ),
     )
 

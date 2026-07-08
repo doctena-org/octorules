@@ -14,12 +14,12 @@ from octorules.planner import (
     RuleValidationError,
     ZonePlan,
     check_safety,
+    check_zone_sections,
     compute_checksum,
     diff_custom_ruleset,
     diff_custom_rulesets_full,
     plan_zone,
     validate_custom_ruleset,
-    warn_unknown_phase_keys,
 )
 
 REDIRECT_PHASE = get_phase("redirect_rules")
@@ -178,6 +178,11 @@ class TestDiffCustomRuleset:
 class TestValidateCustomRuleset:
     """Tests for validate_custom_ruleset."""
 
+    def test_non_mapping_entry_raises_validation_error(self):
+        """Scalar entries raise RuleValidationError, not AttributeError."""
+        with pytest.raises(RuleValidationError, match="must be a mapping"):
+            validate_custom_ruleset(42, 0)
+
     def test_valid_entry(self):
         entry = {
             "id": "rs1",
@@ -271,12 +276,12 @@ class TestWarnUnknownPhaseKeysCustomRulesets:
     def test_custom_rulesets_not_warned(self, caplog):
         rules_data = {"redirect_rules": [], "custom_rulesets": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "account")
+            check_zone_sections(rules_data, "account")
         assert "custom_rulesets" not in caplog.text
 
 
 class TestWarnUnknownPhaseKeysNewPhases:
-    """New phases should be recognized by warn_unknown_phase_keys."""
+    """New phases should be recognized by check_zone_sections."""
 
     @pytest.mark.parametrize(
         "phase_name",
@@ -295,7 +300,7 @@ class TestWarnUnknownPhaseKeysNewPhases:
     def test_new_phase_not_warned(self, phase_name, caplog):
         rules_data = {phase_name: []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com")
         assert caplog.text == ""
 
 

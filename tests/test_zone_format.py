@@ -36,6 +36,41 @@ def namespaces():
     unregister_namespace("betaprov")
 
 
+class TestDisplayPhaseName:
+    def test_owned_flat_key_renders_dotted(self, namespaces):
+        from octorules.phases import display_phase_name
+
+        assert display_phase_name("alpha_custom_rules") == "alphaprov.custom_rules"
+
+    def test_scoped_core_section_renders_dotted(self, namespaces):
+        from octorules.phases import display_phase_name
+
+        assert display_phase_name("alphaprov:lists") == "alphaprov.lists"
+
+    def test_unowned_names_pass_through(self):
+        from octorules.phases import display_phase_name
+
+        assert display_phase_name("redirect_rules") == "redirect_rules"
+        assert display_phase_name("lists") == "lists"
+        assert display_phase_name("custom_ruleset:Block") == "custom_ruleset:Block"
+        assert display_phase_name("list:blocked-ips") == "list:blocked-ips"
+
+    def test_unknown_scoped_member_renders_dotted(self, namespaces):
+        """Diagnostics about a mistyped nested section must echo the
+        nesting the author wrote, not the internal scoped spelling."""
+        from octorules.phases import display_phase_name
+
+        assert display_phase_name("alphaprov:custom_rulez") == "alphaprov.custom_rulez"
+
+    def test_unregistered_namespace_prefix_passes_through(self):
+        """Only registered namespaces dot — synthetic prefixes and
+        namespace-qualified pseudo-refs must survive intact."""
+        from octorules.phases import display_phase_name
+
+        assert display_phase_name("notaprov:custom_rules") == "notaprov:custom_rules"
+        assert display_phase_name("list:alphaprov:blocked-ips") == "list:alphaprov:blocked-ips"
+
+
 class TestRegisterNamespace:
     def test_registers_mapping_and_derived_maps(self, namespaces):
         assert PROVIDER_NAMESPACES["alphaprov"] == _ALPHA_KEYS
@@ -356,8 +391,8 @@ class TestPerTargetZoneIdentity:
                 "aws": ProviderConfig(name="aws"),
             },
             zones={
-                "doctena.example": ZoneConfig(
-                    name="doctena.example",
+                "example.com": ZoneConfig(
+                    name="example.com",
                     targets=["cloudflare", "aws"],
                     zone_names=zone_names or {},
                 ),
@@ -367,7 +402,7 @@ class TestPerTargetZoneIdentity:
     def test_each_target_resolves_its_own_id(self, tmp_path):
         from octorules.config import resolve_zone_ids
 
-        config = self._config(tmp_path, zone_names={"aws": "doctena-example-alb"})
+        config = self._config(tmp_path, zone_names={"aws": "example-com-alb"})
         seen: dict[str, str] = {}
 
         def cf_resolve(name):
@@ -379,14 +414,14 @@ class TestPerTargetZoneIdentity:
             return "acl-guid"
 
         resolve_zone_ids(config, {"cloudflare": cf_resolve, "aws": aws_resolve}, max_workers=1)
-        cfg = config.zones["doctena.example"]
+        cfg = config.zones["example.com"]
         assert cfg.zone_ids == {"cloudflare": "cf-hex-id", "aws": "acl-guid"}
         assert cfg.zone_id == "cf-hex-id"  # primary target
         assert cfg.zone_id_for("aws") == "acl-guid"
         assert cfg.zone_id_for("cloudflare") == "cf-hex-id"
         assert cfg.zone_id_for(None) == "cf-hex-id"
         # aws resolved the overridden resource name, CF the zone name.
-        assert seen == {"cloudflare": "doctena.example", "aws": "doctena-example-alb"}
+        assert seen == {"cloudflare": "example.com", "aws": "example-com-alb"}
 
     def test_secondary_target_failure_warns_and_falls_back(self, tmp_path, caplog):
         from octorules.config import resolve_zone_ids
@@ -402,7 +437,7 @@ class TestPerTargetZoneIdentity:
                 {"cloudflare": lambda n: "cf-hex-id", "aws": aws_resolve},
                 max_workers=1,
             )
-        cfg = config.zones["doctena.example"]
+        cfg = config.zones["example.com"]
         assert cfg.zone_id == "cf-hex-id"
         assert "aws" not in cfg.zone_ids
         assert cfg.zone_id_for("aws") == "cf-hex-id"  # fallback
@@ -457,6 +492,34 @@ class TestZoneNamesParsing:
 
         with pytest.raises(ConfigError, match="non-empty string"):
             self._parse({"targets": ["aws"], "zone_names": {"aws": 3}})
+
+    def test_zone_names_on_template_raises(self):
+        """A template expands to every discovered zone, so one
+        provider-resource name would point them all at the same resource.
+        It used to validate here and then be silently dropped by
+        expand_templates()."""
+        import pytest
+
+        from octorules.config import ConfigError, ProviderConfig, _parse_zone
+
+        providers = {
+            "cloudflare": ProviderConfig(name="cloudflare"),
+            "aws": ProviderConfig(name="aws"),
+        }
+        with pytest.raises(ConfigError, match="not supported on a zone template"):
+            _parse_zone(
+                "*",
+                {"targets": ["cloudflare", "aws"], "zone_names": {"aws": "shared-acl"}},
+                set(providers),
+                providers,
+            )
+
+    def test_template_without_zone_names_is_fine(self):
+        from octorules.config import ProviderConfig, _parse_zone
+
+        providers = {"cloudflare": ProviderConfig(name="cloudflare")}
+        cfg = _parse_zone("*", {"targets": ["cloudflare"]}, set(providers), providers)
+        assert cfg.zone_names == {}
 
 
 class TestScopedSectionsOfflinePaths:
@@ -517,27 +580,24 @@ class TestScopedSectionsOfflinePaths:
         data = {"lists": [{"name": "b", "kind": "ip", "items": [{"ip": "10.0.0.0/8"}]}]}
         assert _build_list_ip_map(data) == {"b": ["10.0.0.0/8"]}
 
-    def test_validate_reports_scoped_list_errors(self, namespaces, tmp_path, caplog):
-        from octorules.commands._validate import cmd_validate
-        from octorules.config import Config, ZoneConfig
+    def test_lint_reports_scoped_list_errors(self, namespaces):
+        """CORE008 names the namespace-scoped section of a bad list entry."""
+        from octorules.commands._lint import _core_lint_zone
+        from octorules.linter.engine import LintContext
 
-        rules_dir = tmp_path / "rules"
-        rules_dir.mkdir()
-        (rules_dir / "z.yaml").write_text(
-            "alphaprov:\n"
-            "  lists:\n"
-            "    - name: good\n"
-            "      kind: ip\n"
-            "      items: []\n"
-            "betaprov:\n"
-            "  lists:\n"
-            "    - name: bad-no-kind\n"
-            "      items: []\n"
+        data = normalize_zone_format(
+            {
+                "alphaprov": {"lists": [{"name": "good", "kind": "ip", "items": []}]},
+                "betaprov": {"lists": [{"name": "bad-no-kind", "items": []}]},
+            },
+            source="z.yaml",
         )
-        config = Config(rules_dir=rules_dir, zones={"z": ZoneConfig(name="z")})
-        with caplog.at_level("ERROR"):
-            assert cmd_validate(config, ["z"]) == 1
-        assert "betaprov:lists" in caplog.text
+        ctx = LintContext(zone_name="z")
+        _core_lint_zone(data, ctx)
+        core008 = [r for r in ctx.results if r.rule_id == "CORE008"]
+        assert len(core008) == 1
+        assert "betaprov.lists" in core008[0].message
+        assert "bad-no-kind" in core008[0].message
 
 
 class TestAuditScopedListResolution:

@@ -24,5 +24,5 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: pip install -e ".[dev,wirefilter]"
+      - run: pip install -e ".[dev]"
       - run: pytest tests/ -v

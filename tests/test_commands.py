@@ -939,3 +939,41 @@ class TestTargetNameThreading:
         assert len(calls) == 2
         assert calls[0].kwargs.get("target_name") == "cf-prod"
         assert calls[1].kwargs.get("target_name") == "cf-staging"
+
+
+class TestAccountSectionCheckIgnoresPhaseFilter:
+    """An unknown section is a config error regardless of --phase.
+
+    The zone path checks the full pre-filter view; the account path used
+    to check the post-filter view, so a --phase-scoped run silently
+    skipped unknown sections the zone path would have flagged.
+    """
+
+    def _provider(self):
+        prov = MagicMock()
+        prov.account_id = "acct-1"
+        prov.account_name = "my-account"
+        prov.get_all_phase_rules.return_value = {}
+        return prov
+
+    def _config(self, rules):
+        cfg = MagicMock()
+        cfg.load_account_rules.return_value = rules
+        cfg.strict_sections = True
+        return cfg
+
+    def test_unknown_section_outside_the_filter_still_aborts(self):
+        from octorules.commands import _plan_account
+        from octorules.config import ConfigError
+
+        cfg = self._config({"redirect_rules": [], "totally_bogus_section": []})
+        # --phase selects only redirect_rules, so the filtered view drops
+        # the bogus key entirely.
+        with pytest.raises(ConfigError, match="totally_bogus_section"):
+            _plan_account(cfg, self._provider(), ["redirect_rules"])
+
+    def test_clean_account_file_with_filter_is_fine(self):
+        from octorules.commands import _plan_account
+
+        cfg = self._config({"redirect_rules": [], "cache_rules": []})
+        _plan_account(cfg, self._provider(), ["redirect_rules"])

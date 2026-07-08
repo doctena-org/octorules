@@ -61,7 +61,7 @@ class LintResult:
     ref: str = ""  # rule ref, empty for phase-level
     field: str = ""  # specific field path, e.g. "action_parameters.edge_ttl.default"
     suggestion: str = ""  # optional fix suggestion
-    location: str = ""  # YAML source location, e.g. "doctena.com.yaml:106"
+    location: str = ""  # YAML source location, e.g. "example.com.yaml:106"
 
     def __str__(self) -> str:
         parts = [f"[{self.severity.name}]", self.rule_id]
@@ -205,7 +205,20 @@ def check_catch_all(
 
 
 # Core rule IDs (provider-agnostic, always available).
-CORE_RULE_IDS: frozenset[str] = frozenset({"CORE002", "CORE003", "CORE004", "CORE006"})
+# CORE001/CORE005 are retired (moved to config-time validation) — do not reuse.
+CORE_RULE_IDS: frozenset[str] = frozenset(
+    {
+        "CORE002",
+        "CORE003",
+        "CORE004",
+        "CORE006",
+        "CORE007",
+        "CORE008",
+        "CORE009",
+        "CORE010",
+        "CORE011",
+    }
+)
 
 
 # Register core rules in the global registry so --list-rules shows them.
@@ -226,6 +239,26 @@ def _register_core_rules() -> None:
             RuleMeta("CORE003", "core", "All rules in phase are disabled", Severity.WARNING),
             RuleMeta("CORE004", "core", "Same ref used in multiple phases", Severity.WARNING),
             RuleMeta("CORE006", "core", "Rules file has no actual rules", Severity.INFO),
+            RuleMeta(
+                "CORE007",
+                "core",
+                "Phase section fails the plan-time prepare pipeline",
+                Severity.ERROR,
+            ),
+            RuleMeta("CORE008", "core", "Malformed lists entry", Severity.ERROR),
+            RuleMeta("CORE009", "core", "Malformed custom_rulesets entry", Severity.ERROR),
+            RuleMeta(
+                "CORE010",
+                "core",
+                "Extension section fails its validation hook",
+                Severity.ERROR,
+            ),
+            RuleMeta(
+                "CORE011",
+                "core",
+                "Unknown zone-file section (would not be managed)",
+                Severity.ERROR,
+            ),
         ]
     )
 

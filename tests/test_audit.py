@@ -397,6 +397,49 @@ class TestApplyAuditAcceptances:
         assert kept == [f]
         assert n == 0
 
+    def test_bare_anchor_matches_namespace_qualified_list_ref(self):
+        """Multi-provider files qualify list pseudo-rule refs; the acceptance
+        directive anchors on the bare spelling — both must match."""
+        from octorules.phases import register_namespace, unregister_namespace
+
+        register_namespace("acceptprov", {"shield": "acceptprov_shield"})
+        try:
+            f = self._f(
+                "cdn-ranges",
+                FindingSeverity.WARNING,
+                ref="list:acceptprov:blocked-ips",
+            )
+            kept, n = apply_audit_acceptances([f], {"z": {"list:blocked-ips": {"cdn-ranges"}}})
+            assert kept == []
+            assert n == 1
+        finally:
+            unregister_namespace("acceptprov")
+
+    def test_bare_anchor_fallback_requires_registered_namespace(self):
+        """A colon in a list ref that is not a registered namespace must not
+        create a bare-anchor fallback."""
+        f = self._f("cdn-ranges", FindingSeverity.WARNING, ref="list:notans:blocked-ips")
+        kept, n = apply_audit_acceptances([f], {"z": {"list:blocked-ips": {"cdn-ranges"}}})
+        assert kept == [f]
+        assert n == 0
+
+    def test_non_suppressible_survives_bare_anchor_on_qualified_ref(self):
+        from octorules.phases import register_namespace, unregister_namespace
+
+        register_namespace("acceptprov", {"shield": "acceptprov_shield"})
+        try:
+            f = self._f(
+                "cdn-ranges",
+                FindingSeverity.ERROR,
+                suppressible=False,
+                ref="list:acceptprov:blocked-ips",
+            )
+            kept, n = apply_audit_acceptances([f], {"z": {"list:blocked-ips": {"cdn-ranges"}}})
+            assert kept == [f]
+            assert n == 0
+        finally:
+            unregister_namespace("acceptprov")
+
     def test_no_acceptances_keeps_all(self):
         f = self._f("cdn-ranges", FindingSeverity.WARNING)
         kept, n = apply_audit_acceptances([f], {})

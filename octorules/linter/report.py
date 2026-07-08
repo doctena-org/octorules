@@ -6,6 +6,7 @@ from typing import IO, Any
 
 from octorules._color import Pen, supports_color
 from octorules.linter.engine import LintContext, LintResult, Severity
+from octorules.phases import display_phase_name
 
 _SEVERITY_PEN_METHOD = {
     Severity.ERROR: "error",
@@ -20,7 +21,7 @@ def _format_result(r: LintResult, p: Pen) -> str:
     parts = [getattr(p, method)(f"[{r.severity.name}]")]
     parts.append(p.muted(r.rule_id))
     if r.phase:
-        loc = f"({r.phase}"
+        loc = f"({display_phase_name(r.phase)}"
         if r.ref:
             loc += f" / {r.ref}"
         if r.location:
@@ -118,7 +119,7 @@ def _to_json_data(ctx: LintContext) -> dict[str, Any]:
                 "rule_id": r.rule_id,
                 "severity": r.severity.name.lower(),
                 "message": r.message,
-                "phase": r.phase,
+                "phase": display_phase_name(r.phase) if r.phase else r.phase,
                 "ref": r.ref,
                 "field": r.field,
                 "suggestion": r.suggestion,
@@ -182,7 +183,7 @@ def _to_sarif(ctx: LintContext) -> dict[str, Any]:
             # Add logical location
             logical_parts = []
             if r.phase:
-                logical_parts.append(r.phase)
+                logical_parts.append(display_phase_name(r.phase))
             if r.ref:
                 logical_parts.append(r.ref)
             if r.field:

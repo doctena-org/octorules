@@ -15,12 +15,12 @@ from octorules.planner import (
     ZonePlan,
     _items_by_identity,
     check_safety,
+    check_zone_sections,
     compute_checksum,
     diff_list,
     diff_lists_full,
     normalize_list_item,
     validate_list_entry,
-    warn_unknown_phase_keys,
 )
 
 REDIRECT_PHASE = get_phase("redirect_rules")
@@ -101,6 +101,17 @@ class TestListPlan:
 
 class TestValidateListEntry:
     """Tests for validate_list_entry."""
+
+    def test_non_mapping_entry_raises_validation_error(self):
+        """Scalar entries raise RuleValidationError, not AttributeError."""
+        with pytest.raises(RuleValidationError, match="must be a mapping"):
+            validate_list_entry(42, 0)
+
+    def test_non_dict_item_raises_validation_error(self):
+        """Bare-string items raise RuleValidationError, not AttributeError."""
+        entry = {"name": "blocklist", "kind": "ip", "items": ["10.0.0.0/8"]}
+        with pytest.raises(RuleValidationError, match="must be a mapping"):
+            validate_list_entry(entry, 0)
 
     def test_valid_ip_list(self):
         """A valid IP list entry should pass validation."""
@@ -903,14 +914,14 @@ class TestWarnUnknownPhaseKeysLists:
         """The 'lists' key should be recognized as a non-phase key."""
         rules_data = {"redirect_rules": [], "lists": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "account")
+            check_zone_sections(rules_data, "account")
         assert "lists" not in caplog.text
 
     def test_lists_and_custom_rulesets_not_warned(self, caplog):
         """Both 'lists' and 'custom_rulesets' should be recognized."""
         rules_data = {"redirect_rules": [], "lists": [], "custom_rulesets": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "account")
+            check_zone_sections(rules_data, "account")
         assert "lists" not in caplog.text
         assert "custom_rulesets" not in caplog.text
 
@@ -918,7 +929,7 @@ class TestWarnUnknownPhaseKeysLists:
         """Unknown keys should still be warned even when 'lists' is present."""
         rules_data = {"lists": [], "bogus_phase": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            warn_unknown_phase_keys(rules_data, "account")
+            check_zone_sections(rules_data, "account")
         assert "lists" not in caplog.text
         assert "bogus_phase" in caplog.text
 
