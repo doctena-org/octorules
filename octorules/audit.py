@@ -25,11 +25,14 @@ from octorules._cdn_sources import (
     _AZURE_DETAILS_URL,
     _AZURE_JSON_URL_RE,
     _BUNNY_URLS,
+    _GOOGLE_CLOUD_URL,
+    _GOOGLE_GOOG_URL,
     _parse_aws_cloudfront_ips,
     _parse_azure_front_door_ips,
     _parse_bunny_ips,
     _parse_cloudflare_ips,
     _parse_google_cloud_ips,
+    google_front_end_cidrs,
 )
 
 log = logging.getLogger(__name__)
@@ -194,6 +197,9 @@ class AuditFinding:
     zone_name: str = ""
     phase_name: str = ""
     ref: str = ""
+    suppressible: bool = True
+    """When False, no ``# octorules:accept=`` directive may silence this
+    finding (e.g. overlapping your own active provider's edge ranges)."""
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +252,29 @@ _CDN_FILES = [
     ("google_cloud.json", "Google Cloud"),
     ("bunny.json", "Bunny"),
     ("azure_front_door.json", "Azure Front Door"),
+    ("google_front_end.json", "Google Front End"),
 ]
+
+# Maps a provider namespace (a key in ``config.providers``) to its CDN display
+# name in ``_CDN_FILES``. An overlap with the edge ranges of a provider you are
+# ACTIVELY fronting on is always a mistake — those addresses only ever carry
+# your own edge traffic, never an attacker (who appears as their real IP at the
+# edge) — so :func:`check_cdn_ranges` raises it to a non-suppressible ERROR
+# instead of an accept-able warning.
+#
+# Every provider whose bundled ``_CDN_FILES`` data is a *shared edge* range set
+# belongs here — those ranges front all of the provider's customers and are
+# never a legitimate block target. Note ``google`` maps to "Google Front End"
+# (the ``goog.json - cloud.json`` edge), NOT "Google Cloud": the latter is the
+# rentable GCP compute space, where blocking a specific attacker host is valid,
+# so it stays an accept-able ``cdn-ranges`` warning.
+_OWN_EDGE_CDN_NAMES: dict[str, str] = {
+    "cloudflare": "Cloudflare",
+    "aws": "AWS CloudFront",
+    "azure": "Azure Front Door",
+    "bunny": "Bunny",
+    "google": "Google Front End",
+}
 
 
 def _fetch_bunny_text(timeout: int = 15) -> str | None:
@@ -337,7 +365,15 @@ def fetch_cdn_ranges(timeout: int = 15, cdn_stale_days: int = 60) -> CdnRangeRes
         return _fetch_json("https://ip-ranges.amazonaws.com/ip-ranges.json", timeout=to)
 
     def _google_fetch(to: int) -> Any:
-        return _fetch_json("https://www.gstatic.com/ipranges/cloud.json", timeout=to)
+        return _fetch_json(_GOOGLE_CLOUD_URL, timeout=to)
+
+    def _google_front_end_fetch(to: int) -> Any:
+        # GFE needs both lists; return the pre-computed difference (identity parser).
+        goog = _fetch_json(_GOOGLE_GOOG_URL, timeout=to)
+        cloud = _fetch_json(_GOOGLE_CLOUD_URL, timeout=to)
+        if goog is None or cloud is None:
+            return None
+        return google_front_end_cidrs(goog, cloud)
 
     # (label, fetcher(timeout) -> data, parser(data) -> list[str])
     sources = [
@@ -346,6 +382,7 @@ def fetch_cdn_ranges(timeout: int = 15, cdn_stale_days: int = 60) -> CdnRangeRes
         ("Google Cloud", _google_fetch, _parse_google_cloud_ips),
         ("Bunny", _fetch_bunny_text, _parse_bunny_ips),
         ("Azure Front Door", _fetch_azure_service_tags, _parse_azure_front_door_ips),
+        ("Google Front End", _google_front_end_fetch, lambda cidrs: cidrs),
     ]
 
     result: dict[str, list[str]] = {}
@@ -603,6 +640,7 @@ def check_ip_shadow(rule_ips: list[RuleIPInfo], phase_order: list[str]) -> list[
 def check_cdn_ranges(
     rule_ips: list[RuleIPInfo],
     cdn_ranges: dict[str, list[str]],
+    active_cdn_providers: set[str] | None = None,
 ) -> list[AuditFinding]:
     """Check if any rule IPs match known CDN provider IP ranges.
 
@@ -610,6 +648,11 @@ def check_cdn_ranges(
     address, then each rule CIDR is checked via binary search against
     candidate CDN ranges.  Complexity is O((n + m) log m) instead of
     O(n * m).
+
+    *active_cdn_providers* is the set of CDN display names this config
+    actively fronts on (see ``_OWN_EDGE_CDN_NAMES``). An overlap with one
+    of those is an "own-edge" mistake: it is emitted as a non-suppressible
+    ERROR rather than an accept-able WARNING.
     """
     import bisect
 
@@ -672,19 +715,40 @@ def check_cdn_ranges(
             match = _check_against(net, cdn_list, cdn_starts)
             if match is not None:
                 cdn_provider, cdn_net = match
-                findings.append(
-                    AuditFinding(
-                        check="cdn-ranges",
-                        severity=FindingSeverity.WARNING,
-                        message=(
-                            f"{cidr} (in {info.ref}/{info.phase_name})"
-                            f" overlaps {cdn_provider} range {cdn_net}"
-                        ),
-                        zone_name=info.zone_name,
-                        phase_name=info.phase_name,
-                        ref=info.ref,
+                if active_cdn_providers and cdn_provider in active_cdn_providers:
+                    # Own-edge overlap: a range of a provider this config
+                    # actively fronts on. Always wrong, and never silenceable.
+                    findings.append(
+                        AuditFinding(
+                            check="cdn-ranges",
+                            severity=FindingSeverity.ERROR,
+                            message=(
+                                f"{cidr} (in {info.ref}/{info.phase_name}) is inside"
+                                f" {cdn_provider}'s own edge range {cdn_net}, but"
+                                f" {cdn_provider} is an active provider for this config."
+                                " Blocklisting your own edge only ever matches your own"
+                                " edge/Worker/WARP traffic, never an attacker — remove it."
+                            ),
+                            zone_name=info.zone_name,
+                            phase_name=info.phase_name,
+                            ref=info.ref,
+                            suppressible=False,
+                        )
                     )
-                )
+                else:
+                    findings.append(
+                        AuditFinding(
+                            check="cdn-ranges",
+                            severity=FindingSeverity.WARNING,
+                            message=(
+                                f"{cidr} (in {info.ref}/{info.phase_name})"
+                                f" overlaps {cdn_provider} range {cdn_net}"
+                            ),
+                            zone_name=info.zone_name,
+                            phase_name=info.phase_name,
+                            ref=info.ref,
+                        )
+                    )
     return findings
 
 
@@ -954,6 +1018,31 @@ def audit_zone_rules(
     return [info for info in all_infos if info.ip_ranges]
 
 
+def apply_audit_acceptances(
+    findings: list[AuditFinding],
+    accepted_by_zone: dict[str, dict[str, set[str]]],
+) -> tuple[list[AuditFinding], int]:
+    """Drop findings whose zone accepts their check — file-wide (``"*"``) or for
+    the finding's specific rule anchor (``ref``).
+
+    Non-suppressible findings (``suppressible=False``, e.g. own-edge overlaps)
+    are NEVER dropped, even when their check is accepted. Returns
+    ``(kept_findings, suppressed_count)``.
+    """
+    if not accepted_by_zone:
+        return findings, 0
+    kept: list[AuditFinding] = []
+    suppressed = 0
+    for f in findings:
+        acc = accepted_by_zone.get(f.zone_name, {}) if f.zone_name else {}
+        accepted_here = f.check in acc.get(f.ref, set()) or f.check in acc.get("*", set())
+        if f.suppressible and accepted_here:
+            suppressed += 1
+        else:
+            kept.append(f)
+    return kept, suppressed
+
+
 def run_audit(
     all_rule_ips: list[RuleIPInfo],
     phase_order: list[str],
@@ -961,6 +1050,7 @@ def run_audit(
     checks: frozenset[str] | None = None,
     cdn_timeout: int = 15,
     cdn_stale_days: int = 60,
+    active_cdn_providers: set[str] | None = None,
 ) -> list[AuditFinding]:
     """Run selected audit checks on collected IP data.
 
@@ -970,6 +1060,8 @@ def run_audit(
         checks: Which checks to run (default: all).
         cdn_timeout: Timeout for CDN range fetching.
         cdn_stale_days: Warn if baked-in CDN data is older than this many days.
+        active_cdn_providers: CDN display names this config fronts on; an
+            overlap with one is a non-suppressible own-edge ERROR.
     """
     if checks is None:
         checks = ALL_CHECKS
@@ -990,7 +1082,7 @@ def run_audit(
     if "cdn-ranges" in checks:
         cdn_result = fetch_cdn_ranges(timeout=cdn_timeout, cdn_stale_days=cdn_stale_days)
         if cdn_result.ranges:
-            findings.extend(check_cdn_ranges(all_rule_ips, cdn_result.ranges))
+            findings.extend(check_cdn_ranges(all_rule_ips, cdn_result.ranges, active_cdn_providers))
             if cdn_result.is_stale(cdn_stale_days):
                 age = (datetime.now(timezone.utc) - cdn_result.generated_at).days
                 findings.append(

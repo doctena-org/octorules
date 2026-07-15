@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] - 2026-07-15
+
+### Added
+- Audit: a rule IP inside the edge ranges of a provider you front on
+  (Cloudflare, AWS CloudFront, Azure Front Door, Bunny, Google Front End) is now
+  a non-suppressible `cdn-ranges` ERROR that `accept=cdn-ranges` can't silence.
+  (Google Front End = `goog.json - cloud.json`, bundled as a new range set; GCP
+  compute overlaps stay accept-able warnings.)
+
 ## [0.30.0] - 2026-07-02
 
 ### Added

@@ -21,6 +21,7 @@ from octorules.audit import (
     RuleIPInfo,
     _load_baked_in_ranges,
     _to_network,
+    apply_audit_acceptances,
     audit_zone_rules,
     check_cdn_ranges,
     check_ip_overlap,
@@ -259,6 +260,185 @@ class TestCheckCDNRanges:
         findings = check_cdn_ranges(rules, cdn)
         assert len(findings) == 1
         assert "BigCDN" in findings[0].message
+
+    def test_own_edge_active_provider_is_nonsuppressible_error(self):
+        """Overlap with an ACTIVE provider's own edge ranges is a
+        non-suppressible ERROR (the block_known_attackers Cloudflare-IP case)."""
+        cdn = {"Cloudflare": ["2a06:98c0::/29", "104.16.0.0/13"]}
+        rules = [_make_rule_ip(ref="block-list", ips=["2a06:98c0:3600::103"])]
+        findings = check_cdn_ranges(rules, cdn, active_cdn_providers={"Cloudflare"})
+        assert len(findings) == 1
+        assert findings[0].severity is FindingSeverity.ERROR
+        assert findings[0].suppressible is False
+        assert "own edge" in findings[0].message
+
+    def test_non_active_provider_stays_suppressible_warning(self):
+        """The same overlap, but the provider is NOT fronted → accept-able WARNING."""
+        cdn = {"Cloudflare": ["2a06:98c0::/29"]}
+        rules = [_make_rule_ip(ref="block-list", ips=["2a06:98c0:3600::103"])]
+        findings = check_cdn_ranges(rules, cdn, active_cdn_providers={"AWS CloudFront"})
+        assert len(findings) == 1
+        assert findings[0].severity is FindingSeverity.WARNING
+        assert findings[0].suppressible is True
+
+    def test_own_edge_default_is_backward_compatible_warning(self):
+        """Without active_cdn_providers the behaviour is unchanged (WARNING)."""
+        cdn = {"Cloudflare": ["104.16.0.0/13"]}
+        rules = [_make_rule_ip(ref="r1", ips=["104.16.0.1"])]
+        findings = check_cdn_ranges(rules, cdn)
+        assert len(findings) == 1
+        assert findings[0].severity is FindingSeverity.WARNING
+        assert findings[0].suppressible is True
+
+    def test_cloud_host_overlap_not_escalated_when_other_provider_active(self):
+        """A non-active (cloud-host) overlap stays a warning even while a
+        different provider is active — only the active provider escalates."""
+        cdn = {"Cloudflare": ["104.16.0.0/13"], "Google Cloud": ["34.0.0.0/8"]}
+        rules = [_make_rule_ip(ref="gcp-attacker", ips=["34.67.234.156"])]
+        findings = check_cdn_ranges(rules, cdn, active_cdn_providers={"Cloudflare"})
+        assert len(findings) == 1
+        assert findings[0].severity is FindingSeverity.WARNING
+        assert findings[0].suppressible is True
+        assert "Google Cloud" in findings[0].message
+
+    def test_own_edge_generalises_to_other_cdn_providers(self):
+        """Own-edge escalation is not Cloudflare-specific — it fires for any
+        active shared-edge CDN provider (here AWS CloudFront)."""
+        cdn = {"AWS CloudFront": ["13.32.0.0/15"]}
+        rules = [_make_rule_ip(ref="r1", ips=["13.32.0.5"])]
+        findings = check_cdn_ranges(rules, cdn, active_cdn_providers={"AWS CloudFront"})
+        assert len(findings) == 1
+        assert findings[0].severity is FindingSeverity.ERROR
+        assert findings[0].suppressible is False
+
+    def test_own_edge_map_values_are_valid_cdn_labels(self):
+        """Every _OWN_EDGE_CDN_NAMES value must be a real _CDN_FILES label,
+        so cmd_audit's active-provider set can actually match a finding."""
+        from octorules.audit import _CDN_FILES, _OWN_EDGE_CDN_NAMES
+
+        valid_labels = {label for _, label in _CDN_FILES}
+        assert set(_OWN_EDGE_CDN_NAMES.values()) <= valid_labels
+
+    def test_google_front_end_is_address_space_difference(self):
+        """GFE = address-space(goog) − address-space(cloud), computed with real
+        CIDR arithmetic — not a prefix-string set difference."""
+        from octorules._cdn_sources import google_front_end_cidrs
+
+        goog = {"prefixes": [{"ipv4Prefix": "10.0.0.0/24"}, {"ipv6Prefix": "2001:db8::/32"}]}
+        cloud = {"prefixes": [{"ipv4Prefix": "10.0.0.128/25"}]}  # carve out the upper half
+        gfe = google_front_end_cidrs(goog, cloud)
+        assert "10.0.0.0/25" in gfe  # lower half survives
+        assert "10.0.0.128/25" not in gfe  # carved out (it's GCP compute)
+        assert "2001:db8::/32" in gfe  # untouched v6 range
+
+    def test_google_own_edge_is_front_end_not_compute(self):
+        """For an active ``google`` config, only Google Front End overlaps are
+        the non-suppressible own-edge error; GCP compute (Google Cloud) overlaps
+        stay accept-able warnings, since attackers legitimately rent there."""
+        cdn = {"Google Front End": ["104.154.0.0/20"], "Google Cloud": ["34.0.0.0/8"]}
+        active = {"Google Front End"}  # what cmd_audit derives from providers=["google"]
+
+        gfe = check_cdn_ranges([_make_rule_ip(ref="r", ips=["104.154.0.5"])], cdn, active)
+        assert len(gfe) == 1
+        assert gfe[0].severity is FindingSeverity.ERROR
+        assert gfe[0].suppressible is False
+
+        compute = check_cdn_ranges([_make_rule_ip(ref="r", ips=["34.1.2.3"])], cdn, active)
+        assert len(compute) == 1
+        assert compute[0].severity is FindingSeverity.WARNING
+        assert compute[0].suppressible is True
+
+    def test_own_edge_map_pins_google_to_front_end(self):
+        """google must map to the Front End edge set, never the rentable
+        "Google Cloud" compute ranges — the whole point of the GFE split."""
+        from octorules.audit import _OWN_EDGE_CDN_NAMES
+
+        assert _OWN_EDGE_CDN_NAMES["cloudflare"] == "Cloudflare"
+        assert _OWN_EDGE_CDN_NAMES["google"] == "Google Front End"
+        assert "Google Cloud" not in _OWN_EDGE_CDN_NAMES.values()
+
+
+class TestApplyAuditAcceptances:
+    """The accept/suppression gate. Core regression guard: a non-suppressible
+    finding (own-edge overlap) can NEVER be silenced by an accept directive."""
+
+    @staticmethod
+    def _f(check, severity, *, suppressible=True, zone="z", ref="r"):
+        return AuditFinding(
+            check=check,
+            severity=severity,
+            message="m",
+            zone_name=zone,
+            ref=ref,
+            suppressible=suppressible,
+        )
+
+    def test_non_suppressible_survives_matching_accept(self):
+        f = self._f("cdn-ranges", FindingSeverity.ERROR, suppressible=False)
+        kept, n = apply_audit_acceptances([f], {"z": {"*": {"cdn-ranges"}}})
+        assert kept == [f]
+        assert n == 0
+
+    def test_suppressible_dropped_by_filewide_accept(self):
+        f = self._f("cdn-ranges", FindingSeverity.WARNING)
+        kept, n = apply_audit_acceptances([f], {"z": {"*": {"cdn-ranges"}}})
+        assert kept == []
+        assert n == 1
+
+    def test_suppressible_dropped_by_ref_scoped_accept(self):
+        f = self._f("cdn-ranges", FindingSeverity.WARNING, ref="my-list")
+        kept, n = apply_audit_acceptances([f], {"z": {"my-list": {"cdn-ranges"}}})
+        assert kept == []
+        assert n == 1
+
+    def test_kept_when_check_not_accepted(self):
+        f = self._f("cdn-ranges", FindingSeverity.WARNING)
+        kept, n = apply_audit_acceptances([f], {"z": {"*": {"ip-overlap"}}})
+        assert kept == [f]
+        assert n == 0
+
+    def test_no_acceptances_keeps_all(self):
+        f = self._f("cdn-ranges", FindingSeverity.WARNING)
+        kept, n = apply_audit_acceptances([f], {})
+        assert kept == [f]
+        assert n == 0
+
+    def test_own_edge_and_normal_under_same_accept(self):
+        own = self._f("cdn-ranges", FindingSeverity.ERROR, suppressible=False)
+        warn = self._f("cdn-ranges", FindingSeverity.WARNING)
+        kept, n = apply_audit_acceptances([own, warn], {"z": {"*": {"cdn-ranges"}}})
+        assert kept == [own]
+        assert n == 1
+
+
+class TestIPSpaceDifference:
+    """Address-space subtraction behind Google Front End (goog - cloud).
+    Correctness-critical: a wrong result feeds a non-suppressible ERROR."""
+
+    @staticmethod
+    def _d(a, b):
+        from octorules._cdn_sources import _ip_space_difference
+
+        return set(_ip_space_difference(a, b))
+
+    def test_carve_middle_chunk(self):
+        assert self._d(["10.0.0.0/24"], ["10.0.0.64/26"]) == {"10.0.0.0/26", "10.0.0.128/25"}
+
+    def test_identical_range_fully_removed(self):
+        assert self._d(["10.0.0.0/24"], ["10.0.0.0/24"]) == set()
+
+    def test_subtrahend_superset_removes_all(self):
+        assert self._d(["10.0.0.0/25"], ["10.0.0.0/24"]) == set()
+
+    def test_empty_subtrahend_collapses_minuend(self):
+        assert self._d(["10.0.0.0/25", "10.0.0.128/25"], []) == {"10.0.0.0/24"}
+
+    def test_ipv6_subtraction(self):
+        assert self._d(["2001:db8::/32"], ["2001:db8::/33"]) == {"2001:db8:8000::/33"}
+
+    def test_families_are_independent(self):
+        out = self._d(["10.0.0.0/24", "2001:db8::/32"], ["10.0.0.0/25"])
+        assert out == {"10.0.0.128/25", "2001:db8::/32"}
 
 
 # ---------------------------------------------------------------------------

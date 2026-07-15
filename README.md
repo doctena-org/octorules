@@ -448,7 +448,7 @@ octorules audit [--check ...] [--severity error|warning|info] [--format text|jso
 
 - **ip-overlap** -- Cross-rule and cross-list IP range overlaps within a zone.
 - **ip-shadow** -- Rules shadowed by broader rules in earlier phases (e.g. a rate-limit rule whose IPs are already blocked by a WAF rule).
-- **cdn-ranges** -- Rules that match known CDN provider IP ranges (Cloudflare, AWS CloudFront, Google Cloud, Bunny, Azure Front Door). Fetches fresh ranges from public APIs; falls back to baked-in data when offline. (Azure's list is scraped from the Microsoft Download Center page — the JSON URL rotates weekly.)
+- **cdn-ranges** -- Rules that match known provider IP ranges: shared edge (Cloudflare, AWS CloudFront, Azure Front Door, Bunny, Google Front End) and Google Cloud compute. Fetches fresh ranges from public APIs; falls back to baked-in data when offline. (Azure's list is scraped from the Microsoft Download Center page — the JSON URL rotates weekly; Google Front End is derived as `goog.json - cloud.json`.) An overlap with the **edge** ranges of a provider you actively front on is a non-suppressible **error** — those addresses only ever carry your own edge traffic, never an attacker — while all other overlaps are accept-able warnings.
 - **zone-drift** -- Same CIDR treated differently across zones (e.g. blocked in zone A, allowed in zone B).
 
 Acceptance comments suppress known findings (check names must be lowercase).
@@ -477,6 +477,10 @@ name: block_known_attackers
 kind: ip
 items: [...]
 ```
+
+`accept=cdn-ranges` silences ordinary CDN-range warnings, but **not** own-edge
+findings (an active provider's own edge ranges) — those are errors by design
+and can only be resolved by removing the offending IP.
 
 ### `octorules versions`
 

@@ -28,11 +28,14 @@ from octorules._cdn_sources import (
     _AZURE_DETAILS_URL,
     _AZURE_JSON_URL_RE,
     _BUNNY_URLS,
+    _GOOGLE_CLOUD_URL,
+    _GOOGLE_GOOG_URL,
     _parse_aws_cloudfront_ips,
     _parse_azure_front_door_ips,
     _parse_bunny_ips,
     _parse_cloudflare_ips,
     _parse_google_cloud_ips,
+    google_front_end_cidrs,
 )
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "octorules" / "data" / "cdn_ranges"
@@ -43,6 +46,9 @@ _DATA_DIR = Path(__file__).resolve().parent.parent / "octorules" / "data" / "cdn
 #                   parser receives str
 # - "azure-scrape"— descriptor is the details-page URL; the script scrapes it
 #                   for the current JSON URL and fetches that. Parser receives dict.
+# - "google-gfe"  — descriptor is (goog_url, cloud_url); the script fetches both
+#                   and the parser receives {"goog": ..., "cloud": ...}. The result
+#                   is Google Front End = goog address space - cloud (compute).
 _SOURCES: list[tuple[str, str, object, str]] = [
     ("cloudflare.json", "Cloudflare", "https://api.cloudflare.com/client/v4/ips", "json"),
     (
@@ -51,9 +57,15 @@ _SOURCES: list[tuple[str, str, object, str]] = [
         "https://ip-ranges.amazonaws.com/ip-ranges.json",
         "json",
     ),
-    ("google_cloud.json", "Google Cloud", "https://www.gstatic.com/ipranges/cloud.json", "json"),
+    ("google_cloud.json", "Google Cloud", _GOOGLE_CLOUD_URL, "json"),
     ("bunny.json", "Bunny", _BUNNY_URLS, "text"),
     ("azure_front_door.json", "Azure Front Door", _AZURE_DETAILS_URL, "azure-scrape"),
+    (
+        "google_front_end.json",
+        "Google Front End",
+        (_GOOGLE_GOOG_URL, _GOOGLE_CLOUD_URL),
+        "google-gfe",
+    ),
 ]
 
 
@@ -118,6 +130,11 @@ _HANDLERS: dict[str, tuple] = {
     "Google Cloud": (_parse_google_cloud_ips, _google_version),
     "Bunny": (_parse_bunny_ips, _bunny_version),
     "Azure Front Door": (_parse_azure_front_door_ips, _azure_version),
+    # GFE receives {"goog": ..., "cloud": ...}; provenance comes from cloud.json.
+    "Google Front End": (
+        lambda d: google_front_end_cidrs(d["goog"], d["cloud"]),
+        lambda d: _google_version(d["cloud"]),
+    ),
 }
 
 
@@ -135,6 +152,9 @@ def sync() -> bool:
                 data = "\n".join(_fetch_text(u) for u in urls)
             elif fmt == "azure-scrape":
                 data = _fetch_azure_service_tags(src)  # type: ignore[arg-type]
+            elif fmt == "google-gfe":
+                goog_url, cloud_url = src  # type: ignore[misc]
+                data = {"goog": _fetch_json(goog_url), "cloud": _fetch_json(cloud_url)}
             else:
                 data = _fetch_json(src)  # type: ignore[arg-type]
         except Exception as e:

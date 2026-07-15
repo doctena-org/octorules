@@ -98,6 +98,92 @@ def _parse_google_cloud_ips(data: dict) -> list[str]:
     return cidrs
 
 
+# Google publishes two range lists. ``goog.json`` is the full Google address
+# space (coarse aggregates); ``cloud.json`` is the fine-grained GCP customer
+# (compute) ranges. Their address-space difference is Google Front End — the
+# shared edge that fronts Cloud Armor / external load balancers. GFE is a true
+# "own edge" (never a legitimate block target); GCP compute is rentable and is
+# NOT (blocking a specific attacker VM there is valid). See ``google_front_end_cidrs``.
+_GOOGLE_GOOG_URL = "https://www.gstatic.com/ipranges/goog.json"
+_GOOGLE_CLOUD_URL = "https://www.gstatic.com/ipranges/cloud.json"
+
+
+def _to_network(cidr: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
+    try:
+        return ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return None
+
+
+def _merge_intervals(cidrs: list[str], version: int) -> list[tuple[int, int]]:
+    """Collapse *cidrs* of the given IP *version* into sorted, merged
+    ``[start, end]`` integer intervals."""
+    raw = sorted(
+        (int(n.network_address), int(n.broadcast_address))
+        for c in cidrs
+        if (n := _to_network(c)) is not None and n.version == version
+    )
+    merged: list[list[int]] = []
+    for lo, hi in raw:
+        if merged and lo <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [(lo, hi) for lo, hi in merged]
+
+
+def _subtract_intervals(
+    a: list[tuple[int, int]], b: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Interval-set difference ``a - b`` (both sorted, merged, non-overlapping)."""
+    result: list[tuple[int, int]] = []
+    for lo, hi in a:
+        cur = lo
+        for blo, bhi in b:
+            if bhi < cur:
+                continue
+            if blo > hi:
+                break
+            if blo > cur:
+                result.append((cur, min(blo - 1, hi)))
+            cur = max(cur, bhi + 1)
+            if cur > hi:
+                break
+        if cur <= hi:
+            result.append((cur, hi))
+    return result
+
+
+def _ip_space_difference(minuend_cidrs: list[str], subtrahend_cidrs: list[str]) -> list[str]:
+    """Return ``minuend - subtrahend`` as collapsed CIDRs (sorted), computed as a
+    true address-space difference per family — NOT a prefix-string set difference
+    (the two Google lists use different prefix granularities)."""
+    out: list[str] = []
+    for version, addr_cls in ((4, ipaddress.IPv4Address), (6, ipaddress.IPv6Address)):
+        a = _merge_intervals(minuend_cidrs, version)
+        b = _merge_intervals(subtrahend_cidrs, version)
+        for lo, hi in _subtract_intervals(a, b):
+            out.extend(
+                str(n) for n in ipaddress.summarize_address_range(addr_cls(lo), addr_cls(hi))
+            )
+    return sorted(out)
+
+
+def google_front_end_cidrs(goog_data: dict, cloud_data: dict) -> list[str]:
+    """Google Front End edge ranges = ``goog.json`` address space - ``cloud.json``.
+
+    Both inputs use the same ``{"prefixes": [{"ipv4Prefix"|"ipv6Prefix": ...}]}``
+    schema. The result is the Google-owned edge that fronts Cloud Armor / external
+    load balancers, with the rentable GCP compute space removed.
+    """
+    goog = _parse_google_cloud_ips(goog_data)
+    cloud = _parse_google_cloud_ips(cloud_data)
+    if not goog:
+        log.warning("Google Front End: goog.json produced no prefixes")
+        return []
+    return _ip_space_difference(goog, cloud)
+
+
 def _parse_bunny_ips(data: str) -> list[str]:
     """Extract CIDRs from Bunny edge server plain-text lists.
 

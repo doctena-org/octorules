@@ -36,11 +36,13 @@ def cmd_audit(
     Without *exit_code*, only errors return non-zero (matching linter).
     """
     from octorules.audit import (
+        _OWN_EDGE_CDN_NAMES,
         _SEVERITY_RANK,
         ALL_CHECKS,
         AUDIT_FORMATTERS,
         FindingSeverity,
         RuleIPInfo,
+        apply_audit_acceptances,
         audit_zone_rules,
         parse_audit_acceptances,
         run_audit,
@@ -108,27 +110,24 @@ def cmd_audit(
         log.info("No IP ranges found in any rules — nothing to audit.")
         return 0
 
+    # CDN display names for the providers this config actively fronts on;
+    # overlapping their edge ranges is a non-suppressible own-edge ERROR.
+    active_cdn_providers = {
+        _OWN_EDGE_CDN_NAMES[p] for p in config.providers if p in _OWN_EDGE_CDN_NAMES
+    }
+
     findings = run_audit(
         all_rule_ips,
         phase_order,
         checks=selected_checks,
         cdn_timeout=cdn_timeout,
         cdn_stale_days=cdn_stale_days,
+        active_cdn_providers=active_cdn_providers,
     )
 
-    # Apply suppressions: a finding is suppressed when its zone accepts the
-    # check either file-wide ("*") or for the finding's specific rule anchor
-    # (the ref the directive was placed above).
-    total_suppressed = 0
-    if accepted_by_zone:
-        unsuppressed = []
-        for f in findings:
-            acc = accepted_by_zone.get(f.zone_name, {}) if f.zone_name else {}
-            if f.check in acc.get(f.ref, set()) or f.check in acc.get("*", set()):
-                total_suppressed += 1
-            else:
-                unsuppressed.append(f)
-        findings = unsuppressed
+    # Drop findings whose zone accepts their check. Non-suppressible findings
+    # (e.g. own-edge overlaps) are always kept — see apply_audit_acceptances.
+    findings, total_suppressed = apply_audit_acceptances(findings, accepted_by_zone)
 
     # Classify for exit code (based on unsuppressed findings).
     has_errors = any(f.severity == FindingSeverity.ERROR for f in findings)
