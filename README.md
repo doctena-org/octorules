@@ -383,16 +383,24 @@ Suppression comments work like shellcheck — add `# octorules:disable=CF015` (c
 | CORE009 | ERROR | Malformed `custom_rulesets` entry |
 | CORE010 | ERROR | Extension section fails its validation hook (e.g. Page Shield policies) |
 | CORE011 | ERROR | Unknown zone-file section — `plan`/`sync` would skip it entirely |
+| CORE012 | WARNING | An `octorules:disable=` directive that cannot take effect |
 
 CORE007 executes the same `prepare_desired_rules()` pipeline `plan` and `sync`
 run — provider prepare hooks included — so a file that lints clean cannot die
 in prepare at plan time.
 
-CORE011 mirrors that skip set: a top-level key that is neither a registered
+CORE011 *is* that skip set: a top-level key that is neither a registered
 phase nor a known section, or a member a provider namespace does not define
-(`cloudflare.waf_custom_rulez`), is silently unmanaged at plan time, so lint
-fails on it. It defers to a provider rule that already reported the same key,
-and suggests the closest valid name.
+(`cloudflare.waf_custom_rulez`), would be silently unmanaged at plan time.
+`plan` reads this rule's severity rather than carrying a switch of its own,
+so lint and plan cannot disagree about what counts as skipped. It defers to
+a provider rule that already reported the same key, and suggests the closest
+valid name.
+
+CORE011 cannot be waived by an `octorules:disable=` comment — see
+[Rule sets](#configuration). CORE012 reports a directive that changed
+nothing, either because the rule it names cannot be suppressed in a zone
+file or because no enabled set contains it.
 
 Provider-specific rules (CF, WA, GA, AZ, BN prefixes) are documented in each provider's `docs/lint.md`.
 
@@ -619,8 +627,8 @@ processors:
 
 manager:
   max_workers: 4                     # Parallel processing (default: 1)
-  strict_sections: true              # Error instead of warn when a zone-file
-                                     # section would be skipped (default: false)
+  lint:                              # Which named rule sets are active
+    sets: [default, strict]          # (this is also the default)
   plan_outputs:                      # Config-driven plan output
     text:
       class: octorules.plan_output.PlanText
@@ -638,7 +646,8 @@ zones:
       - my_proc
     allow_unmanaged: false           # Keep rules not in YAML (default: false)
     always_dry_run: true             # Never apply changes (default: false)
-    strict_sections: false           # Per-zone override of the manager flag
+    lint:                            # Per-zone override of manager.lint
+      sets: [default]                # e.g. warn instead of abort here
     zone_names:                      # Per-target provider-resource name
       my_provider: some-resource     # (defaults to the zone name)
     safety:                          # Per-zone overrides
@@ -651,11 +660,22 @@ zones:
       - my_provider
 ```
 
-By default, a zone-file section that nothing will manage — an unknown or
-misspelled key, or a section owned by a provider the zone doesn't target —
-is skipped with a warning. `strict_sections: true` turns those skips into
-hard errors before any API call, so a typo can't silently unmanage its
-rules. Renamed-phase aliases still work and only warn.
+A zone-file section that nothing will manage — an unknown or misspelled
+key, or a section owned by a provider the zone doesn't target — is rule
+`CORE011`, and by default it is a hard error before any API call, so a typo
+cannot silently unmanage its rules.
+
+`manager.lint.sets` selects which named rule sets are active, and the
+default is `[default, strict]`. `default` is the everyday rule set;
+`strict` additionally makes `plan` *enforce* the rules in it rather than
+just report them. Drop `strict` and an unmanaged section warns instead of
+aborting. Any zone can override the selection with its own `lint:` block.
+
+Rules that decide whether `plan` manages a section cannot be waived by an
+`octorules:disable=` comment — a comment in a data file should not switch
+off a deploy-time guard, so the exemption lives here in the config. A
+directive that cannot take effect is reported as `CORE012` rather than
+being silently ignored.
 
 ## Programmatic usage
 
