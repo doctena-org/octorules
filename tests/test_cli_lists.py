@@ -39,6 +39,7 @@ class TestListsPlanAccount:
             "    comment: scanner\n",
         )
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -66,6 +67,7 @@ class TestListsPlanAccount:
             "    id: rs1\n",
         )
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -90,6 +92,7 @@ class TestListsPlanAccount:
             "    comment: scanner\n",
         )
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -115,6 +118,7 @@ class TestListsPlanAccount:
             "lists: []\n",  # empty list means all managed, existing deleted
         )
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -144,6 +148,7 @@ class TestListsPlanAccount:
             "lists:\n- name: blocked_ips\n  kind: ip\n  items:\n  - ip: '1.2.3.4'\n",
         )
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.account_id = "acct-123"
         provider.account_name = "Test Account"
         provider.get_all_phase_rules.return_value = {}
@@ -175,6 +180,7 @@ class TestListsDump:
             zones={},
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {}
@@ -216,6 +222,7 @@ class TestListsDump:
             zones={},
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {
@@ -249,6 +256,7 @@ class TestListsDump:
             zones={},
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {}
@@ -278,6 +286,7 @@ class TestListsDump:
             zones={},
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {}
@@ -317,6 +326,7 @@ class TestListsDump:
         )
         out_dir = tmp_path / "export"
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {}
@@ -368,6 +378,7 @@ class TestListsSync:
             "    comment: scanner\n",
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.max_workers = 1
@@ -396,6 +407,7 @@ class TestListsSync:
             "lists: []\n",
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.max_workers = 1
@@ -432,6 +444,7 @@ class TestListsSync:
             "    comment: scanner\n",
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.max_workers = 1
@@ -463,6 +476,7 @@ class TestListsSync:
             "lists:\n- name: blocked_ips\n  kind: ip\n  items:\n  - ip: '1.2.3.4'\n",
         )
         mock_prov = MagicMock()
+        mock_prov.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.max_workers = 1
@@ -499,6 +513,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.create_list.return_value = {"id": "new-list-id"}
         provider.put_list_items.return_value = "op-123"
         provider.poll_bulk_operation.return_value = "completed"
@@ -524,6 +539,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
 
         synced, error = _apply_lists(zp, scope, provider)
         assert error is None
@@ -542,6 +558,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
 
         synced, error = _apply_lists(zp, scope, provider)
         assert error is None
@@ -560,6 +577,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.create_list.side_effect = ProviderError("Forbidden")
 
         synced, error = _apply_lists(zp, scope, provider)
@@ -580,6 +598,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.put_list_items.return_value = "op-123"
         provider.poll_bulk_operation.side_effect = TimeoutError("Operation timed out")
 
@@ -602,6 +621,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
 
         with caplog.at_level(logging.WARNING, logger="octorules"):
             synced, error = _apply_lists(zp, scope, provider)
@@ -626,6 +646,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[lp])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         provider.create_list.return_value = {"id": "new-id"}
         provider.put_list_items.return_value = "op-123"
         provider.poll_bulk_operation.return_value = "completed"
@@ -641,6 +662,7 @@ class TestApplyLists:
         zp = ZonePlan(zone_name="test-account", list_plans=[])
         scope = Scope(account_id="acct-123", label="Test Account")
         provider = MagicMock()
+        provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
 
         synced, error = _apply_lists(zp, scope, provider)
         assert error is None

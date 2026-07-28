@@ -624,8 +624,13 @@ class TestSupportsGuards:
         prov.get_all_custom_rulesets.assert_called_once()
         prov.get_all_lists.assert_called_once()
 
-    def test_backward_compat_no_supports_fetches_everything(self, tmp_path):
-        """Provider without SUPPORTS gets all features fetched."""
+    def test_no_supports_fetches_nothing(self, tmp_path):
+        """Provider without SUPPORTS gets no optional feature fetched.
+
+        Fails closed — an undeclared capability is not a licence to call the
+        optional methods, which a provider that doesn't implement them would
+        raise AttributeError on.
+        """
         from octorules.commands import _plan_account
 
         prov = MagicMock(spec=BaseProvider)
@@ -644,8 +649,8 @@ class TestSupportsGuards:
 
         _plan_account(cfg, prov, None)
 
-        prov.get_all_custom_rulesets.assert_called_once()
-        prov.get_all_lists.assert_called_once()
+        prov.get_all_custom_rulesets.assert_not_called()
+        prov.get_all_lists.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

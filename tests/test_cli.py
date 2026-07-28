@@ -676,6 +676,11 @@ class TestDumpAccount:
 
     def _make_provider(self, **overrides):
         prov = MagicMock(spec=BaseProvider)
+        # spec turns SUPPORTS into a Mock, and the capability check fails
+        # closed on anything that isn't a real set.
+        prov.SUPPORTS = overrides.get(
+            "supports", frozenset({"lists", "custom_rulesets", "zone_discovery"})
+        )
         prov.account_id = overrides.get("account_id", "acct-123")
         prov.account_name = overrides.get("account_name", "Test Account")
         prov.get_all_phase_rules.return_value = overrides.get("phase_rules", {})
@@ -818,21 +823,19 @@ class TestDumpAccount:
         with pytest.raises(ProviderAuthError):
             cmd_dump(config, None, None, scope_filter="account")
 
-    @patch("octorules.commands._dump.call_dump_extensions", return_value={})
     @patch("octorules.commands._providers._init_providers")
-    def test_extension_hooks_called(self, mock_init_provs, mock_ext, tmp_path, caplog):
-        """Extension dump hooks are invoked during account dump."""
+    def test_provider_extra_sections_called(self, mock_init_provs, tmp_path, caplog):
+        """The provider's own dump_extra_sections is invoked for the account scope."""
         config = self._make_config(tmp_path)
         mock_prov = self._make_provider(phase_rules={})
+        mock_prov.dump_extra_sections = MagicMock(return_value={})
         mock_init_provs.return_value = {"cloudflare": mock_prov}
 
         with caplog.at_level(logging.INFO, logger="octorules"):
             result = cmd_dump(config, None, None, scope_filter="account")
         assert result == 0
-        # call_dump_extensions should have been called for the account scope
-        assert mock_ext.called
-        call_args = mock_ext.call_args
-        scope_arg = call_args[0][0]
+        assert mock_prov.dump_extra_sections.called
+        scope_arg = mock_prov.dump_extra_sections.call_args[0][0]
         assert scope_arg.account_id == "acct-123"
 
     @patch("octorules.commands._providers._init_providers")
@@ -3025,6 +3028,9 @@ class TestMultiProviderDump:
         config = _multi_cli_config(tmp_path)
         cf_prov = MagicMock(spec=BaseProvider)
         aws_prov = MagicMock(spec=BaseProvider)
+        # spec turns SUPPORTS into a Mock; the capability check fails closed.
+        for _p in (cf_prov, aws_prov):
+            _p.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})
         mock_init_provs.return_value = {"cloudflare": cf_prov, "aws": aws_prov}
 
         cf_prov.account_id = "cf-acct"

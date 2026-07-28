@@ -1,14 +1,23 @@
 """Extension hook registries for provider-specific features.
 
 Providers register hooks at import time to extend core functionality
-without coupling the core to any specific provider.  Six registries:
+without coupling the core to any specific provider.  Five registries:
 
 - **plan_zone_hook**: Called during zone planning to add extension plans.
 - **apply_extension**: Called during sync to apply extension-specific changes.
 - **format_extension**: Provides formatters for extension plan types.
 - **validate_extension**: Called during offline validation.
-- **dump_extension**: Called during dump to export extension data.
 - **audit_extension**: Called during audit to extract IP ranges from rules.
+
+Dump is deliberately **not** a registry.  Hooks here are dispatched at
+every provider, not only the one that registered them, and the other
+registries survive that because they are scoped by something: plan hooks
+early-out on their own absent desired section, apply only runs for
+extensions that produced a plan, format matches on plan type, and
+validate/audit never see a provider.  A dump hook reads from the API, so
+it has no desired data to scope by and would run against providers whose
+methods it does not have.  Dump therefore lives on the provider itself,
+as :meth:`BaseProvider.dump_extra_sections`.
 
 Extension plans are stored generically in ``ZonePlan.extension_plans``
 as ``dict[str, list]``, keyed by extension name (e.g. ``"page_shield"``).
@@ -32,8 +41,6 @@ from typing import TYPE_CHECKING, Protocol
 from octorules.phases import Phase
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from octorules.audit import RuleIPInfo
     from octorules.planner import ZonePlan
     from octorules.provider.base import BaseProvider, Scope
@@ -60,10 +67,6 @@ ApplyExtensionFn = Callable[
 # (desired, zone_name, errors, lines) -> None
 # Appends to errors/lines in place.
 ValidateExtensionFn = Callable[[dict, str, list[str], list[str]], None]
-
-# (scope, provider, out_dir) -> dict | None
-# Returns data to merge into dump output, or None.
-DumpExtensionFn = Callable[["Scope", "BaseProvider", "Path"], dict | None]
 
 # (rules_data, phase_name) -> list[RuleIPInfo]
 # Extracts IP ranges from provider-specific rules in a given phase.
@@ -103,7 +106,6 @@ _PREFETCH_PARAMS = ("all_desired", "scope", "provider")
 _FINALIZE_PARAMS = ("zp", "all_desired", "scope", "provider", "ctx")
 _APPLY_PARAMS = ("zp", "plans", "scope", "provider")
 _VALIDATE_PARAMS = ("desired", "zone_name", "errors", "lines")
-_DUMP_PARAMS = ("scope", "provider", "out_dir")
 _AUDIT_PARAMS = ("rules_data", "phase_name")
 
 
@@ -146,7 +148,6 @@ _plan_zone_hooks: list[tuple[PlanZonePrefetchHook, PlanZoneFinalizeHook]] = []
 _apply_extensions: dict[str, ApplyExtensionFn] = {}
 _format_extensions: dict[str, FormatExtension] = {}
 _validate_extensions: list[ValidateExtensionFn] = []
-_dump_extensions: list[DumpExtensionFn] = []
 _audit_extensions: dict[str, AuditExtensionFn] = {}
 
 
@@ -197,14 +198,6 @@ def register_validate_extension(fn: ValidateExtensionFn) -> None:
             _validate_extensions.append(fn)
 
 
-def register_dump_extension(fn: DumpExtensionFn) -> None:
-    """Register a dump hook."""
-    _validate_hook_signature("dump_extension", fn, _DUMP_PARAMS)
-    with _REGISTRY_LOCK:
-        if fn not in _dump_extensions:
-            _dump_extensions.append(fn)
-
-
 def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
     """Register an IP-extraction function for audit checks.
 
@@ -249,15 +242,6 @@ def unregister_validate_extension(fn: ValidateExtensionFn) -> None:
     with _REGISTRY_LOCK:
         try:
             _validate_extensions.remove(fn)
-        except ValueError:
-            pass
-
-
-def unregister_dump_extension(fn: DumpExtensionFn) -> None:
-    """Remove a dump hook."""
-    with _REGISTRY_LOCK:
-        try:
-            _dump_extensions.remove(fn)
         except ValueError:
             pass
 
@@ -376,22 +360,6 @@ def call_validate_extensions(
         hooks = list(_validate_extensions)
     for fn in hooks:
         fn(desired, zone_name, errors, lines)
-
-
-def call_dump_extensions(
-    scope: "Scope",
-    provider: "BaseProvider",
-    out_dir: "Path",
-) -> dict:
-    """Call all registered dump hooks. Returns merged dict of extra data."""
-    with _REGISTRY_LOCK:
-        hooks = list(_dump_extensions)
-    result: dict = {}
-    for fn in hooks:
-        data = fn(scope, provider, out_dir)
-        if data:
-            result.update(data)
-    return result
 
 
 def call_audit_extensions(

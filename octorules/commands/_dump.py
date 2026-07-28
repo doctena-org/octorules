@@ -13,7 +13,6 @@ from octorules.commands._helpers import (
 )
 from octorules.config import Config, slugify
 from octorules.dumper import dump_zone_rules
-from octorules.extensions import call_dump_extensions
 from octorules.provider.base import (
     SUPPORTS_CUSTOM_RULESETS,
     SUPPORTS_LISTS,
@@ -27,6 +26,19 @@ from octorules.provider.exceptions import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _provider_extra_sections(provider: BaseProvider, scope: Scope) -> dict:
+    """Provider-owned extra sections for the dumped file.
+
+    ``dump_extra_sections`` is part of the provider protocol, but a
+    provider built against an older core may not define it; treat that as
+    "nothing extra to export" rather than an error.
+    """
+    fn = getattr(provider, "dump_extra_sections", None)
+    if fn is None:
+        return {}
+    return fn(scope) or {}
 
 
 def cmd_dump(
@@ -75,8 +87,7 @@ def cmd_dump(
             except ProviderError as e:
                 return zone_name, None, _format_api_error(e)
             merged_rules.update(rules)
-            # Call extension dump hooks (e.g. Page Shield)
-            merged_ext.update(call_dump_extensions(scope, provider, out_dir))
+            merged_ext.update(_provider_extra_sections(provider, scope))
 
         result = dump_zone_rules(
             zone_name,
@@ -130,8 +141,7 @@ def cmd_dump(
             if lists_future is not None:
                 lists = _future_result_or_default(lists_future, "lists", provider, None) or None
 
-            # Call extension dump hooks (e.g. Page Shield)
-            ext_data = call_dump_extensions(scope, provider, out_dir)
+            ext_data = _provider_extra_sections(provider, scope)
 
             result = dump_zone_rules(
                 account_label,

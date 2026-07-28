@@ -50,7 +50,10 @@ class TestDisplayPhaseName:
     def test_unowned_names_pass_through(self):
         from octorules.phases import display_phase_name
 
-        assert display_phase_name("redirect_rules") == "redirect_rules"
+        # Deliberately not a real phase name: with providers installed, a name
+        # like "redirect_rules" IS namespace-owned, so using one here made the
+        # test pass only in a core-only venv.
+        assert display_phase_name("not_a_registered_section") == "not_a_registered_section"
         assert display_phase_name("lists") == "lists"
         assert display_phase_name("custom_ruleset:Block") == "custom_ruleset:Block"
         assert display_phase_name("list:blocked-ips") == "list:blocked-ips"

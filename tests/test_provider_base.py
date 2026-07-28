@@ -120,11 +120,16 @@ class TestProviderSupports:
         assert not provider_supports(prov, SUPPORTS_TEST_FEATURE)
 
     def test_without_supports_attribute(self):
-        """Providers without SUPPORTS are assumed to support everything."""
+        """Providers without SUPPORTS support nothing.
+
+        Fails closed: extension hooks are dispatched against every provider,
+        so an undeclared capability must not let one package's hook run
+        against another's instance.
+        """
         prov = MagicMock(spec=[])
-        assert provider_supports(prov, SUPPORTS_CUSTOM_RULESETS)
-        assert provider_supports(prov, SUPPORTS_LISTS)
-        assert provider_supports(prov, SUPPORTS_TEST_FEATURE)
+        assert not provider_supports(prov, SUPPORTS_CUSTOM_RULESETS)
+        assert not provider_supports(prov, SUPPORTS_LISTS)
+        assert not provider_supports(prov, SUPPORTS_TEST_FEATURE)
 
     def test_constants_importable_from_provider(self):
         from octorules.provider import (

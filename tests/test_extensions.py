@@ -7,7 +7,6 @@ import pytest
 from octorules.extensions import (
     _apply_extensions,
     _audit_extensions,
-    _dump_extensions,
     _plan_zone_hooks,
     _validate_extensions,
     _validate_hook_signature,
@@ -18,13 +17,11 @@ from octorules.extensions import (
     get_format_extensions,
     register_apply_extension,
     register_audit_extension,
-    register_dump_extension,
     register_format_extension,
     register_plan_zone_hook,
     register_validate_extension,
     unregister_apply_extension,
     unregister_audit_extension,
-    unregister_dump_extension,
     unregister_format_extension,
     unregister_plan_zone_hook,
     unregister_validate_extension,
@@ -340,26 +337,6 @@ class TestHookSignatureValidation:
         assert ok_validate in _validate_extensions
         unregister_validate_extension(ok_validate)
         assert ok_validate not in _validate_extensions
-
-    def test_dump_extension_validation(self):
-        """Dump extension validates signature at registration."""
-
-        def bad_dump(s, p, d):
-            return None
-
-        with pytest.raises(TypeError, match="dump_extension hook.*incorrect signature"):
-            register_dump_extension(bad_dump)
-
-    def test_valid_dump_extension_accepted(self):
-        """Dump extension with correct signature is accepted and registered."""
-
-        def ok_dump(scope, provider, out_dir):
-            return None
-
-        register_dump_extension(ok_dump)
-        assert ok_dump in _dump_extensions
-        unregister_dump_extension(ok_dump)
-        assert ok_dump not in _dump_extensions
 
     def test_audit_extension_validation(self):
         """Audit extension validates signature at registration."""

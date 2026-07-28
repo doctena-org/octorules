@@ -15,13 +15,19 @@ SUPPORTS_ZONE_DISCOVERY = "zone_discovery"
 def provider_supports(provider: "BaseProvider", feature: str) -> bool:
     """Check whether *provider* declares support for *feature*.
 
-    Providers that don't define ``SUPPORTS`` (or define it as a non-set
-    type) are assumed to support everything (backward compatibility with
-    third-party providers).
+    ``SUPPORTS`` is required by the protocol, and a provider that omits it
+    (or declares a non-set) supports **nothing**.
+
+    This fails closed on purpose.  Extension hooks are registered globally
+    and dispatched against every provider, not only the one that
+    registered them, so ``provider_supports()`` is the only thing standing
+    between another package's hook and an instance it knows nothing about.
+    Assuming support in the absence of a declaration meant such a hook ran
+    and raised ``AttributeError`` on the missing method instead of skipping.
     """
     supports = getattr(provider, "SUPPORTS", None)
     if not isinstance(supports, (set, frozenset)):
-        return True
+        return False
     return feature in supports
 
 
@@ -163,3 +169,20 @@ class BaseProvider(Protocol):
     def get_all_lists(
         self, scope: Scope, *, list_names: list[str] | None = None
     ) -> dict[str, dict]: ...
+
+    # -- Dump --
+
+    def dump_extra_sections(self, scope: Scope) -> dict:
+        """Return provider-owned sections to merge into the dumped zone file.
+
+        This is where a provider exports state that is not phase rules,
+        custom rulesets, or lists — bot management settings, Page Shield
+        policies, WAF policy settings and so on.  Keys are zone-file
+        section names; an empty dict means nothing extra to dump.
+
+        A method rather than a hook registry: the caller is always the
+        provider's own package, so a section that a provider cannot fetch
+        can never be requested from it.  Providers with nothing extra to
+        export return ``{}``.
+        """
+        ...
