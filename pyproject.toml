@@ -70,3 +70,4 @@ select = ["E", "F", "I", "W", "UP", "B", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = ["error"]

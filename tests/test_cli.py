@@ -3320,12 +3320,18 @@ class TestFetchJsonHttpStatus:
 
         from octorules.audit import _fetch_json
 
-        with patch(
-            "octorules.audit.urlopen",
-            side_effect=HTTPError("https://example.com", 404, "Not Found", {}, None),
-        ):
-            result = _fetch_json("https://example.com/test.json")
-        assert result is None
+        # HTTPError is a closeable resource (it allocates a fp even when
+        # constructed with fp=None), so close it rather than leaving it for
+        # the GC — an unclosed one raises ResourceWarning under
+        # filterwarnings=error, attributed to whichever test happens to be
+        # running when the collector gets to it.
+        err = HTTPError("https://example.com", 404, "Not Found", {}, None)
+        try:
+            with patch("octorules.audit.urlopen", side_effect=err):
+                result = _fetch_json("https://example.com/test.json")
+            assert result is None
+        finally:
+            err.close()
 
     def test_200_parses_json(self):
         from octorules.audit import _fetch_json
