@@ -170,6 +170,18 @@ class BaseProvider(Protocol):
         self, scope: Scope, *, list_names: list[str] | None = None
     ) -> dict[str, dict]: ...
 
+    # -- Extensions --
+
+    @property
+    def extensions(self) -> list:
+        """This provider's own :class:`ProviderExtension` instances.
+
+        Core walks this list instead of a global registry, so an extension
+        is only ever handed the provider that owns it.  Providers with no
+        extensions return ``[]``.
+        """
+        ...
+
     # -- Dump --
 
     def dump_extra_sections(self, scope: Scope) -> dict:

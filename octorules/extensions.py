@@ -36,7 +36,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as _dc_field
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, ClassVar, Protocol
 
 from octorules.phases import Phase
 
@@ -426,6 +426,86 @@ def make_synthetic_phase(
 
 
 # ---------------------------------------------------------------------------
+# Provider extensions — a provider-owned feature and its whole lifecycle
+# ---------------------------------------------------------------------------
+class ProviderExtension:
+    """One provider-owned zone-file section, and everything done with it.
+
+    A provider exposes its own extensions via
+    :attr:`BaseProvider.extensions`; core walks that list rather than a
+    global registry.  Dispatch is therefore structural — an extension can
+    only ever be handed the provider that owns it, so a section can never
+    be requested from a provider unable to serve it.
+
+    Subclasses set :attr:`section` and override only the stages they need;
+    every stage defaults to doing nothing.  Core skips an extension whose
+    :attr:`section` is absent from the zone's desired data, so subclasses
+    do not repeat that check.
+
+    ``prefetch`` / ``finalize`` stay two-phase: ``prefetch`` starts API
+    work that overlaps the main phase-rules fetch, and ``finalize`` turns
+    the result into plans once the zone plan exists.
+    """
+
+    #: Zone-file section this extension owns.  Required.
+    section: ClassVar[str] = ""
+    #: Further sections that also make this extension applicable.  For an
+    #: extension whose one API fetch serves several sections (bunny's shield
+    #: config covers ``bunny_shield_config`` and ``bunny_waf_managed_rules``),
+    #: naming them here keeps it running when only a secondary one is present.
+    extra_sections: ClassVar[tuple[str, ...]] = ()
+    #: Key for this extension's plans in ``ZonePlan.extension_plans``.
+    #: Defaults to :attr:`section` when left empty.
+    name: ClassVar[str] = ""
+    #: Formatter for this extension's plans in plan output, if any.
+    formatter: ClassVar["FormatExtension | None"] = None
+
+    @classmethod
+    def plan_key(cls) -> str:
+        """Key under which this extension's plans are stored."""
+        return cls.name or cls.section
+
+    def prefetch(self, desired: object, scope: "Scope", provider: "BaseProvider") -> object:
+        """Start background work for this section. Returns an opaque context."""
+        return None
+
+    def finalize(
+        self,
+        zp: "ZonePlan",
+        desired: object,
+        scope: "Scope",
+        provider: "BaseProvider",
+        ctx: object,
+    ) -> None:
+        """Turn the prefetched result into plans on *zp*."""
+        return None
+
+    def apply(
+        self,
+        zp: "ZonePlan",
+        plans: list,
+        scope: "Scope",
+        provider: "BaseProvider",
+    ) -> tuple[list[str], str | None]:
+        """Apply this extension's plans. Returns (synced_labels, error)."""
+        return [], None
+
+    def dump(self, scope: "Scope", provider: "BaseProvider") -> dict | None:
+        """Return this section's current state for dump output."""
+        return None
+
+    def validate(
+        self,
+        desired: object,
+        zone_name: str,
+        errors: list[str],
+        lines: list[str],
+    ) -> None:
+        """Offline validation of this section; append to *errors* in place."""
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Settings extensions — shared data model
 # ---------------------------------------------------------------------------
 @dataclass
@@ -577,3 +657,21 @@ class SettingsFormatter:
             lines.append("</table>")
             total_modifies += plan_modifies
         return 0, 0, total_modifies, 0
+
+
+# ---------------------------------------------------------------------------
+# Provider-extension dispatch
+# ---------------------------------------------------------------------------
+def applicable_extensions(provider: "BaseProvider", desired: dict) -> list["ProviderExtension"]:
+    """The provider's extensions whose section is present in *desired*.
+
+    Centralises the check every hook used to write by hand.  An extension
+    with no ``section`` set is always applicable (it decides for itself).
+    """
+    result: list[ProviderExtension] = []
+    for ext in getattr(provider, "extensions", None) or []:
+        sections = (ext.section, *ext.extra_sections) if ext.section else ()
+        if sections and all(desired.get(s) is None for s in sections):
+            continue
+        result.append(ext)
+    return result
