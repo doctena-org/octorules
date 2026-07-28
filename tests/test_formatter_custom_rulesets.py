@@ -19,7 +19,7 @@ from octorules.planner import (
     ZonePlan,
 )
 
-REDIRECT_PHASE = get_phase("redirect_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
 
 
 class TestCustomRulesetFormatting:
@@ -31,7 +31,7 @@ class TestCustomRulesetFormatting:
         return CustomRulesetPlan(
             ruleset_id="1689aab98b8d4d6e",
             ruleset_name="Block attackers",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=changes,
         )
 

@@ -190,7 +190,7 @@ def dump_zone_rules(
                     width=_YAML_NO_WRAP_WIDTH,
                     explicit_start=True,
                 )
-                f.write(_add_blank_lines(text))
+                f.write(_add_blank_lines(text, output))
             else:
                 f.write("--- {}\n")
                 log.info("No rules found for %s, created empty file", zone_name)
@@ -214,7 +214,7 @@ def _nest_output(output: dict) -> dict:
     owned = {k: NAMESPACE_OF_KEY[k] for k in output if k in NAMESPACE_OF_KEY}
     scoped: dict[str, tuple[str, str]] = {}
     for key in output:
-        ns, sep, section = key.partition(":")
+        ns, sep, section = key.partition(".")
         if sep and section in NAMESPACE_CORE_SECTIONS and ns in PROVIDER_NAMESPACES:
             scoped[key] = (ns, section)
     if not owned and not scoped:
@@ -240,18 +240,38 @@ def _nest_output(output: dict) -> dict:
     return nested
 
 
-def _add_blank_lines(text: str) -> str:
-    """Add blank lines between top-level sections and between items within sections."""
+def _add_blank_lines(text: str, output: dict) -> str:
+    """Add blank lines between sections and between the items within them.
+
+    Sections sit at column 0 in a file with no namespace block, and one indent
+    level in when nested under one.  The two cases cannot be told apart from
+    indentation alone — at indent 2 a line is a namespace member in a nested
+    file and a rule's own field in a flat one — so the indent to separate on is
+    taken from *output*, the structure actually being written.  Keying only on
+    column 0 meant nested dumps, which is every dump from a provider that
+    registers a namespace, came out with no separation at all.
+    """
+    from octorules.phases import PROVIDER_NAMESPACES
+
+    nested = any(k in PROVIDER_NAMESPACES for k in output)
+    section_indent = 2 if nested else 0
+
     lines = text.split("\n")
     result: list[str] = []
     for i, line in enumerate(lines):
-        if i > 0 and line:
+        stripped = line.lstrip()
+        indent = len(line) - len(stripped)
+        if i > 0 and stripped:
             prev = lines[i - 1]
-            # Blank line before top-level keys (section headers), but not after ---
-            if line[0].isalpha() and prev != "---":
+            # Never separate a namespace block from its first member, nor a
+            # section header from its first item.
+            follows_parent = prev.strip().endswith(":")
+            at_section = indent == section_indent
+            is_section = stripped[0].isalpha() and at_section
+            is_item = stripped.startswith("- ") and at_section
+            if is_section and prev != "---" and not follows_parent:
                 result.append("")
-            # Blank line between top-level list items (not the first item after header)
-            elif line.startswith("- ") and not prev.endswith(":"):
+            elif is_item and not follows_parent:
                 result.append("")
         result.append(line)
     return "\n".join(result)

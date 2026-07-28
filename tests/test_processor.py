@@ -32,7 +32,7 @@ class _ExtPlan:
     changes: list = field(default_factory=list)
 
 
-REDIRECT_PHASE = get_phase("redirect_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
 
 
 class TestBaseProcessorProtocol:
@@ -50,7 +50,7 @@ class TestBaseProcessorProtocol:
 
     def test_partial_impl_uses_getattr(self):
         """Processors need only implement the methods they use."""
-        pf = PhaseFilter(include=["redirect_rules"])
+        pf = PhaseFilter(include=["fakeprov.redirect_rules"])
         # PhaseFilter only has process_desired — getattr pattern handles missing methods
         assert hasattr(pf, "process_desired")
         assert not hasattr(pf, "process_changes")
@@ -77,7 +77,7 @@ class TestProcessorChain:
                 return desired
 
         procs = [ProcA(), ProcB()]
-        desired = {"redirect_rules": []}
+        desired = {"fakeprov.redirect_rules": []}
         for proc in procs:
             desired = proc.process_desired("example.com", desired, MagicMock())
 
@@ -93,16 +93,18 @@ class TestProcessDesired:
         class AddRuleProcessor:
             def process_desired(self, zone_name, desired, provider):
                 desired = dict(desired)
-                rules = list(desired.get("redirect_rules", []))
+                rules = list(desired.get("fakeprov.redirect_rules", []))
                 rules.append({"ref": "injected", "expression": "true", "action": "redirect"})
-                desired["redirect_rules"] = rules
+                desired["fakeprov.redirect_rules"] = rules
                 return desired
 
         proc = AddRuleProcessor()
-        desired = {"redirect_rules": [{"ref": "r1", "expression": "true", "action": "redirect"}]}
+        desired = {
+            "fakeprov.redirect_rules": [{"ref": "r1", "expression": "true", "action": "redirect"}]
+        }
         result = proc.process_desired("example.com", desired, MagicMock())
-        assert len(result["redirect_rules"]) == 2
-        assert result["redirect_rules"][1]["ref"] == "injected"
+        assert len(result["fakeprov.redirect_rules"]) == 2
+        assert result["fakeprov.redirect_rules"][1]["ref"] == "injected"
 
 
 class TestProcessChanges:
@@ -131,7 +133,7 @@ class TestProcessChanges:
 class TestNoProcessors:
     def test_empty_processor_list_is_noop(self):
         """Zone with no processors: desired and plan pass through unchanged."""
-        desired = {"redirect_rules": [{"ref": "r1", "expression": "true"}]}
+        desired = {"fakeprov.redirect_rules": [{"ref": "r1", "expression": "true"}]}
         # No processors to apply
         result = desired
         assert result is desired
@@ -140,36 +142,36 @@ class TestNoProcessors:
 # --- PhaseFilter tests ---
 class TestPhaseFilter:
     def test_include_keeps_only_listed_phases(self):
-        pf = PhaseFilter(include=["redirect_rules", "cache_rules"])
+        pf = PhaseFilter(include=["fakeprov.redirect_rules", "fakeprov.cache_rules"])
         desired = {
-            "redirect_rules": [{"ref": "r1"}],
-            "cache_rules": [{"ref": "c1"}],
-            "waf_custom_rules": [{"ref": "w1"}],
+            "fakeprov.redirect_rules": [{"ref": "r1"}],
+            "fakeprov.cache_rules": [{"ref": "c1"}],
+            "fakeprov.waf_custom_rules": [{"ref": "w1"}],
         }
         result = pf.process_desired("example.com", desired, MagicMock())
-        assert set(result.keys()) == {"redirect_rules", "cache_rules"}
+        assert set(result.keys()) == {"fakeprov.redirect_rules", "fakeprov.cache_rules"}
 
     def test_exclude_removes_listed_phases(self):
-        pf = PhaseFilter(exclude=["waf_custom_rules"])
+        pf = PhaseFilter(exclude=["fakeprov.waf_custom_rules"])
         desired = {
-            "redirect_rules": [{"ref": "r1"}],
-            "cache_rules": [{"ref": "c1"}],
-            "waf_custom_rules": [{"ref": "w1"}],
+            "fakeprov.redirect_rules": [{"ref": "r1"}],
+            "fakeprov.cache_rules": [{"ref": "c1"}],
+            "fakeprov.waf_custom_rules": [{"ref": "w1"}],
         }
         result = pf.process_desired("example.com", desired, MagicMock())
-        assert set(result.keys()) == {"redirect_rules", "cache_rules"}
+        assert set(result.keys()) == {"fakeprov.redirect_rules", "fakeprov.cache_rules"}
 
     def test_include_empty_result(self):
         pf = PhaseFilter(include=["nonexistent_phase"])
-        desired = {"redirect_rules": [{"ref": "r1"}]}
+        desired = {"fakeprov.redirect_rules": [{"ref": "r1"}]}
         result = pf.process_desired("example.com", desired, MagicMock())
         assert result == {}
 
     def test_exclude_keeps_all_when_no_match(self):
         pf = PhaseFilter(exclude=["nonexistent_phase"])
-        desired = {"redirect_rules": [{"ref": "r1"}]}
+        desired = {"fakeprov.redirect_rules": [{"ref": "r1"}]}
         result = pf.process_desired("example.com", desired, MagicMock())
-        assert set(result.keys()) == {"redirect_rules"}
+        assert set(result.keys()) == {"fakeprov.redirect_rules"}
 
     def test_both_include_and_exclude_raises(self):
         with pytest.raises(ConfigError, match="mutually exclusive"):
@@ -185,47 +187,47 @@ class TestRefFilter:
     def test_include_keeps_matching_refs(self):
         rf = RefFilter(include=r"^prod-")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "prod-redirect", "expression": "true"},
                 {"ref": "test-redirect", "expression": "true"},
                 {"ref": "prod-cache", "expression": "true"},
             ]
         }
         result = rf.process_desired("example.com", desired, MagicMock())
-        refs = [r["ref"] for r in result["redirect_rules"]]
+        refs = [r["ref"] for r in result["fakeprov.redirect_rules"]]
         assert refs == ["prod-redirect", "prod-cache"]
 
     def test_exclude_removes_matching_refs(self):
         rf = RefFilter(exclude=r"^test-")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "prod-redirect", "expression": "true"},
                 {"ref": "test-redirect", "expression": "true"},
             ]
         }
         result = rf.process_desired("example.com", desired, MagicMock())
-        refs = [r["ref"] for r in result["redirect_rules"]]
+        refs = [r["ref"] for r in result["fakeprov.redirect_rules"]]
         assert refs == ["prod-redirect"]
 
     def test_rules_without_ref_excluded_by_include(self):
         """Rules missing 'ref' have empty string — include pattern won't match."""
         rf = RefFilter(include=r"^prod-")
-        desired = {"redirect_rules": [{"expression": "true"}]}
+        desired = {"fakeprov.redirect_rules": [{"expression": "true"}]}
         result = rf.process_desired("example.com", desired, MagicMock())
-        assert result["redirect_rules"] == []
+        assert result["fakeprov.redirect_rules"] == []
 
     def test_rules_without_ref_kept_by_exclude(self):
         """Rules missing 'ref' have empty string — exclude pattern won't match."""
         rf = RefFilter(exclude=r"^test-")
-        desired = {"redirect_rules": [{"expression": "true"}]}
+        desired = {"fakeprov.redirect_rules": [{"expression": "true"}]}
         result = rf.process_desired("example.com", desired, MagicMock())
-        assert len(result["redirect_rules"]) == 1
+        assert len(result["fakeprov.redirect_rules"]) == 1
 
     def test_non_list_values_passed_through(self):
         """Non-list phase values (e.g. custom_rulesets dict) pass through."""
         rf = RefFilter(include=r"prod")
         desired = {
-            "redirect_rules": [{"ref": "prod-r1"}],
+            "fakeprov.redirect_rules": [{"ref": "prod-r1"}],
             "custom_rulesets": {"id": "abc"},
         }
         result = rf.process_desired("example.com", desired, MagicMock())
@@ -242,16 +244,16 @@ class TestRefFilter:
     def test_none_ref_handled_by_include(self):
         """Rules with ref=None are treated as empty string, not crash."""
         rf = RefFilter(include=r"^prod-")
-        desired = {"redirect_rules": [{"ref": None, "expression": "true"}]}
+        desired = {"fakeprov.redirect_rules": [{"ref": None, "expression": "true"}]}
         result = rf.process_desired("example.com", desired, MagicMock())
-        assert result["redirect_rules"] == []
+        assert result["fakeprov.redirect_rules"] == []
 
     def test_none_ref_handled_by_exclude(self):
         """Rules with ref=None are treated as empty string, not crash."""
         rf = RefFilter(exclude=r"^test-")
-        desired = {"redirect_rules": [{"ref": None, "expression": "true"}]}
+        desired = {"fakeprov.redirect_rules": [{"ref": None, "expression": "true"}]}
         result = rf.process_desired("example.com", desired, MagicMock())
-        assert len(result["redirect_rules"]) == 1
+        assert len(result["fakeprov.redirect_rules"]) == 1
 
     def test_invalid_regex_raises_config_error(self):
         """Invalid regex patterns raise ConfigError, not re.error."""
@@ -273,7 +275,7 @@ class TestChangeTypeFilter:
                 CustomRulesetPlan(
                     ruleset_id="abc",
                     ruleset_name="test",
-                    phase="http_request_firewall_custom",
+                    phase="fake_http_request_firewall_custom",
                     changes=[
                         RuleChange(
                             change_type=ChangeType.REMOVE, ref="cr-old", phase=REDIRECT_PHASE
@@ -379,10 +381,10 @@ class TestChangeTypeFilter:
         )
         plan = ZonePlan(
             zone_name="example.com",
-            extension_plans={"cloudflare_bot_management": [ext_plan]},
+            extension_plans={"fakeprov.bot_management": [ext_plan]},
         )
         result = ctf.process_changes("example.com", plan, MagicMock())
-        remaining = result.extension_plans["cloudflare_bot_management"][0].changes
+        remaining = result.extension_plans["fakeprov.bot_management"][0].changes
         assert len(remaining) == 1
         assert remaining[0].field == "enable_js"
 
@@ -435,7 +437,7 @@ class TestPreserveFilter:
                 CustomRulesetPlan(
                     ruleset_id="abc",
                     ruleset_name="test",
-                    phase="http_request_firewall_custom",
+                    phase="fake_http_request_firewall_custom",
                     changes=[rc("vendor-cr")],
                 )
             ],
@@ -528,10 +530,10 @@ class TestPreserveFilter:
         )
         plan = ZonePlan(
             zone_name="example.com",
-            extension_plans={"cloudflare_bot_management": [ext_plan]},
+            extension_plans={"fakeprov.bot_management": [ext_plan]},
         )
         result = pf.process_changes("example.com", plan, MagicMock())
-        remaining = result.extension_plans["cloudflare_bot_management"][0].changes
+        remaining = result.extension_plans["fakeprov.bot_management"][0].changes
         assert len(remaining) == 1
         assert remaining[0].field == "enable_js"
 

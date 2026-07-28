@@ -22,9 +22,9 @@ from octorules.planner import (
     validate_custom_ruleset,
 )
 
-REDIRECT_PHASE = get_phase("redirect_rules")
-CACHE_PHASE = get_phase("cache_rules")
-WAF_PHASE = get_phase("waf_custom_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
+CACHE_PHASE = get_phase("fakeprov.cache_rules")
+WAF_PHASE = get_phase("fakeprov.waf_custom_rules")
 
 
 class TestCustomRulesetPlan:
@@ -90,13 +90,17 @@ class TestDiffCustomRuleset:
     def test_no_changes(self):
         desired = [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}]
         current = [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         assert not crp.has_changes
 
     def test_addition(self):
         desired = [{"ref": "r1", "expression": "true", "action": "block"}]
         current = []
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         assert crp.has_changes
         assert len(crp.changes) == 1
         assert crp.changes[0].change_type == ChangeType.ADD
@@ -105,7 +109,9 @@ class TestDiffCustomRuleset:
     def test_removal(self):
         desired = []
         current = [{"ref": "r1", "expression": "true", "action": "block"}]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         assert crp.has_changes
         assert len(crp.changes) == 1
         assert crp.changes[0].change_type == ChangeType.REMOVE
@@ -113,7 +119,9 @@ class TestDiffCustomRuleset:
     def test_modification(self):
         desired = [{"ref": "r1", "expression": "new", "action": "block", "enabled": True}]
         current = [{"ref": "r1", "expression": "old", "action": "block", "enabled": True}]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         assert crp.has_changes
         mods = [c for c in crp.changes if c.change_type == ChangeType.MODIFY]
         assert len(mods) == 1
@@ -127,21 +135,23 @@ class TestDiffCustomRuleset:
             {"ref": "r2", "expression": "b", "action": "block", "enabled": True},
             {"ref": "r1", "expression": "a", "action": "block", "enabled": True},
         ]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         assert crp.has_changes
         reorders = [c for c in crp.changes if c.change_type == ChangeType.REORDER]
         assert len(reorders) == 1
 
     def test_prepared_rules_stored(self):
         desired = [{"ref": "r1", "expression": "true", "action": "block"}]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, [])
+        crp = diff_custom_ruleset("rs1", "Block", "fake_http_request_firewall_custom", desired, [])
         assert crp.prepared_rules is not None
         assert len(crp.prepared_rules) == 1
         assert crp.prepared_rules[0]["enabled"] is True
 
     def test_synthetic_phase_name(self):
         desired = [{"ref": "r1", "expression": "true", "action": "block"}]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, [])
+        crp = diff_custom_ruleset("rs1", "Block", "fake_http_request_firewall_custom", desired, [])
         assert crp.changes[0].phase.friendly_name == "custom_ruleset:Block"
 
     def test_api_fields_ignored(self):
@@ -156,7 +166,9 @@ class TestDiffCustomRuleset:
                 "enabled": True,
             }
         ]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         assert not crp.has_changes
 
     def test_mixed_changes(self):
@@ -168,7 +180,9 @@ class TestDiffCustomRuleset:
             {"ref": "r1", "expression": "original", "action": "block", "enabled": True},
             {"ref": "r2", "expression": "removed", "action": "block"},
         ]
-        crp = diff_custom_ruleset("rs1", "Block", "http_request_firewall_custom", desired, current)
+        crp = diff_custom_ruleset(
+            "rs1", "Block", "fake_http_request_firewall_custom", desired, current
+        )
         types = {c.change_type for c in crp.changes}
         assert ChangeType.ADD in types
         assert ChangeType.REMOVE in types
@@ -187,14 +201,14 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "Block",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
         }
         validate_custom_ruleset(entry, 0)  # Should not raise
 
     def test_missing_id_and_capacity(self):
         """Missing id without capacity should require capacity for creates."""
-        entry = {"name": "Block", "phase": "http_request_firewall_custom", "rules": []}
+        entry = {"name": "Block", "phase": "fake_http_request_firewall_custom", "rules": []}
         with pytest.raises(RuleValidationError, match="require a 'capacity' field"):
             validate_custom_ruleset(entry, 0)
 
@@ -202,14 +216,14 @@ class TestValidateCustomRuleset:
         """Missing id with capacity is valid (CREATE)."""
         entry = {
             "name": "Block",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "capacity": 100,
             "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
         }
         validate_custom_ruleset(entry, 0)  # Should not raise
 
     def test_missing_name(self):
-        entry = {"id": "rs1", "phase": "http_request_firewall_custom", "rules": []}
+        entry = {"id": "rs1", "phase": "fake_http_request_firewall_custom", "rules": []}
         with pytest.raises(RuleValidationError, match="missing required 'name'"):
             validate_custom_ruleset(entry, 0)
 
@@ -222,7 +236,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [{"expression": "true", "action": "block"}],
         }
         with pytest.raises(RuleValidationError, match="missing required 'ref'"):
@@ -232,7 +246,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [{"ref": "r1", "action": "block"}],
         }
         with pytest.raises(RuleValidationError, match="missing required 'expression'"):
@@ -242,7 +256,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [{"ref": "r1", "expression": "true"}],
         }
         with pytest.raises(RuleValidationError, match="missing required 'action'"):
@@ -252,7 +266,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [
                 {"ref": "r1", "expression": "a", "action": "block"},
                 {"ref": "r1", "expression": "b", "action": "log"},
@@ -262,11 +276,16 @@ class TestValidateCustomRuleset:
             validate_custom_ruleset(entry, 0)
 
     def test_empty_rules_ok(self):
-        entry = {"id": "rs1", "name": "X", "phase": "http_request_firewall_custom", "rules": []}
+        entry = {
+            "id": "rs1",
+            "name": "X",
+            "phase": "fake_http_request_firewall_custom",
+            "rules": [],
+        }
         validate_custom_ruleset(entry, 0)
 
     def test_no_rules_key_ok(self):
-        entry = {"id": "rs1", "name": "X", "phase": "http_request_firewall_custom"}
+        entry = {"id": "rs1", "name": "X", "phase": "fake_http_request_firewall_custom"}
         validate_custom_ruleset(entry, 0)
 
 
@@ -274,7 +293,7 @@ class TestWarnUnknownPhaseKeysCustomRulesets:
     """Test that custom_rulesets doesn't trigger unknown phase warning."""
 
     def test_custom_rulesets_not_warned(self, caplog):
-        rules_data = {"redirect_rules": [], "custom_rulesets": []}
+        rules_data = {"fakeprov.redirect_rules": [], "custom_rulesets": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "account")
         assert "custom_rulesets" not in caplog.text
@@ -286,15 +305,15 @@ class TestWarnUnknownPhaseKeysNewPhases:
     @pytest.mark.parametrize(
         "phase_name",
         [
-            "http_ddos_rules",
-            "bulk_redirect_rules",
-            "log_custom_fields",
-            "network_ddos_rules",
-            "network_firewall_rules",
-            "network_firewall_managed",
-            "network_firewall_ratelimit",
-            "network_firewall_ids",
-            "url_normalization",
+            "fakeprov.http_ddos_rules",
+            "fakeprov.bulk_redirect_rules",
+            "fakeprov.log_custom_fields",
+            "fakeprov.network_ddos_rules",
+            "fakeprov.network_firewall_rules",
+            "fakeprov.network_firewall_managed",
+            "fakeprov.network_firewall_ratelimit",
+            "fakeprov.network_firewall_ids",
+            "fakeprov.url_normalization",
         ],
     )
     def test_new_phase_not_warned(self, phase_name, caplog):
@@ -309,7 +328,9 @@ class TestPlanZoneNewPhases:
 
     def test_plan_zone_with_network_firewall_rules(self):
         desired = {
-            "network_firewall_rules": [{"ref": "mf1", "expression": "true", "action": "block"}],
+            "fakeprov.network_firewall_rules": [
+                {"ref": "mf1", "expression": "true", "action": "block"}
+            ],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
@@ -317,38 +338,44 @@ class TestPlanZoneNewPhases:
 
     def test_plan_zone_with_bulk_redirect_rules(self):
         desired = {
-            "bulk_redirect_rules": [{"ref": "br1", "expression": "true"}],
+            "fakeprov.bulk_redirect_rules": [{"ref": "br1", "expression": "true"}],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
 
     def test_plan_zone_with_http_ddos_rules(self):
         desired = {
-            "http_ddos_rules": [{"ref": "d1", "expression": "true", "action": "managed_challenge"}],
+            "fakeprov.http_ddos_rules": [
+                {"ref": "d1", "expression": "true", "action": "managed_challenge"}
+            ],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
 
     def test_plan_zone_with_log_custom_fields(self):
         desired = {
-            "log_custom_fields": [{"ref": "lcf1", "expression": "true"}],
+            "fakeprov.log_custom_fields": [{"ref": "lcf1", "expression": "true"}],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
 
     def test_plan_zone_with_url_normalization(self):
         desired = {
-            "url_normalization": [{"ref": "un1", "expression": "true", "action": "rewrite"}],
+            "fakeprov.url_normalization": [
+                {"ref": "un1", "expression": "true", "action": "rewrite"}
+            ],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
 
     def test_plan_zone_no_changes_matching_new_phase(self):
         desired = {
-            "network_firewall_rules": [{"ref": "mf1", "expression": "true", "action": "block"}],
+            "fakeprov.network_firewall_rules": [
+                {"ref": "mf1", "expression": "true", "action": "block"}
+            ],
         }
         current = {
-            "magic_transit": [
+            "fake_magic_transit": [
                 {"ref": "mf1", "expression": "true", "action": "block", "enabled": True}
             ],
         }
@@ -398,16 +425,18 @@ class TestCheckSafetyWithCustomRulesets:
         """Custom ruleset REMOVE changes should be counted in safety checks."""
         from octorules.planner import _make_synthetic_phase
 
-        phase = _make_synthetic_phase("custom_ruleset", "Block", "http_request_firewall_custom")
+        phase = _make_synthetic_phase(
+            "custom_ruleset", "Block", "fake_http_request_firewall_custom"
+        )
         changes = [RuleChange(ChangeType.REMOVE, f"r{i}", phase) for i in range(4)]
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=changes,
         )
         zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
-        current = {"http_request_firewall_custom": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_firewall_custom": [{"ref": f"r{i}"} for i in range(10)]}
         cfg = ZoneConfig(
             name="test.com",
             zone_id="z1",
@@ -424,12 +453,12 @@ class TestCheckSafetyWithCustomRulesets:
         """CustomRulesetPlan.delete=True should be counted as an extra delete in safety checks."""
         crp = CustomRulesetPlan(
             ruleset_name="Block",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             ruleset_id="rs1",
             delete=True,
         )
         zp = ZonePlan(zone_name="test.com", custom_ruleset_plans=[crp])
-        current = {"http_request_firewall_custom": [{"ref": f"r{i}"} for i in range(5)]}
+        current = {"fake_http_request_firewall_custom": [{"ref": f"r{i}"} for i in range(5)]}
         cfg = ZoneConfig(
             name="test.com",
             zone_id="z1",
@@ -502,7 +531,7 @@ class TestDiffCustomRulesetsFull:
         desired = [
             {
                 "name": "Block",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "capacity": 100,
                 "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
             }
@@ -522,7 +551,7 @@ class TestDiffCustomRulesetsFull:
             "Old": {
                 "id": "rs-old",
                 "name": "Old",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [],
             },
         }
@@ -537,7 +566,7 @@ class TestDiffCustomRulesetsFull:
         desired = [
             {
                 "name": "Block",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "new", "action": "block"}],
             }
         ]
@@ -545,7 +574,7 @@ class TestDiffCustomRulesetsFull:
             "Block": {
                 "id": "rs1",
                 "name": "Block",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "old", "action": "block", "enabled": True}],
             },
         }
@@ -561,7 +590,7 @@ class TestDiffCustomRulesetsFull:
         desired = [
             {
                 "name": "Block",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             }
         ]
@@ -569,7 +598,7 @@ class TestDiffCustomRulesetsFull:
             "Block": {
                 "id": "rs1",
                 "name": "Block",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             },
         }
@@ -580,13 +609,13 @@ class TestDiffCustomRulesetsFull:
         desired = [
             {
                 "name": "New",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "capacity": 200,
                 "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
             },
             {
                 "name": "Existing",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r2", "expression": "changed", "action": "log"}],
             },
         ]
@@ -594,7 +623,7 @@ class TestDiffCustomRulesetsFull:
             "Existing": {
                 "id": "rs2",
                 "name": "Existing",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [
                     {"ref": "r2", "expression": "original", "action": "log", "enabled": True}
                 ],
@@ -602,7 +631,7 @@ class TestDiffCustomRulesetsFull:
             "Obsolete": {
                 "id": "rs3",
                 "name": "Obsolete",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [],
             },
         }
@@ -633,7 +662,7 @@ class TestValidateCustomRulesetCapacity:
     def test_capacity_zero_invalid(self):
         entry = {
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "capacity": 0,
         }
         with pytest.raises(RuleValidationError, match="'capacity' must be a positive integer"):
@@ -642,7 +671,7 @@ class TestValidateCustomRulesetCapacity:
     def test_capacity_negative_invalid(self):
         entry = {
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "capacity": -5,
         }
         with pytest.raises(RuleValidationError, match="'capacity' must be a positive integer"):
@@ -651,7 +680,7 @@ class TestValidateCustomRulesetCapacity:
     def test_capacity_string_invalid(self):
         entry = {
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "capacity": "100",
         }
         with pytest.raises(RuleValidationError, match="'capacity' must be a positive integer"):
@@ -662,7 +691,7 @@ class TestValidateCustomRulesetCapacity:
         entry = {
             "id": "rs1",
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "capacity": 100,
         }
         validate_custom_ruleset(entry, 0)  # Should not raise
@@ -671,7 +700,7 @@ class TestValidateCustomRulesetCapacity:
         entry = {
             "id": 123,
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
         }
         with pytest.raises(RuleValidationError, match="invalid 'id'"):
             validate_custom_ruleset(entry, 0)
@@ -680,7 +709,7 @@ class TestValidateCustomRulesetCapacity:
         entry = {
             "id": "",
             "name": "X",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
         }
         with pytest.raises(RuleValidationError, match="invalid 'id'"):
             validate_custom_ruleset(entry, 0)

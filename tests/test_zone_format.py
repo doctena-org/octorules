@@ -16,99 +16,50 @@ from octorules.phases import (
     unregister_namespace,
 )
 
-_ALPHA_KEYS = {
-    "custom_rules": "alpha_custom_rules",
-    "rate_rules": "alpha_rate_rules",
-    "settings": "alphaprov_settings",
-}
-_BETA_KEYS = {
-    "custom_rules": "beta_custom_rules",
-    "shield": "betaprov_shield",
-}
+_ALPHA_MEMBERS = ["custom_rules", "rate_rules", "settings"]
+_BETA_MEMBERS = ["custom_rules", "shield"]
 
 
 @pytest.fixture
 def namespaces():
-    register_namespace("alphaprov", _ALPHA_KEYS)
-    register_namespace("betaprov", _BETA_KEYS)
+    register_namespace("alphaprov", _ALPHA_MEMBERS)
+    register_namespace("betaprov", _BETA_MEMBERS)
     yield
     unregister_namespace("alphaprov")
     unregister_namespace("betaprov")
 
 
-class TestDisplayPhaseName:
-    def test_owned_flat_key_renders_dotted(self, namespaces):
-        from octorules.phases import display_phase_name
-
-        assert display_phase_name("alpha_custom_rules") == "alphaprov.custom_rules"
-
-    def test_scoped_core_section_renders_dotted(self, namespaces):
-        from octorules.phases import display_phase_name
-
-        assert display_phase_name("alphaprov:lists") == "alphaprov.lists"
-
-    def test_unowned_names_pass_through(self):
-        from octorules.phases import display_phase_name
-
-        # Deliberately not a real phase name: with providers installed, a name
-        # like "redirect_rules" IS namespace-owned, so using one here made the
-        # test pass only in a core-only venv.
-        assert display_phase_name("not_a_registered_section") == "not_a_registered_section"
-        assert display_phase_name("lists") == "lists"
-        assert display_phase_name("custom_ruleset:Block") == "custom_ruleset:Block"
-        assert display_phase_name("list:blocked-ips") == "list:blocked-ips"
-
-    def test_unknown_scoped_member_renders_dotted(self, namespaces):
-        """Diagnostics about a mistyped nested section must echo the
-        nesting the author wrote, not the internal scoped spelling."""
-        from octorules.phases import display_phase_name
-
-        assert display_phase_name("alphaprov:custom_rulez") == "alphaprov.custom_rulez"
-
-    def test_unregistered_namespace_prefix_passes_through(self):
-        """Only registered namespaces dot — synthetic prefixes and
-        namespace-qualified pseudo-refs must survive intact."""
-        from octorules.phases import display_phase_name
-
-        assert display_phase_name("notaprov:custom_rules") == "notaprov:custom_rules"
-        assert display_phase_name("list:alphaprov:blocked-ips") == "list:alphaprov:blocked-ips"
-
-
 class TestRegisterNamespace:
     def test_registers_mapping_and_derived_maps(self, namespaces):
-        assert PROVIDER_NAMESPACES["alphaprov"] == _ALPHA_KEYS
-        assert NAMESPACE_OF_KEY["alpha_custom_rules"] == ("alphaprov", "custom_rules")
+        assert PROVIDER_NAMESPACES["alphaprov"] == {m: f"alphaprov.{m}" for m in _ALPHA_MEMBERS}
+        assert NAMESPACE_OF_KEY["alphaprov.custom_rules"] == ("alphaprov", "custom_rules")
         assert "alphaprov" in KNOWN_NON_PHASE_KEYS
-        assert "alphaprov:lists" in KNOWN_NON_PHASE_KEYS
-        assert "alphaprov:custom_rulesets" in KNOWN_NON_PHASE_KEYS
+        assert "alphaprov.lists" in KNOWN_NON_PHASE_KEYS
+        assert "alphaprov.custom_rulesets" in KNOWN_NON_PHASE_KEYS
 
     def test_identical_reregistration_is_noop(self, namespaces):
-        register_namespace("alphaprov", dict(_ALPHA_KEYS))
+        register_namespace("alphaprov", list(_ALPHA_MEMBERS))
 
     def test_conflicting_reregistration_raises(self, namespaces):
         with pytest.raises(ValueError, match="already registered"):
-            register_namespace("alphaprov", {"other": "alpha_custom_rules"})
-
-    def test_key_owned_by_other_namespace_raises(self, namespaces):
-        with pytest.raises(ValueError, match="already owned"):
-            register_namespace("gammaprov", {"rules": "alpha_custom_rules"})
+            register_namespace("alphaprov", ["other"])
 
     def test_unregister_cleans_up(self):
-        register_namespace("tempprov", {"x": "tempprov_x"})
+        register_namespace("tempprov", ["x"])
         unregister_namespace("tempprov")
         assert "tempprov" not in PROVIDER_NAMESPACES
-        assert "tempprov_x" not in NAMESPACE_OF_KEY
+        assert "tempprov.x" not in NAMESPACE_OF_KEY
         assert "tempprov" not in KNOWN_NON_PHASE_KEYS
-        assert "tempprov:lists" not in KNOWN_NON_PHASE_KEYS
+        assert "tempprov.lists" not in KNOWN_NON_PHASE_KEYS
 
     def test_core_sections_carry_no_ownership(self):
         """Several providers register lists/custom_rulesets as non-phase
         keys and may map them in their namespace — the core sections must
         never be owned, or the second provider to register would raise
         and plain flat files would warn."""
-        register_namespace("tempprov1", {"custom_rulesets": "custom_rulesets", "a": "t1_a"})
+        register_namespace("tempprov1", ["custom_rulesets", "a"])
         try:
-            register_namespace("tempprov2", {"custom_rulesets": "custom_rulesets", "b": "t2_b"})
+            register_namespace("tempprov2", ["custom_rulesets", "b"])
             assert "custom_rulesets" not in NAMESPACE_OF_KEY
             assert "lists" not in NAMESPACE_OF_KEY
             # Flat files with core sections don't warn as deprecated.
@@ -136,31 +87,24 @@ class TestNormalizeZoneFormat:
         }
         result = normalize_zone_format(data, source="zone.yaml")
         assert result == {
-            "alpha_custom_rules": [{"ref": "r1"}],
-            "alphaprov_settings": {"mode": "on"},
+            "alphaprov.custom_rules": [{"ref": "r1"}],
+            "alphaprov.settings": {"mode": "on"},
             "lists": [{"name": "l1"}],
             "custom_rulesets": [{"name": "cr1"}],
             "plan_outputs": [{"type": "text"}],
         }
 
-    def test_flat_spelling_warns(self, namespaces, caplog):
-        data = {"alpha_custom_rules": []}
-        with caplog.at_level("WARNING", logger="octorules.config"):
-            result = normalize_zone_format(data, source="zone.yaml")
-        assert result is data
-        assert "deprecated flat spelling" in caplog.text
-        assert "'alphaprov:'" in caplog.text
+    def test_core_section_plain_and_nested_raises(self, namespaces):
+        """A core section written plainly and inside the namespace collides.
 
-    def test_nested_spelling_does_not_warn(self, namespaces, caplog):
-        data = {"alphaprov": {"custom_rules": []}}
-        with caplog.at_level("WARNING", logger="octorules.config"):
-            normalize_zone_format(data, source="zone.yaml")
-        assert "deprecated" not in caplog.text
-
-    def test_both_forms_same_section_raises(self, namespaces):
+        With one namespace a nested core section flattens to the plain key, so
+        writing it both ways targets the same slot.  (A provider section cannot
+        reach this branch any more: the dotted top-level spelling is rejected
+        outright.)
+        """
         data = {
-            "alpha_custom_rules": [{"ref": "flat"}],
-            "alphaprov": {"custom_rules": [{"ref": "nested"}]},
+            "lists": [{"name": "plain"}],
+            "alphaprov": {"lists": [{"name": "nested"}]},
         }
         with pytest.raises(ConfigError, match="both flat and nested"):
             normalize_zone_format(data, source="zone.yaml")
@@ -173,7 +117,7 @@ class TestNormalizeZoneFormat:
         data = {"alphaprov": {"mystery": {"a": 1}}}
         with caplog.at_level("WARNING", logger="octorules.config"):
             result = normalize_zone_format(data, source="zone.yaml")
-        assert result["alphaprov:mystery"] == {"a": 1}
+        assert result["alphaprov.mystery"] == {"a": 1}
         assert "unknown key 'mystery'" in caplog.text
 
     def test_two_namespaces_flatten_side_by_side(self, namespaces):
@@ -182,11 +126,11 @@ class TestNormalizeZoneFormat:
             "betaprov": {"custom_rules": [{"ref": "b"}], "lists": [{"name": "bl"}]},
         }
         result = normalize_zone_format(data, source="zone.yaml")
-        assert result["alpha_custom_rules"] == [{"ref": "a"}]
-        assert result["beta_custom_rules"] == [{"ref": "b"}]
+        assert result["alphaprov.custom_rules"] == [{"ref": "a"}]
+        assert result["betaprov.custom_rules"] == [{"ref": "b"}]
         # Core sections stay per-provider in a multi-provider file.
-        assert result["alphaprov:lists"] == [{"name": "al"}]
-        assert result["betaprov:lists"] == [{"name": "bl"}]
+        assert result["alphaprov.lists"] == [{"name": "al"}]
+        assert result["betaprov.lists"] == [{"name": "bl"}]
         assert "lists" not in result
 
     def test_context_dict_wrapper_preserved(self, namespaces):
@@ -215,8 +159,8 @@ class TestDumpNested:
         from octorules.dumper import _nest_output, dump_zone_rules
 
         output = {
-            "alpha_custom_rules": [{"ref": "r1"}],
-            "alphaprov_settings": {"mode": "on"},
+            "alphaprov.custom_rules": [{"ref": "r1"}],
+            "alphaprov.settings": {"mode": "on"},
             "lists": [{"name": "l1", "kind": "ip", "items": []}],
             "unowned_key": [],
         }
@@ -227,7 +171,7 @@ class TestDumpNested:
             "lists": [{"name": "l1", "kind": "ip", "items": []}],
         }
         assert nested["unowned_key"] == []
-        assert "alpha_custom_rules" not in nested
+        assert "alphaprov.custom_rules" not in nested
 
         # And a written dump round-trips through the loader.
         from octorules.config import normalize_zone_format
@@ -236,12 +180,12 @@ class TestDumpNested:
             "example.com",
             {},
             tmp_path,
-            extra_sections={"alphaprov_settings": {"mode": "on"}},
+            extra_sections={"alphaprov.settings": {"mode": "on"}},
         )
         data = yaml.safe_load(path.read_text())
         assert "alphaprov" in data
         flat = normalize_zone_format(data, source="dumped")
-        assert flat["alphaprov_settings"] == {"mode": "on"}
+        assert flat["alphaprov.settings"] == {"mode": "on"}
 
     def test_dump_without_namespaces_unchanged(self):
         from octorules.dumper import _nest_output
@@ -254,8 +198,8 @@ class TestDumpNested:
 
         nested = _nest_output(
             {
-                "alpha_custom_rules": [{"ref": "a"}],
-                "beta_custom_rules": [{"ref": "b"}],
+                "alphaprov.custom_rules": [{"ref": "a"}],
+                "betaprov.custom_rules": [{"ref": "b"}],
             }
         )
         assert nested == {
@@ -264,15 +208,15 @@ class TestDumpNested:
         }
 
     def test_dump_folds_scoped_core_sections_into_blocks(self, namespaces):
-        """Namespace-scoped core sections ("alphaprov:lists") fold into
+        """Namespace-scoped core sections ("alphaprov.lists") fold into
         their namespace block instead of leaking as top-level keys."""
         from octorules.dumper import _nest_output
 
         nested = _nest_output(
             {
-                "alpha_custom_rules": [{"ref": "a"}],
-                "alphaprov:lists": [{"name": "al"}],
-                "betaprov:lists": [{"name": "bl"}],
+                "alphaprov.custom_rules": [{"ref": "a"}],
+                "alphaprov.lists": [{"name": "al"}],
+                "betaprov.lists": [{"name": "bl"}],
             }
         )
         assert nested == {
@@ -280,7 +224,7 @@ class TestDumpNested:
             "betaprov": {"lists": [{"name": "bl"}]},
         }
         # Even with no owned keys at all, scoped sections still nest.
-        only_scoped = _nest_output({"alphaprov:lists": [{"name": "al"}]})
+        only_scoped = _nest_output({"alphaprov.lists": [{"name": "al"}]})
         assert only_scoped == {"alphaprov": {"lists": [{"name": "al"}]}}
 
 
@@ -289,12 +233,12 @@ class TestDottedPhaseFilter:
         from octorules.commands._helpers import _validate_phases
         from octorules.phases import Phase, register_phase, unregister_phase
 
-        register_phase(Phase("alpha_custom_rules", "alpha_custom", None))
+        register_phase(Phase("alphaprov.custom_rules", "alpha_custom", None))
         try:
-            assert _validate_phases(["alphaprov.custom_rules"]) == ["alpha_custom_rules"]
-            assert _validate_phases(["alpha_custom_rules"]) == ["alpha_custom_rules"]
+            assert _validate_phases(["alphaprov.custom_rules"]) == ["alphaprov.custom_rules"]
+            assert _validate_phases(["alphaprov.custom_rules"]) == ["alphaprov.custom_rules"]
         finally:
-            unregister_phase("alpha_custom_rules")
+            unregister_phase("alphaprov.custom_rules")
 
     def test_unknown_dotted_phase_raises(self, namespaces):
         import pytest
@@ -311,13 +255,13 @@ class TestLintFileNested:
         from octorules.commands._lint import cmd_lint_file
         from octorules.phases import Phase, register_phase, unregister_phase
 
-        register_phase(Phase("alpha_custom_rules", "alpha_custom", None))
+        register_phase(Phase("alphaprov.custom_rules", "alpha_custom", None))
         try:
             f = tmp_path / "zone.yaml"
             f.write_text("alphaprov:\n  custom_rules:\n    - ref: r1\n      expression: 'true'\n")
             assert cmd_lint_file(str(f)) == 0
         finally:
-            unregister_phase("alpha_custom_rules")
+            unregister_phase("alphaprov.custom_rules")
 
     def test_lint_file_rejects_both_forms(self, namespaces, tmp_path):
         from octorules.commands._lint import cmd_lint_file
@@ -335,18 +279,18 @@ class TestProviderView:
             NAMESPACE = "alphaprov"
 
         merged = {
-            "alpha_custom_rules": [{"ref": "a"}],
-            "alphaprov_settings": {"mode": "on"},
-            "beta_custom_rules": [{"ref": "b"}],
-            "betaprov_shield": {},
-            "alphaprov:lists": [{"name": "al"}],
-            "betaprov:lists": [{"name": "bl"}],
+            "alphaprov.custom_rules": [{"ref": "a"}],
+            "alphaprov.settings": {"mode": "on"},
+            "betaprov.custom_rules": [{"ref": "b"}],
+            "betaprov.shield": {},
+            "alphaprov.lists": [{"name": "al"}],
+            "betaprov.lists": [{"name": "bl"}],
             "plan_outputs": [{"type": "text"}],
         }
         view = _provider_view(merged, _Alpha())
         assert view == {
-            "alpha_custom_rules": [{"ref": "a"}],
-            "alphaprov_settings": {"mode": "on"},
+            "alphaprov.custom_rules": [{"ref": "a"}],
+            "alphaprov.settings": {"mode": "on"},
             "lists": [{"name": "al"}],
             "plan_outputs": [{"type": "text"}],
         }
@@ -357,7 +301,7 @@ class TestProviderView:
         class _Legacy:
             pass
 
-        merged = {"alpha_custom_rules": [], "beta_custom_rules": []}
+        merged = {"alphaprov.custom_rules": [], "betaprov.custom_rules": []}
         assert _provider_view(merged, _Legacy()) is merged
 
 
@@ -534,10 +478,10 @@ class TestScopedSectionsOfflinePaths:
 
         data = {
             "lists": [1],
-            "alphaprov:lists": [2],
-            "betaprov:lists": [3],
+            "alphaprov.lists": [2],
+            "betaprov.lists": [3],
             "unregistered:lists": [4],
-            "alphaprov:custom_rulesets": [5],
+            "alphaprov.custom_rulesets": [5],
         }
         assert dict(iter_scoped_sections(data, "lists")) == {
             None: [1],
@@ -549,14 +493,14 @@ class TestScopedSectionsOfflinePaths:
         from octorules.linter.engine import _plugin_view
 
         data = {
-            "alpha_custom_rules": [],
-            "alphaprov:lists": [{"name": "al"}],
-            "betaprov:lists": [{"name": "bl"}],
+            "alphaprov.custom_rules": [],
+            "alphaprov.lists": [{"name": "al"}],
+            "betaprov.lists": [{"name": "bl"}],
         }
         view = _plugin_view(data, "alphaprov")
         assert view["lists"] == [{"name": "al"}]
-        assert "alphaprov:lists" not in view
-        assert "betaprov:lists" not in view
+        assert "alphaprov.lists" not in view
+        assert "betaprov.lists" not in view
         # Single-provider files (no scoped sections) pass through untouched.
         plain = {"lists": []}
         assert _plugin_view(plain, "alphaprov") is plain
@@ -565,10 +509,10 @@ class TestScopedSectionsOfflinePaths:
         from octorules.audit import _build_list_ip_map
 
         data = {
-            "alphaprov:lists": [
+            "alphaprov.lists": [
                 {"name": "edge-blocked", "kind": "ip", "items": [{"ip": "198.51.100.0/24"}]}
             ],
-            "betaprov:lists": [
+            "betaprov.lists": [
                 {"name": "origin-blocked", "kind": "ip", "items": [{"ip": "203.0.113.0/24"}]}
             ],
         }
@@ -615,7 +559,7 @@ class TestAuditScopedListResolution:
         )
 
         def _extract(rules_data, phase_name):
-            if phase_name != "alpha_custom_rules":
+            if phase_name != "alphaprov.custom_rules":
                 return []
             return [
                 RuleIPInfo(
@@ -631,11 +575,11 @@ class TestAuditScopedListResolution:
         register_audit_extension("test_scoped_lists", _extract)
         try:
             rules_data = {
-                "alpha_custom_rules": [{"ref": "edge-rule"}],
-                "alphaprov:lists": [
+                "alphaprov.custom_rules": [{"ref": "edge-rule"}],
+                "alphaprov.lists": [
                     {"name": "edge-blocked", "kind": "ip", "items": [{"ip": "198.51.100.0/24"}]}
                 ],
-                "betaprov:lists": [
+                "betaprov.lists": [
                     {"name": "origin-only", "kind": "ip", "items": [{"ip": "203.0.113.0/24"}]}
                 ],
             }
@@ -661,8 +605,8 @@ class TestMultiClassEndToEnd:
         from octorules.config import Config, ProviderConfig, ZoneConfig
         from octorules.phases import Phase, register_phase, unregister_phase
 
-        register_phase(Phase("alpha_custom_rules", "alpha_custom", None))
-        register_phase(Phase("beta_custom_rules", "beta_custom", None))
+        register_phase(Phase("alphaprov.custom_rules", "alpha_custom", None))
+        register_phase(Phase("betaprov.custom_rules", "beta_custom", None))
 
         class AlphaProvider:
             NAMESPACE = "alphaprov"
@@ -724,8 +668,8 @@ class TestMultiClassEndToEnd:
         try:
             yield config, AlphaProvider(), BetaProvider()
         finally:
-            unregister_phase("alpha_custom_rules")
-            unregister_phase("beta_custom_rules")
+            unregister_phase("alphaprov.custom_rules")
+            unregister_phase("betaprov.custom_rules")
 
     def test_validator_allows_the_pair(self, setup):
         from octorules.commands._providers import _validate_multi_target
@@ -748,10 +692,10 @@ class TestMultiClassEndToEnd:
         assert alpha.seen_scopes[0].zone_id == "alpha-id-1"
         assert beta.seen_scopes[0].zone_id == "beta-id-9"
         # Per-target views: each saw only its own sections.
-        assert "alpha_custom_rules" in desired_a
-        assert "beta_custom_rules" not in desired_a
-        assert "beta_custom_rules" in desired_b
-        assert "alpha_custom_rules" not in desired_b
+        assert "alphaprov.custom_rules" in desired_a
+        assert "betaprov.custom_rules" not in desired_a
+        assert "betaprov.custom_rules" in desired_b
+        assert "alphaprov.custom_rules" not in desired_b
         # Desired matches current on both sides — clean plans.
         assert not zp_a.has_changes
         assert not zp_b.has_changes
@@ -780,8 +724,8 @@ class TestMultiClassEndToEnd:
         assert beta.seen_scopes[-1].zone_id == "beta-id-9"
         # The merged file round-trips through the loader.
         flat = normalize_zone_format(data, source="dumped")
-        assert flat["alpha_custom_rules"][0]["ref"] == "edge-rule"
-        assert flat["beta_custom_rules"][0]["ref"] == "origin-rule"
+        assert flat["alphaprov.custom_rules"][0]["ref"] == "edge-rule"
+        assert flat["betaprov.custom_rules"][0]["ref"] == "origin-rule"
 
 
 class TestNestedFormatThroughLoader:
@@ -797,5 +741,5 @@ class TestNestedFormatThroughLoader:
         )
         data = _yaml_load(zone)
         result = normalize_zone_format(data, source=zone.name)
-        assert result["alpha_custom_rules"] == [{"ref": "r1"}]
-        assert result["alphaprov_settings"] == {"mode": "on", "level": 3}
+        assert result["alphaprov.custom_rules"] == [{"ref": "r1"}]
+        assert result["alphaprov.settings"] == {"mode": "on", "level": 3}

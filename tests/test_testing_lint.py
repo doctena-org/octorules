@@ -108,11 +108,11 @@ class TestRefAndPhaseFilters:
             assert_lint(results, "X100", ref="rule-2")
 
     def test_phase_match(self):
-        results = [_result("X100", phase="aws_waf_custom_rules")]
-        assert_lint(results, "X100", phase="aws_waf_custom_rules")
+        results = [_result("X100", phase="aws.waf_custom_rules")]
+        assert_lint(results, "X100", phase="aws.waf_custom_rules")
 
     def test_phase_mismatch_raises(self):
-        results = [_result("X100", phase="aws_waf_custom_rules")]
+        results = [_result("X100", phase="aws.waf_custom_rules")]
         with pytest.raises(AssertionError, match="phase='other_phase'"):
             assert_lint(results, "X100", phase="other_phase")
 

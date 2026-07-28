@@ -23,8 +23,8 @@ from octorules.planner import (
     ZonePlan,
 )
 
-REDIRECT_PHASE = get_phase("redirect_rules")
-CACHE_PHASE = get_phase("cache_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
+CACHE_PHASE = get_phase("fakeprov.cache_rules")
 
 
 class TestColor:
@@ -122,7 +122,7 @@ class TestFormatPhasePlan:
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
         )
         lines = format_phase_plan(phase_plan, use_color=False)
-        assert any("redirect_rules" in line for line in lines)
+        assert any("fakeprov.redirect_rules" in line for line in lines)
         assert any("add: r1" in line for line in lines)
 
     def test_multiple_changes(self):
@@ -143,7 +143,7 @@ class TestFormatPhasePlan:
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
         )
         lines = format_phase_plan(phase_plan, use_color=False)
-        assert any("http_request_dynamic_redirect" in line for line in lines)
+        assert any("fake_http_request_dynamic_redirect" in line for line in lines)
 
 
 class TestFormatCustomRulesetPlan:
@@ -154,7 +154,7 @@ class TestFormatCustomRulesetPlan:
         crp = CustomRulesetPlan(
             ruleset_id="rs-1",
             ruleset_name="BlockBots",
-            phase="redirect_rules",
+            phase="fakeprov.redirect_rules",
             create=True,
         )
         lines = format_custom_ruleset_plan(crp, use_color=False)
@@ -169,7 +169,7 @@ class TestFormatCustomRulesetPlan:
         crp = CustomRulesetPlan(
             ruleset_id="rs-1",
             ruleset_name="OldRules",
-            phase="redirect_rules",
+            phase="fakeprov.redirect_rules",
             delete=True,
         )
         lines = format_custom_ruleset_plan(crp, use_color=False)
@@ -184,7 +184,7 @@ class TestFormatCustomRulesetPlan:
         crp = CustomRulesetPlan(
             ruleset_id="rs-1",
             ruleset_name="MyRules",
-            phase="redirect_rules",
+            phase="fakeprov.redirect_rules",
             changes=[RuleChange(ChangeType.ADD, "r1", REDIRECT_PHASE)],
         )
         lines = format_custom_ruleset_plan(crp, use_color=False)
@@ -246,7 +246,7 @@ class TestFormatZonePlan:
         result = format_zone_plan(zone_plan, use_color=False)
         assert "example.com" in result
         assert "1 change(s)" in result
-        assert "redirect_rules" in result
+        assert "fakeprov.redirect_rules" in result
 
     def test_multiple_phases(self):
         pp1 = PhasePlan(
@@ -260,8 +260,8 @@ class TestFormatZonePlan:
         zone_plan = ZonePlan("example.com", phase_plans=[pp1, pp2])
         result = format_zone_plan(zone_plan, use_color=False)
         assert "2 change(s)" in result
-        assert "redirect_rules" in result
-        assert "cache_rules" in result
+        assert "fakeprov.redirect_rules" in result
+        assert "fakeprov.cache_rules" in result
 
 
 class TestPrintPlan:
@@ -422,7 +422,7 @@ class TestFormatPlanMarkdown:
         result = format_plan_markdown([zp])
         assert "### Zone: `example.com`" in result
         assert "| Op | Phase | Ref | Details |" in result
-        assert "| + | redirect_rules | r1 |" in result
+        assert "| + | fakeprov.redirect_rules | r1 |" in result
 
     def test_modify_shows_diffs(self):
         pp = PhasePlan(
@@ -440,7 +440,7 @@ class TestFormatPlanMarkdown:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_markdown([zp])
         # Table cell shows only field name
-        assert "| ~ | redirect_rules | r1 | `expression` |" in result
+        assert "| ~ | fakeprov.redirect_rules | r1 | `expression` |" in result
         # Diff block after the table
         assert "```diff" in result
         assert "- expression: 'old'" in result
@@ -531,7 +531,7 @@ class TestFormatPlanHtml:
         zp = ZonePlan("example.com", phase_plans=[pp])
         result = format_plan_html([zp])
         assert "example.com" in result
-        assert "redirect_rules" in result
+        assert "fakeprov.redirect_rules" in result
         assert "r1" in result
         assert "Create" in result
 

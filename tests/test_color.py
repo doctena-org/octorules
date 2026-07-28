@@ -360,7 +360,7 @@ class TestPlanFormatterColor:
         from octorules.phases import get_phase
         from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
 
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         zp = ZonePlan(
             zone_name="color.com",
             phase_plans=[
@@ -379,7 +379,7 @@ class TestPlanFormatterColor:
         from octorules.phases import get_phase
         from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
 
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         zp = ZonePlan(
             zone_name="plain.com",
             phase_plans=[

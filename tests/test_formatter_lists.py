@@ -18,7 +18,7 @@ from octorules.planner import (
     diff_list,
 )
 
-REDIRECT_PHASE = get_phase("redirect_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
 
 
 class TestListFormatting:

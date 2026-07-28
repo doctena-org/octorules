@@ -30,13 +30,13 @@ from octorules.cli import (
     configure_provider_logging,
     main,
 )
-from octorules.config import Config, ConfigError, ProviderConfig, ZoneConfig
+from octorules.config import Config, ConfigError, ProviderConfig, ZoneConfig, normalize_zone_format
 from octorules.phases import get_phase
 from octorules.plan_output import PlanJson, PlanText
 from octorules.provider import Scope
 from octorules.provider.base import BaseProvider
 
-REDIRECT_PHASE = get_phase("redirect_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
 
 
 @pytest.fixture
@@ -263,7 +263,7 @@ class TestCmdPlan:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         # Write a rules file so there are desired rules
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
@@ -274,7 +274,7 @@ class TestCmdPlan:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"], exit_code=True)
         assert result == 2
@@ -334,14 +334,14 @@ class TestCmdSync:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
         mock_prov.put_phase_rules.assert_called_once()
         call_args = mock_prov.put_phase_rules.call_args
         assert call_args[0][0] == Scope(zone_id="zone-abc", label="example.com")
-        assert call_args[0][1] == "http_request_dynamic_redirect"
+        assert call_args[0][1] == "fake_http_request_dynamic_redirect"
         # Verify the payload has the injected action
         payload = call_args[0][2]
         assert payload[0]["action"] == "redirect"
@@ -353,10 +353,10 @@ class TestCmdSync:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "cache_rules:\n"
+            "  cache_rules:\n"
             "  - ref: c1\n"
             "    expression: 'true'\n"
         )
@@ -372,7 +372,7 @@ class TestCmdSync:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         # Only example.com has rules, other.com does not
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_sync(sample_config, None)
         assert result == 0
@@ -387,7 +387,7 @@ class TestCmdSync:
         from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         mock_prov.put_phase_rules.side_effect = ProviderError("API rate limited")
         with caplog.at_level(logging.ERROR, logger="octorules"):
@@ -403,7 +403,7 @@ class TestCmdSync:
         from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         mock_prov.put_phase_rules.side_effect = ProviderError("Connection error")
         with caplog.at_level(logging.ERROR, logger="octorules"):
@@ -416,7 +416,7 @@ class TestCmdSync:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         mock_prov.put_phase_rules.side_effect = TypeError("bad arg")
         with pytest.raises(TypeError, match="bad arg"):
@@ -431,10 +431,10 @@ class TestCmdSync:
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "cache_rules:\n"
+            "  cache_rules:\n"
             "  - ref: c1\n"
             "    expression: 'true'\n"
         )
@@ -454,10 +454,10 @@ class TestCmdSync:
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "cache_rules:\n"
+            "  cache_rules:\n"
             "  - ref: c1\n"
             "    expression: 'true'\n"
         )
@@ -484,10 +484,10 @@ class TestCmdSync:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "a.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (rules_dir / "b.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -518,10 +518,10 @@ class TestCmdSync:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "cache_rules:\n"
+            "  cache_rules:\n"
             "  - ref: c1\n"
             "    expression: 'true'\n"
         )
@@ -540,12 +540,12 @@ class TestCmdSync:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.DEBUG, logger="octorules"):
             result = cmd_sync(sample_config, ["example.com"])
         assert result == 0
-        assert "PUT http_request_dynamic_redirect" in caplog.text
+        assert "PUT fake_http_request_dynamic_redirect" in caplog.text
         assert "zone_id=zone-abc" in caplog.text
         assert "rules=1" in caplog.text
 
@@ -557,7 +557,7 @@ class TestCmdSync:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
 
         # load_zone_rules is called more than once (section check + planning)
@@ -586,7 +586,7 @@ class TestCmdDump:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
@@ -602,7 +602,7 @@ class TestCmdDump:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         out_dir = tmp_path / "custom_out"
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
@@ -638,7 +638,7 @@ class TestCmdDump:
             if scope.zone_id == "zone-fail":
                 raise ProviderError("Forbidden")
             return {
-                "http_request_dynamic_redirect": [
+                "fake_http_request_dynamic_redirect": [
                     {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
                 ],
             }
@@ -696,14 +696,14 @@ class TestDumpAccount:
         config = self._make_config(tmp_path)
         mock_prov = self._make_provider(
             phase_rules={
-                "http_request_dynamic_redirect": [
+                "fake_http_request_dynamic_redirect": [
                     {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
                 ],
             },
             custom_rulesets={
                 "rs1": {
                     "name": "Block attackers",
-                    "phase": "http_request_firewall_custom",
+                    "phase": "fake_http_request_firewall_custom",
                     "rules": [
                         {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
                     ],
@@ -726,8 +726,8 @@ class TestDumpAccount:
         assert "Dumped account" in caplog.text
         dumped = config.rules_dir / "test-account.yaml"
         assert dumped.exists()
-        data = _yaml_load(dumped)
-        assert "redirect_rules" in data
+        data = normalize_zone_format(_yaml_load(dumped))
+        assert "fakeprov.redirect_rules" in data
         assert "custom_rulesets" in data
         assert "lists" in data
 
@@ -738,7 +738,7 @@ class TestDumpAccount:
 
         config = self._make_config(tmp_path)
         mock_prov = self._make_provider(
-            phase_rules={"http_request_dynamic_redirect": []},
+            phase_rules={"fake_http_request_dynamic_redirect": []},
             custom_rulesets={},
         )
         mock_init_provs.return_value = {"cloudflare": mock_prov}
@@ -1045,7 +1045,7 @@ class TestAlwaysDryRun:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         rules_file = rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1077,7 +1077,7 @@ class TestAlwaysDryRun:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         rules_file = rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1106,10 +1106,10 @@ class TestAlwaysDryRun:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "dry.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (rules_dir / "live.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -1178,13 +1178,15 @@ class TestPhaseFiltering:
 
     def test_parser_single_phase(self):
         parser = build_parser()
-        args = parser.parse_args(["--phase", "redirect_rules", "plan"])
-        assert args.phases == ["redirect_rules"]
+        args = parser.parse_args(["--phase", "fakeprov.redirect_rules", "plan"])
+        assert args.phases == ["fakeprov.redirect_rules"]
 
     def test_parser_multiple_phases(self):
         parser = build_parser()
-        args = parser.parse_args(["--phase", "redirect_rules", "--phase", "cache_rules", "plan"])
-        assert args.phases == ["redirect_rules", "cache_rules"]
+        args = parser.parse_args(
+            ["--phase", "fakeprov.redirect_rules", "--phase", "fakeprov.cache_rules", "plan"]
+        )
+        assert args.phases == ["fakeprov.redirect_rules", "fakeprov.cache_rules"]
 
     def test_parser_no_phase(self):
         parser = build_parser()
@@ -1192,8 +1194,8 @@ class TestPhaseFiltering:
         assert args.phases is None
 
     def test_validate_phases_valid(self):
-        result = _validate_phases(["redirect_rules", "cache_rules"])
-        assert result == ["redirect_rules", "cache_rules"]
+        result = _validate_phases(["fakeprov.redirect_rules", "fakeprov.cache_rules"])
+        assert result == ["fakeprov.redirect_rules", "fakeprov.cache_rules"]
 
     def test_validate_phases_invalid_raises(self):
         with pytest.raises(ConfigError, match="Unknown phase"):
@@ -1209,7 +1211,7 @@ class TestPhaseFiltering:
 
     def test_validate_phases_provider_id_suggests_friendly(self):
         with pytest.raises(ConfigError, match=r"Did you mean.*redirect_rules"):
-            _validate_phases(["http_request_dynamic_redirect"])
+            _validate_phases(["fake_http_request_dynamic_redirect"])
 
     def test_validate_phases_none_returns_none(self):
         assert _validate_phases(None) is None
@@ -1257,12 +1259,12 @@ class TestPhaseFiltering:
 
     def test_filter_desired_by_phase(self):
         desired = {
-            "redirect_rules": [{"ref": "r1"}],
-            "cache_rules": [{"ref": "c1"}],
-            "origin_rules": [{"ref": "o1"}],
+            "fakeprov.redirect_rules": [{"ref": "r1"}],
+            "fakeprov.cache_rules": [{"ref": "c1"}],
+            "fakeprov.origin_rules": [{"ref": "o1"}],
         }
-        result = _filter_desired_by_phase(desired, ["redirect_rules"])
-        assert list(result.keys()) == ["redirect_rules"]
+        result = _filter_desired_by_phase(desired, ["fakeprov.redirect_rules"])
+        assert list(result.keys()) == ["fakeprov.redirect_rules"]
 
     def test_filter_desired_by_phase_preserves_non_phase_keys(self):
         """custom_rulesets and lists survive --phase filtering.
@@ -1279,14 +1281,14 @@ class TestPhaseFiltering:
         register_non_phase_key("lists")
         try:
             desired = {
-                "redirect_rules": [{"ref": "r1"}],
-                "cache_rules": [{"ref": "c1"}],
+                "fakeprov.redirect_rules": [{"ref": "r1"}],
+                "fakeprov.cache_rules": [{"ref": "c1"}],
                 "custom_rulesets": [{"name": "my-rs"}],
                 "lists": [{"name": "my-list"}],
             }
-            result = _filter_desired_by_phase(desired, ["redirect_rules"])
-            assert "redirect_rules" in result
-            assert "cache_rules" not in result
+            result = _filter_desired_by_phase(desired, ["fakeprov.redirect_rules"])
+            assert "fakeprov.redirect_rules" in result
+            assert "fakeprov.cache_rules" not in result
             assert "custom_rulesets" in result
             assert "lists" in result
         finally:
@@ -1295,20 +1297,23 @@ class TestPhaseFiltering:
             KNOWN_NON_PHASE_KEYS.update(original)
 
     def test_filter_desired_none_returns_all(self):
-        desired = {"redirect_rules": [{"ref": "r1"}], "cache_rules": [{"ref": "c1"}]}
+        desired = {
+            "fakeprov.redirect_rules": [{"ref": "r1"}],
+            "fakeprov.cache_rules": [{"ref": "c1"}],
+        }
         result = _filter_desired_by_phase(desired, None)
         assert result is desired
 
     def test_filter_current_by_phase(self):
         current = {
-            "http_request_dynamic_redirect": [{"ref": "r1"}],
-            "http_request_cache_settings": [{"ref": "c1"}],
+            "fake_http_request_dynamic_redirect": [{"ref": "r1"}],
+            "fake_http_request_cache_settings": [{"ref": "c1"}],
         }
-        result = _filter_current_by_phase(current, ["redirect_rules"])
-        assert list(result.keys()) == ["http_request_dynamic_redirect"]
+        result = _filter_current_by_phase(current, ["fakeprov.redirect_rules"])
+        assert list(result.keys()) == ["fake_http_request_dynamic_redirect"]
 
     def test_filter_current_none_returns_all(self):
-        current = {"http_request_dynamic_redirect": [{"ref": "r1"}]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": "r1"}]}
         result = _filter_current_by_phase(current, None)
         assert result is current
 
@@ -1318,11 +1323,11 @@ class TestPhaseFiltering:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
-        cmd_plan(sample_config, ["example.com"], phase_filter=["redirect_rules"])
+        cmd_plan(sample_config, ["example.com"], phase_filter=["fakeprov.redirect_rules"])
         call_kwargs = mock_prov.get_all_phase_rules.call_args
-        assert call_kwargs[1]["provider_ids"] == ["http_request_dynamic_redirect"]
+        assert call_kwargs[1]["provider_ids"] == ["fake_http_request_dynamic_redirect"]
 
     @patch("octorules.commands._providers._init_providers")
     def test_no_phase_filter_fetches_all(self, mock_init_provs, sample_config):
@@ -1340,15 +1345,15 @@ class TestPhaseFiltering:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "cache_rules:\n"
+            "  cache_rules:\n"
             "  - ref: c1\n"
             "    expression: 'true'\n"
         )
         mock_prov.get_all_phase_rules.return_value = {}
-        result = cmd_plan(sample_config, ["example.com"], phase_filter=["redirect_rules"])
+        result = cmd_plan(sample_config, ["example.com"], phase_filter=["fakeprov.redirect_rules"])
         assert result == 0  # has changes, but no --exit-code flag
         # But only redirect_rules should be in the plan
 
@@ -1358,21 +1363,21 @@ class TestPhaseFiltering:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "cache_rules:\n"
+            "  cache_rules:\n"
             "  - ref: c1\n"
             "    expression: 'true'\n"
         )
         mock_prov.get_all_phase_rules.return_value = {}
-        result = cmd_sync(sample_config, ["example.com"], phase_filter=["redirect_rules"])
+        result = cmd_sync(sample_config, ["example.com"], phase_filter=["fakeprov.redirect_rules"])
         assert result == 0
         # Only one PUT call (for redirect_rules, not cache_rules)
         mock_prov.put_phase_rules.assert_called_once()
         call_args = mock_prov.put_phase_rules.call_args
         assert call_args[0][0] == Scope(zone_id="zone-abc", label="example.com")
-        assert call_args[0][1] == "http_request_dynamic_redirect"
+        assert call_args[0][1] == "fake_http_request_dynamic_redirect"
 
 
 class TestChecksum:
@@ -1398,7 +1403,7 @@ class TestChecksum:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         with caplog.at_level(logging.INFO, logger="octorules"):
             cmd_plan(sample_config, ["example.com"], checksum=True)
@@ -1416,7 +1421,7 @@ class TestChecksum:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         # First compute the checksum
         with caplog.at_level(logging.INFO, logger="octorules"):
@@ -1438,7 +1443,7 @@ class TestChecksum:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_sync(sample_config, ["example.com"], checksum="0" * 64)
         assert result == 1
@@ -1466,7 +1471,7 @@ class TestSafetyForce:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         # Desired: empty (all rules removed)
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1484,7 +1489,7 @@ class TestSafetyForce:
         )
         # Current: 10 rules exist
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
@@ -1503,7 +1508,7 @@ class TestSafetyForce:
         rules_dir.mkdir()
         # Desired: 9 rules (1 removed)
         rules = "\n".join([f"  - ref: r{i}\n    expression: 'true'" for i in range(9)])
-        (rules_dir / "example.com.yaml").write_text(f"redirect_rules:\n{rules}\n")
+        (rules_dir / "example.com.yaml").write_text(f"fakeprov:\n  redirect_rules:\n{rules}\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1520,7 +1525,7 @@ class TestSafetyForce:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": f"r{i}", "expression": "true", "action": "redirect", "enabled": True}
                 for i in range(10)
             ],
@@ -1536,7 +1541,7 @@ class TestSafetyForce:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1553,7 +1558,7 @@ class TestSafetyForce:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
@@ -1568,7 +1573,7 @@ class TestSafetyForce:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1586,7 +1591,7 @@ class TestSafetyForce:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
@@ -1600,7 +1605,7 @@ class TestSafetyForce:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1617,13 +1622,13 @@ class TestSafetyForce:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
         with caplog.at_level(logging.ERROR, logger="octorules"):
             cmd_sync(config, ["example.com"])
-        assert "redirect_rules" in caplog.text
+        assert "fakeprov.redirect_rules" in caplog.text
 
     @patch("octorules.commands._providers._init_providers")
     def test_error_message_content(self, mock_init_provs, tmp_path, caplog):
@@ -1632,7 +1637,7 @@ class TestSafetyForce:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config = Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
@@ -1649,7 +1654,7 @@ class TestSafetyForce:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": f"r{i}", "expression": "true", "action": "redirect"} for i in range(10)
             ],
         }
@@ -1736,7 +1741,7 @@ class TestParallelPlanning:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         sample_config.max_workers = 1
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
@@ -1749,10 +1754,10 @@ class TestParallelPlanning:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "a.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (rules_dir / "b.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -1783,10 +1788,10 @@ class TestParallelPlanning:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "alpha.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (rules_dir / "beta.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -1821,10 +1826,10 @@ class TestParallelPlanning:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "a.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (rules_dir / "b.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -1870,7 +1875,7 @@ class TestParallelPlanning:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
@@ -1894,7 +1899,7 @@ class TestAllowUnmanaged:
         rules_dir.mkdir()
         # Only r1 in YAML, r2 exists in CF
         (rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -1912,7 +1917,7 @@ class TestAllowUnmanaged:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
                 {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
             ],
@@ -1930,7 +1935,7 @@ class TestAllowUnmanaged:
         rules_dir.mkdir()
         # Only redirect_rules in YAML, cache_rules exist in CF
         (rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -1948,10 +1953,10 @@ class TestAllowUnmanaged:
             },
         )
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
             ],
-            "http_request_cache_settings": [
+            "fake_http_request_cache_settings": [
                 {
                     "ref": "c1",
                     "expression": "true",
@@ -1978,7 +1983,7 @@ class TestPlanErrorIsolation:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "ok.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2017,7 +2022,7 @@ class TestPlanErrorIsolation:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "ok.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2056,7 +2061,7 @@ class TestPlanErrorIsolation:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "ok.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2226,7 +2231,7 @@ class TestAuthErrorPropagation:
         from octorules.provider.exceptions import ProviderAuthError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
 
         class _FakeHTTPError(Exception):
@@ -2251,8 +2256,8 @@ class TestAuthErrorPropagation:
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "  cache_rules:\n  - ref: c1\n    expression: 'true'\n"
         )
         mock_prov.get_all_phase_rules.return_value = {}
         call_count = 0
@@ -2285,10 +2290,10 @@ class TestAuthErrorPropagation:
 
         # Both zones have rules so both will have changes
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (sample_config.rules_dir / "other.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         mock_prov.get_all_phase_rules.return_value = {}
 
@@ -2361,17 +2366,17 @@ class TestFailedPhaseFiltering:
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "  cache_rules:\n  - ref: c1\n    expression: 'true'\n"
         )
         # Simulate redirect phase failing
         mock_prov.get_all_phase_rules.return_value = PhaseRulesResult(
-            {}, failed_phases=["http_request_dynamic_redirect"]
+            {}, failed_phases=["fake_http_request_dynamic_redirect"]
         )
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_plan(sample_config, ["example.com"])
         # redirect_rules should have been skipped
-        assert "Skipping redirect_rules" in caplog.text
+        assert "Skipping fakeprov.redirect_rules" in caplog.text
         assert "failed to fetch current state" in caplog.text
         # cache_rules still planned (has changes), but no --exit-code flag
         assert result == 0
@@ -2384,7 +2389,7 @@ class TestFailedPhaseFiltering:
         from octorules.provider import PhaseRulesResult
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = PhaseRulesResult({})
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
@@ -2397,13 +2402,13 @@ class TestFailedPhaseFiltering:
         from octorules.provider import PhaseRulesResult
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = PhaseRulesResult(
-            {}, failed_phases=["http_request_dynamic_redirect"]
+            {}, failed_phases=["fake_http_request_dynamic_redirect"]
         )
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_plan(sample_config, ["example.com"])
-        assert "Skipping redirect_rules" in caplog.text
+        assert "Skipping fakeprov.redirect_rules" in caplog.text
         assert result == 0  # No changes (desired was filtered out)
 
     @patch("octorules.commands._providers._init_providers")
@@ -2412,7 +2417,7 @@ class TestFailedPhaseFiltering:
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
         result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
@@ -2425,10 +2430,10 @@ class TestFailedPhaseFiltering:
         from octorules.provider import PhaseRulesResult
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         # cache phase failed but we don't have cache_rules in YAML
         mock_prov.get_all_phase_rules.return_value = PhaseRulesResult(
-            {}, failed_phases=["http_request_cache_settings"]
+            {}, failed_phases=["fake_http_request_cache_settings"]
         )
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_plan(sample_config, ["example.com"])
@@ -2466,7 +2471,7 @@ class TestApiErrorStatusCodes:
         from octorules.provider.exceptions import ProviderError
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         mock_prov.get_all_phase_rules.return_value = {}
 
         class _FakeHTTPError(Exception):
@@ -2581,7 +2586,7 @@ class TestEmitPlanOutputs:
 
         out_file = tmp_path / "plan.txt"
         sample_config.plan_outputs = {"text": PlanText("text", path=str(out_file))}
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         pp = PhasePlan(phase=phase, changes=[RuleChange(ChangeType.ADD, "r1", phase)])
         zp = ZonePlan(zone_name="example.com", phase_plans=[pp])
         result = _emit_plan_outputs(sample_config, [zp])
@@ -2599,7 +2604,7 @@ class TestEmitPlanOutputs:
             "text": PlanText("text"),
             "json": PlanJson("json", path=str(out_file)),
         }
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         pp = PhasePlan(phase=phase, changes=[RuleChange(ChangeType.ADD, "r1", phase)])
         zp = ZonePlan(zone_name="example.com", phase_plans=[pp])
         result = _emit_plan_outputs(sample_config, [zp])
@@ -2634,8 +2639,8 @@ class TestParallelPhaseApply:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "  cache_rules:\n  - ref: c1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2667,8 +2672,8 @@ class TestParallelPhaseApply:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "  cache_rules:\n  - ref: c1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2701,8 +2706,8 @@ class TestParallelPhaseApply:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-            "cache_rules:\n  - ref: c1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "  cache_rules:\n  - ref: c1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2877,7 +2882,7 @@ class TestPreparedRulesReuse:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         config = Config(
             providers={
@@ -2977,7 +2982,7 @@ class TestMultiProviderSync:
 
         # Write rules for the CF zone only
         (config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         cf_prov.get_all_phase_rules.return_value = {}
         aws_prov.get_all_phase_rules.return_value = {}
@@ -3067,7 +3072,7 @@ class TestAuditLog:
             SyncResult(
                 zone_name="ok.com",
                 target=None,
-                synced=["redirect_rules"],
+                synced=["fakeprov.redirect_rules"],
                 error=None,
                 total_changes=3,
             ),
@@ -3103,7 +3108,7 @@ class TestAuditLog:
         assert ok_entry["status"] == "ok"
         assert ok_entry["error"] is None
         assert ok_entry["total_changes"] == 3
-        assert ok_entry["synced"] == ["redirect_rules"]
+        assert ok_entry["synced"] == ["fakeprov.redirect_rules"]
 
         fail_entry = json.loads(lines[1])
         assert fail_entry["zone"] == "fail.com"
@@ -3121,7 +3126,7 @@ class TestAuditLog:
             SyncResult(
                 zone_name="ok.com",
                 target=None,
-                synced=["redirect_rules"],
+                synced=["fakeprov.redirect_rules"],
                 error=None,
                 total_changes=1,
             ),
@@ -3208,7 +3213,7 @@ class TestCmdAuditCLI:
         """Audit with rules but no findings returns 0."""
         # Create a minimal rules file with no IP-bearing rules.
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: ''\n")
         with patch("octorules.commands._audit._ensure_provider_loaded"):
             result = cmd_audit(sample_config, ["example.com"])
         assert result == 0
@@ -3261,7 +3266,9 @@ class TestAuditExtensionErrorHandling:
         register_audit_extension("good", good_ext)
         register_audit_extension("bad", bad_ext)
         try:
-            results, failed = call_audit_extensions({"redirect_rules": []}, "redirect_rules")
+            results, failed = call_audit_extensions(
+                {"fakeprov.redirect_rules": []}, "fakeprov.redirect_rules"
+            )
             assert len(results) == 1
             assert results[0].ref == "good-rule"
             assert failed == ["bad"]
@@ -3403,7 +3410,7 @@ class TestQuietFlag:
 
         out_file = tmp_path / "plan.txt"
         sample_config.plan_outputs = {"text": PlanText("text", path=str(out_file))}
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         pp = PhasePlan(phase=phase, changes=[RuleChange(ChangeType.ADD, "r1", phase)])
         zp = ZonePlan(zone_name="example.com", phase_plans=[pp])
 
@@ -3433,7 +3440,7 @@ class TestQuietFlag:
         from octorules._context import set_quiet
 
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: ''\n")
 
         set_quiet(True)
         try:
@@ -3450,7 +3457,7 @@ class TestQuietFlag:
 
         # Create a rules file with no IP-bearing rules (no findings)
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: ''\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: ''\n")
 
         set_quiet(True)
         try:
@@ -3540,7 +3547,7 @@ class TestLintSummaryFormat:
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         # Create a rules file with content so lint runs
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         cmd_lint(sample_config, ["example.com"], lint_format="summary")
         out = capsys.readouterr().out
@@ -3602,7 +3609,7 @@ class TestLintPluginUsage:
             LintPlugin(name="fakeprovider", lint_fn=fake_lint, rule_ids=frozenset({"FK001"}))
         ]
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         with caplog.at_level(logging.INFO, logger="octorules"):
             cmd_lint(sample_config, ["example.com"])
@@ -3626,7 +3633,7 @@ class TestLintPluginUsage:
         )
         mock_get_plugins.return_value = [fake_plugin]
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         with caplog.at_level(logging.INFO, logger="octorules"):
             cmd_lint(sample_config, ["example.com"])
@@ -3639,7 +3646,7 @@ class TestLintPluginUsage:
         """When no plugins are registered, no plugin line is logged."""
         mock_get_plugins.return_value = []
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         with caplog.at_level(logging.INFO, logger="octorules"):
             cmd_lint(sample_config, ["example.com"])
@@ -3665,7 +3672,7 @@ class TestLintZonePlans:
             LintPlugin(name="spy", lint_fn=spy_lint, rule_ids=frozenset())
         ]
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         cmd_lint(
             sample_config,
@@ -3689,7 +3696,7 @@ class TestLintZonePlans:
             LintPlugin(name="spy", lint_fn=spy_lint, rule_ids=frozenset())
         ]
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         cmd_lint(
             sample_config,
@@ -3714,7 +3721,7 @@ class TestLintZonePlans:
             LintPlugin(name="spy", lint_fn=spy_lint, rule_ids=frozenset())
         ]
         (sample_config.rules_dir / "example.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         cmd_lint(
             sample_config,
@@ -3735,7 +3742,7 @@ class TestSyncJsonFormat:
             SyncResult(
                 zone_name="a.com",
                 target=None,
-                synced=["redirect_rules"],
+                synced=["fakeprov.redirect_rules"],
                 error=None,
                 total_changes=1,
             ),
@@ -3876,7 +3883,7 @@ class TestLintFile:
     def test_lint_file_no_issues(self, tmp_path, capsys):
         """lint <file> with --severity error on a file with no errors returns 0."""
         rules_file = tmp_path / "example.com.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         with pytest.raises(SystemExit) as exc_info:
             main(["lint", "--severity", "error", str(rules_file)])
         assert exc_info.value.code == 0
@@ -3912,7 +3919,7 @@ class TestLintFile:
         from octorules.commands._lint import cmd_lint_file
 
         rules_file = tmp_path / "nophases.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         code = cmd_lint_file(str(rules_file), lint_rules=["CORE006"])
         assert code == 0
         err = capsys.readouterr().err
@@ -3924,7 +3931,7 @@ class TestLintFile:
         import json
 
         rules_file = tmp_path / "test.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         with pytest.raises(SystemExit) as exc_info:
             main(["lint", "--format", "json", str(rules_file)])
         assert exc_info.value.code == 0
@@ -3939,7 +3946,9 @@ class TestLintFile:
         rules_file = tmp_path / "warn.yaml"
         # Two disabled rules triggers CORE003 (warning)
         rules_file.write_text(
-            "redirect_rules:\n  - ref: r1\n    enabled: false\n  - ref: r2\n    enabled: false\n"
+            "fakeprov:\n  redirect_rules:\n"
+            "  - ref: r1\n    enabled: false\n"
+            "  - ref: r2\n    enabled: false\n"
         )
         code = cmd_lint_file(
             str(rules_file),
@@ -3954,7 +3963,7 @@ class TestLintFile:
         from octorules.commands._lint import cmd_lint_file
 
         rules_file = tmp_path / "test.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         out_file = tmp_path / "results.txt"
         code = cmd_lint_file(
             str(rules_file),
@@ -3967,7 +3976,7 @@ class TestLintFile:
     def test_lint_file_severity_filter(self, tmp_path, capsys):
         """lint <file> --severity error filters out lower severity."""
         rules_file = tmp_path / "test.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         with pytest.raises(SystemExit) as exc_info:
             main(["lint", "--severity", "error", str(rules_file)])
         assert exc_info.value.code == 0
@@ -3975,7 +3984,7 @@ class TestLintFile:
     def test_lint_file_summary_format(self, tmp_path, capsys):
         """lint <file> --format summary produces summary output."""
         rules_file = tmp_path / "test.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         with pytest.raises(SystemExit) as exc_info:
             main(["lint", "--format", "summary", str(rules_file)])
         assert exc_info.value.code == 0
@@ -3983,7 +3992,7 @@ class TestLintFile:
     def test_lint_file_discovers_all_providers(self, tmp_path, capsys):
         """lint <file> calls _discover_provider_modules (not lazy)."""
         rules_file = tmp_path / "test.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         with (
             patch("octorules.cli._discover_provider_modules") as mock_disc,
             pytest.raises(SystemExit),
@@ -3996,7 +4005,7 @@ class TestLintFile:
         from octorules.commands._lint import cmd_lint_file
 
         rules_file = tmp_path / "my-zone.example.com.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         code = cmd_lint_file(str(rules_file), lint_severity="error")
         assert code == 0
 
@@ -4005,7 +4014,7 @@ class TestLintFile:
         from octorules.commands._lint import cmd_lint_file
 
         rules_file = tmp_path / "test.yaml"
-        rules_file.write_text("redirect_rules: []\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: []\n")
         code = cmd_lint_file(str(rules_file), lint_rules=["CORE006"])
         assert code == 0
         out = capsys.readouterr().out
@@ -4046,7 +4055,7 @@ class TestLazyProviderDiscovery:
         """main() lint calls _ensure_provider_loaded per provider."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "z.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "z.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             "providers:\n  cloudflare:\n    token: test\n"
@@ -4073,7 +4082,7 @@ class TestLazyProviderDiscovery:
     def test_audit_uses_lazy_loading(self, sample_config, capsys):
         """Audit calls _ensure_provider_loaded per provider."""
         rules_file = sample_config.rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         with patch("octorules.commands._audit._ensure_provider_loaded") as mock_ensure:
             cmd_audit(sample_config, ["example.com"])
         mock_ensure.assert_called_once_with("cloudflare")
@@ -4419,10 +4428,10 @@ class TestProgressCallback:
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
         (rules_dir / "a.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
         )
         (rules_dir / "b.com.yaml").write_text(
-            "redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
+            "fakeprov:\n  redirect_rules:\n  - ref: r2\n    expression: 'true'\n"
         )
         config = Config(
             providers={"cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "t"})},
@@ -4473,7 +4482,7 @@ class TestPerZonePluginRouting:
 
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         (rules_dir / "my-web-acl.yaml").write_text("aws_waf_custom_rules: []\n")
 
         # Two zones, two different providers — set via explicit class_path

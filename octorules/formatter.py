@@ -11,7 +11,6 @@ import yaml
 from octorules._color import _CYAN, _GREEN, _RED, _YELLOW, Pen, supports_color
 from octorules.expression import format_expression_display
 from octorules.extensions import get_format_extensions
-from octorules.phases import display_phase_name
 from octorules.planner import (
     ChangeType,
     CustomRulesetPlan,
@@ -158,9 +157,7 @@ def format_phase_plan(phase_plan: PhasePlan, use_color: bool = True) -> list[str
     """Format a phase plan as lines of output."""
     p = Pen(use_color)
     lines = []
-    header = (
-        f"  {display_phase_name(phase_plan.phase.friendly_name)} ({phase_plan.phase.provider_id})"
-    )
+    header = f"  {phase_plan.phase.friendly_name} ({phase_plan.phase.provider_id})"
     lines.append(p.header(header))
     for change in phase_plan.changes:
         lines.extend(format_change(change, use_color))
@@ -286,7 +283,7 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
         for pp in zp.phase_plans:
             phase_plans.append(
                 {
-                    "phase": display_phase_name(pp.phase.friendly_name),
+                    "phase": pp.phase.friendly_name,
                     "provider_id": pp.phase.provider_id,
                     "changes": [change_to_dict(c) for c in pp.changes],
                 }
@@ -429,9 +426,7 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
         pending_diffs: list[list[tuple[str, object, object]]] = []
         for pp in zp.phase_plans:
             for c in pp.changes:
-                lines.append(
-                    md_change_row(c, display_phase_name(pp.phase.friendly_name), pending_diffs)
-                )
+                lines.append(md_change_row(c, pp.phase.friendly_name, pending_diffs))
         for crp in zp.custom_ruleset_plans:
             phase_label = f"custom_ruleset:{crp.ruleset_name}"
             if crp.create:
@@ -735,7 +730,7 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
         lines.append(f"<h2>{e(zp.display_name)}</h2>")
 
         for pp in zp.phase_plans:
-            lines.append(f"<h3>{e(display_phase_name(pp.phase.friendly_name))}</h3>")
+            lines.append(f"<h3>{e(pp.phase.friendly_name)}</h3>")
             lines.extend(HTML_TABLE_HEADER)
             creates, removes, modifies, reorders = html_render_changes(pp.changes, lines)
             lines.extend(html_summary_row(creates, removes, modifies, reorders))

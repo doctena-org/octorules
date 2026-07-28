@@ -96,7 +96,7 @@ def _provider_view(all_desired: dict, provider: object) -> dict:
 
     Multi-provider zone files flatten to one merged dict whose keys are
     globally unique; each provider plans only the sections its namespace
-    owns, plus the shared and unowned keys.  ``"<ns>:lists"``-style
+    owns, plus the shared and unowned keys.  ``"<ns>.lists"``-style
     scoped core sections are unwrapped for the owning provider and
     hidden from the others.  Providers without a ``NAMESPACE`` (or with
     an unregistered one) see the full view — the pre-namespace behavior.
@@ -117,8 +117,8 @@ def _provider_view(all_desired: dict, provider: object) -> dict:
             if owner[0] == ns:
                 view[key] = value
             continue
-        if ":" in key:
-            key_ns, _, section = key.partition(":")
+        if "." in key:
+            key_ns, _, section = key.partition(".")
             if key_ns in PROVIDER_NAMESPACES and section in NAMESPACE_CORE_SECTIONS:
                 if key_ns == ns:
                     view[section] = value

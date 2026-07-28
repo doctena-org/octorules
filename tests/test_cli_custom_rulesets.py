@@ -48,7 +48,7 @@ class TestCustomRulesetsPlanAccount:
         provider.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "log", "enabled": True}],
             }
         }
@@ -143,7 +143,7 @@ class TestCustomRulesetsPlanAccount:
         provider.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             }
         }
@@ -208,7 +208,7 @@ class TestCustomRulesetsDump:
         mock_prov.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             }
         }
@@ -245,7 +245,7 @@ class TestCustomRulesetsDump:
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {"ref": "deploy1", "expression": "true", "action": "execute", "enabled": True}
             ],
         }
@@ -300,7 +300,7 @@ class TestCustomRulesetsSync:
         mock_prov.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "log", "enabled": True}],
             }
         }
@@ -377,7 +377,7 @@ class TestCustomRulesetsSync:
         mock_prov.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "log", "enabled": True}],
             }
         }
@@ -412,7 +412,7 @@ class TestCustomRulesetsSync:
         mock_prov.get_all_custom_rulesets.return_value = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block", "enabled": True}],
             }
         }
@@ -434,12 +434,12 @@ class TestApplyCustomRulesets:
         phase = _make_synthetic_phase(
             "custom_ruleset",
             "Block attackers",
-            "http_request_firewall_custom",
+            "fake_http_request_firewall_custom",
         )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=[RuleChange(ChangeType.ADD, "r1", phase)],
             prepared_rules=[{"ref": "r1", "expression": "true", "action": "block"}],
         )
@@ -462,12 +462,12 @@ class TestApplyCustomRulesets:
         phase = _make_synthetic_phase(
             "custom_ruleset",
             "Block attackers",
-            "http_request_firewall_custom",
+            "fake_http_request_firewall_custom",
         )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=[RuleChange(ChangeType.ADD, "r1", phase)],
             prepared_rules=[{"ref": "r1", "expression": "true", "action": "block"}],
         )
@@ -488,12 +488,12 @@ class TestApplyCustomRulesets:
         phase = _make_synthetic_phase(
             "custom_ruleset",
             "Block attackers",
-            "http_request_firewall_custom",
+            "fake_http_request_firewall_custom",
         )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=[RuleChange(ChangeType.ADD, "r1", phase)],
             prepared_rules=None,  # no prepared rules
         )
@@ -516,7 +516,7 @@ class TestApplyCustomRulesets:
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="Block attackers",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=[],  # no changes
         )
         zp = ZonePlan(zone_name="test-account", custom_ruleset_plans=[crp])
@@ -538,11 +538,11 @@ class TestApplyCustomRulesets:
         phase = _make_synthetic_phase(
             "custom_ruleset",
             "New RS",
-            "http_request_firewall_custom",
+            "fake_http_request_firewall_custom",
         )
         crp = CustomRulesetPlan(
             ruleset_name="New RS",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             create=True,
             changes=[RuleChange(ChangeType.ADD, "r1", phase)],
             prepared_rules=[{"ref": "r1", "expression": "true", "action": "block"}],

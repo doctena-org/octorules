@@ -34,7 +34,6 @@ from octorules._cdn_sources import (
     _parse_google_cloud_ips,
     google_front_end_cidrs,
 )
-from octorules.phases import display_phase_name
 
 log = logging.getLogger(__name__)
 
@@ -625,9 +624,9 @@ def check_ip_shadow(rule_ips: list[RuleIPInfo], phase_order: list[str]) -> list[
                     check="ip-shadow",
                     severity=FindingSeverity.WARNING,
                     message=(
-                        f"Rule {info.ref} ({display_phase_name(info.phase_name)})"
+                        f"Rule {info.ref} ({info.phase_name})"
                         f" is shadowed by {shadower.ref}"
-                        f" ({display_phase_name(shadower.phase_name)},"
+                        f" ({shadower.phase_name},"
                         f" action={shadower.action}):"
                         f" all IPs are covered by the earlier rule"
                     ),
@@ -727,7 +726,7 @@ def check_cdn_ranges(
                             severity=FindingSeverity.ERROR,
                             message=(
                                 f"{cidr} (in"
-                                f" {info.ref}/{display_phase_name(info.phase_name)})"
+                                f" {info.ref}/{info.phase_name})"
                                 f" is inside"
                                 f" {cdn_provider}'s own edge range {cdn_net}, but"
                                 f" {cdn_provider} is an active provider for this config."
@@ -746,7 +745,7 @@ def check_cdn_ranges(
                             check="cdn-ranges",
                             severity=FindingSeverity.WARNING,
                             message=(
-                                f"{cidr} (in {info.ref}/{display_phase_name(info.phase_name)})"
+                                f"{cidr} (in {info.ref}/{info.phase_name})"
                                 f" overlaps {cdn_provider} range {cdn_net}"
                             ),
                             zone_name=info.zone_name,
@@ -889,7 +888,7 @@ def format_findings_json(
             "severity": f.severity.value,
             "message": f.message,
             "zone_name": f.zone_name,
-            "phase_name": display_phase_name(f.phase_name),
+            "phase_name": f.phase_name,
             "ref": f.ref,
         }
         for f in filtered

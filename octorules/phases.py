@@ -7,7 +7,7 @@ mutated **in-place** so existing imports see updates.
 """
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from difflib import get_close_matches
 
@@ -213,33 +213,42 @@ def unregister_non_phase_key(key: str) -> None:
 # Provider namespaces — the nested zone-file format
 # ---------------------------------------------------------------------------
 
-# Zone files may nest a provider's sections under one namespace block
-# (``cloudflare: {waf_custom_rules: […], bot_management: {…}}``).  The
-# namespace mapping translates the nested spelling to the canonical flat
-# key (phase friendly name or settings key) that the rest of the system
-# operates on — internal names never change, the nested form is syntax.
+# Zone files nest a provider's sections under one namespace block
+# (``cloudflare: {waf_custom_rules: […], bot_management: {…}}``).  Loading
+# flattens that to the dotted internal key — ``cloudflare.waf_custom_rules``
+# — which is the one spelling used everywhere afterwards: the phase
+# registry, zone data, plan checksums and every diagnostic.  There is no
+# separate display form to translate to.
 
-# namespace -> {nested_key: flat_key}
+# namespace -> {nested member: dotted internal key}
 PROVIDER_NAMESPACES: dict[str, dict[str, str]] = {}
 
-# flat_key -> (namespace, nested_key) — derived, for dump grouping and
-# key-ownership checks.  Mutated in place like the other derived maps.
+# dotted internal key -> (namespace, nested member) — derived, for dump
+# grouping and key-ownership checks.  Mutated in place like the other maps.
 NAMESPACE_OF_KEY: dict[str, tuple[str, str]] = {}
 
 
-def register_namespace(namespace: str, keys: dict[str, str]) -> None:
+def register_namespace(namespace: str, members: "Iterable[str]") -> None:
     """Register a provider's zone-file namespace.
 
-    *keys* maps the nested spelling inside the ``namespace:`` block to
-    the canonical flat key, e.g. ``{"waf_custom_rules":
-    "aws_waf_custom_rules", "waf_settings": "aws_waf_settings"}``.
-    Explicit mapping by design — nested names are not derived from flat
-    prefixes (google's flat prefix is ``gcloud_``, its namespace
-    ``google``).
+    *members* are the section names a user may write inside the
+    ``namespace:`` block, e.g. ``["cloudflare.waf_custom_rules", "waf_settings"]``.
+    Each becomes the internal key ``"<namespace>.<member>"``; there is no
+    mapping to supply, because the nested spelling and the internal
+    spelling are the same thing.
 
     Idempotent for an identical re-registration; a conflicting one
     raises ValueError.
     """
+    if isinstance(members, dict):
+        # The pre-1.0 signature took {nested: flat}.  Iterating a dict would
+        # silently keep the keys and discard the values, wiring up something
+        # that merely looks right, so refuse it outright.
+        raise TypeError(
+            f"register_namespace({namespace!r}, ...) takes member names, not a mapping;"
+            f" pass {sorted(members)!r}"
+        )
+    keys = {m: f"{namespace}.{m}" for m in members}
     with _REGISTRY_LOCK:
         existing = PROVIDER_NAMESPACES.get(namespace)
         if existing is not None:
@@ -266,20 +275,20 @@ def register_namespace(namespace: str, keys: dict[str, str]) -> None:
         # top-level keys wherever the flat view is inspected.
         KNOWN_NON_PHASE_KEYS.add(namespace)
         for section in NAMESPACE_CORE_SECTIONS:
-            KNOWN_NON_PHASE_KEYS.add(f"{namespace}:{section}")
+            KNOWN_NON_PHASE_KEYS.add(f"{namespace}.{section}")
 
 
 def iter_scoped_sections(data: dict, section: str):
     """Yield ``(namespace, value)`` pairs for *section* in a flat zone view.
 
     Multi-provider files carry the core sections per namespace
-    (``"<ns>:lists"``); single-provider and legacy files carry them
-    plain (yielded with namespace ``None``).
+    (``"<ns>.lists"``); single-provider files carry them plain (yielded
+    with namespace ``None``).
     """
     if section in data:
         yield None, data[section]
     for key, value in data.items():
-        ns, sep, name = key.partition(":")
+        ns, sep, name = key.partition(".")
         if sep and name == section and ns in PROVIDER_NAMESPACES:
             yield ns, value
 
@@ -295,7 +304,7 @@ def unregister_namespace(namespace: str) -> None:
                     del NAMESPACE_OF_KEY[flat]
         KNOWN_NON_PHASE_KEYS.discard(namespace)
         for section in NAMESPACE_CORE_SECTIONS:
-            KNOWN_NON_PHASE_KEYS.discard(f"{namespace}:{section}")
+            KNOWN_NON_PHASE_KEYS.discard(f"{namespace}.{section}")
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +367,19 @@ def suggest_phase(name: str) -> str | None:
     if name in PHASE_BY_PROVIDER_ID:
         return PHASE_BY_PROVIDER_ID[name].friendly_name
     matches = get_close_matches(name, ALL_FRIENDLY_NAMES, n=1, cutoff=0.6)
-    return matches[0] if matches else None
+    if matches:
+        return matches[0]
+    # Fall back to matching the member alone.  Every phase name carries its
+    # namespace, so a name typed the way it appears inside the block
+    # ("waf_custom_rulez") is a poor match for the full "cloudflare.
+    # waf_custom_rules" but an excellent one for the member.
+    by_member: dict[str, str] = {}
+    for full in ALL_FRIENDLY_NAMES:
+        _, sep, member = full.partition(".")
+        if sep:
+            by_member.setdefault(member, full)
+    member_matches = get_close_matches(name, list(by_member), n=1, cutoff=0.6)
+    return by_member[member_matches[0]] if member_matches else None
 
 
 def suggest_namespace_member(namespace: str, member: str) -> str | None:
@@ -378,36 +399,12 @@ def suggest_namespace_member(namespace: str, member: str) -> str | None:
     return matches[0] if matches else None
 
 
-def display_phase_name(name: str) -> str:
-    """Human-facing spelling of a phase or section key.
-
-    Namespace-owned keys render in the dotted form
-    (``bunny_waf_custom_rules`` → ``bunny.waf_custom_rules``).  Any key
-    scoped to a registered namespace renders dotted too — core sections
-    (``cloudflare:lists`` → ``cloudflare.lists``) and unknown members
-    alike (``cloudflare:waf_managed_exceptionz`` →
-    ``cloudflare.waf_managed_exceptionz``), so diagnostics echo the
-    nesting the author actually wrote instead of the internal scoped
-    spelling.  Everything else — bare phases, synthetic names,
-    pseudo-refs such as ``list:<ns>:<name>`` — is returned unchanged.
-    Display only: registry keys, zone-data keys, and checksums keep the
-    flat spelling.
-    """
-    owner = NAMESPACE_OF_KEY.get(name)
-    if owner is not None:
-        return f"{owner[0]}.{owner[1]}"
-    ns, sep, member = name.partition(":")
-    if sep and ns in PROVIDER_NAMESPACES:
-        return f"{ns}.{member}"
-    return name
-
-
 def unknown_phase_message(name: str) -> str:
     """Build a human-readable error message for an unknown phase name."""
     hint = suggest_phase(name)
     if hint:
-        return f"Unknown phase {name!r}. Did you mean {display_phase_name(hint)!r}?"
-    valid = ", ".join(sorted(display_phase_name(n) for n in ALL_FRIENDLY_NAMES))
+        return f"Unknown phase {name!r}. Did you mean {hint!r}?"
+    valid = ", ".join(sorted(ALL_FRIENDLY_NAMES))
     return f"Unknown phase {name!r}. Valid phases: {valid}"
 
 

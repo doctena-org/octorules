@@ -22,7 +22,6 @@ from octorules.commands._plan import _plan_all_scopes
 from octorules.commands._providers import _get_zone_provider
 from octorules.config import Config, ConfigError, ZoneConfig
 from octorules.extensions import call_apply_extensions
-from octorules.phases import display_phase_name
 from octorules.planner import (
     ZonePlan,
     check_safety,
@@ -341,7 +340,7 @@ def _apply_single_zone(
     for pp in phases:
         phase = pp.phase
         friendly_name = phase.friendly_name
-        display = display_phase_name(friendly_name)
+        display = friendly_name
         full_label = f"{zp.zone_name}/{display}"
         n_changes = len(pp.changes)
         log.info("  %s/%s: applying %d change(s)", zp.zone_name, display, n_changes)

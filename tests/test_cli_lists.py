@@ -226,7 +226,7 @@ class TestListsDump:
         mock_prov.account_id = "acct-123"
         mock_prov.account_name = "Test Account"
         mock_prov.get_all_phase_rules.return_value = {
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {"ref": "deploy1", "expression": "true", "action": "execute", "enabled": True}
             ],
         }

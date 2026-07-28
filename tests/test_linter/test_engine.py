@@ -25,14 +25,14 @@ class TestLintResult:
             rule_id="M001",
             severity=Severity.ERROR,
             message="Missing ref",
-            phase="redirect_rules",
+            phase="fakeprov.redirect_rules",
             ref="test",
         )
         s = str(r)
         assert "ERROR" in s
         assert "M001" in s
         assert "Missing ref" in s
-        assert "redirect_rules" in s
+        assert "fakeprov.redirect_rules" in s
 
     def test_str_with_suggestion(self):
         r = LintResult(
@@ -62,12 +62,19 @@ class TestLintContext:
         assert ctx.results[0].rule_id == "M001"
 
     def test_add_respects_phase_filter(self):
-        ctx = LintContext(phase_filter=["redirect_rules"])
+        ctx = LintContext(phase_filter=["fakeprov.redirect_rules"])
         ctx.add(
-            LintResult(rule_id="M001", severity=Severity.ERROR, message="r", phase="redirect_rules")
+            LintResult(
+                rule_id="M001",
+                severity=Severity.ERROR,
+                message="r",
+                phase="fakeprov.redirect_rules",
+            )
         )
         ctx.add(
-            LintResult(rule_id="M001", severity=Severity.ERROR, message="c", phase="cache_rules")
+            LintResult(
+                rule_id="M001", severity=Severity.ERROR, message="c", phase="fakeprov.cache_rules"
+            )
         )
         assert len(ctx.results) == 1
 
@@ -111,7 +118,7 @@ class TestPluginDispatch:
 
     def test_returns_lint_context(self):
         """lint_zone_file always returns a LintContext."""
-        ctx = lint_zone_file({"redirect_rules": [{"ref": "test", "expression": "true"}]})
+        ctx = lint_zone_file({"fakeprov.redirect_rules": [{"ref": "test", "expression": "true"}]})
         assert isinstance(ctx, LintContext)
 
     def test_plugin_is_called(self):
@@ -344,7 +351,7 @@ class TestSuppressions:
         """lint_zone_file passes suppressions to the context."""
         ctx = lint_zone_file(
             {
-                "request_header_rules": [
+                "fakeprov.request_header_rules": [
                     {"ref": "catch-all", "expression": "(true)"},
                 ]
             },
@@ -472,35 +479,35 @@ class TestCheckCatchAll:
 
     def test_always_true_fires_m013(self):
         ctx = LintContext()
-        check_catch_all("true", "waf_custom_rules", "test-ref", ctx)
+        check_catch_all("true", "fakeprov.waf_custom_rules", "test-ref", ctx)
         m013 = [r for r in ctx.results if r.rule_id == "M013"]
         assert len(m013) == 1
-        assert m013[0].phase == "waf_custom_rules"
+        assert m013[0].phase == "fakeprov.waf_custom_rules"
         assert m013[0].ref == "test-ref"
         assert "catch-all rule" in m013[0].message
 
     def test_always_false_fires_m014(self):
         ctx = LintContext()
-        check_catch_all("false", "redirect_rules", "dead-rule", ctx)
+        check_catch_all("false", "fakeprov.redirect_rules", "dead-rule", ctx)
         m014 = [r for r in ctx.results if r.rule_id == "M014"]
         assert len(m014) == 1
         assert "never match" in m014[0].message
 
     def test_entity_policy(self):
         ctx = LintContext()
-        check_catch_all("true", "page_shield_policies", "my-policy", ctx, entity="policy")
+        check_catch_all("true", "fakeprov.page_shield_policies", "my-policy", ctx, entity="policy")
         m013 = [r for r in ctx.results if r.rule_id == "M013"]
         assert len(m013) == 1
         assert "catch-all policy" in m013[0].message
 
     def test_normal_expression_no_findings(self):
         ctx = LintContext()
-        check_catch_all('http.host eq "example.com"', "waf_custom_rules", "r", ctx)
+        check_catch_all('http.host eq "example.com"', "fakeprov.waf_custom_rules", "r", ctx)
         assert len(ctx.results) == 0
 
     def test_parenthesized_true(self):
         ctx = LintContext()
-        check_catch_all("((true))", "redirect_rules", "r", ctx)
+        check_catch_all("((true))", "fakeprov.redirect_rules", "r", ctx)
         assert any(r.rule_id == "M013" for r in ctx.results)
 
 
@@ -595,7 +602,7 @@ class TestLintPerformance:
             }
             for i in range(500)
         ]
-        rules_data = {"waf_custom_rules": rules}
+        rules_data = {"fakeprov.waf_custom_rules": rules}
         t0 = time.monotonic()
         lint_zone_file(rules_data)
         elapsed = time.monotonic() - t0

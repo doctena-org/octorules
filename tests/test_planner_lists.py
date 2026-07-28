@@ -23,9 +23,9 @@ from octorules.planner import (
     validate_list_entry,
 )
 
-REDIRECT_PHASE = get_phase("redirect_rules")
-CACHE_PHASE = get_phase("cache_rules")
-WAF_PHASE = get_phase("waf_custom_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
+CACHE_PHASE = get_phase("fakeprov.cache_rules")
+WAF_PHASE = get_phase("fakeprov.waf_custom_rules")
 
 
 class TestListPlan:
@@ -819,7 +819,7 @@ class TestCheckSafetyWithLists:
         )
         zp = ZonePlan(zone_name="test.com", list_plans=[lp])
         # Need enough existing rules to be above min_existing
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(3)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(3)]}
         violations = check_safety(zp, current, self._zone_cfg(delete_threshold=30.0))
         assert len(violations) == 1
         assert violations[0].kind == "delete"
@@ -838,7 +838,7 @@ class TestCheckSafetyWithLists:
             changes=changes,
         )
         zp = ZonePlan(zone_name="test.com", list_plans=[lp])
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
         assert violations[0].kind == "delete"
@@ -858,7 +858,7 @@ class TestCheckSafetyWithLists:
             changes=changes,
         )
         zp = ZonePlan(zone_name="test.com", list_plans=[lp])
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
         assert violations[0].kind == "update"
@@ -878,7 +878,7 @@ class TestCheckSafetyWithLists:
             changes=changes,
         )
         zp = ZonePlan(zone_name="test.com", list_plans=[lp])
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert violations == []
 
@@ -898,12 +898,12 @@ class TestCheckSafetyWithLists:
             changes=list_changes,
         )
         zp = ZonePlan(zone_name="test.com", phase_plans=[pp], list_plans=[lp])
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
         assert violations[0].kind == "delete"
         assert violations[0].count == 4
-        assert "redirect_rules" in violations[0].phases
+        assert "fakeprov.redirect_rules" in violations[0].phases
         assert "list:blocklist" in violations[0].phases
 
 
@@ -912,14 +912,14 @@ class TestWarnUnknownPhaseKeysLists:
 
     def test_lists_not_warned(self, caplog):
         """The 'lists' key should be recognized as a non-phase key."""
-        rules_data = {"redirect_rules": [], "lists": []}
+        rules_data = {"fakeprov.redirect_rules": [], "lists": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "account")
         assert "lists" not in caplog.text
 
     def test_lists_and_custom_rulesets_not_warned(self, caplog):
         """Both 'lists' and 'custom_rulesets' should be recognized."""
-        rules_data = {"redirect_rules": [], "lists": [], "custom_rulesets": []}
+        rules_data = {"fakeprov.redirect_rules": [], "lists": [], "custom_rulesets": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "account")
         assert "lists" not in caplog.text

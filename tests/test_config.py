@@ -116,15 +116,15 @@ class TestConfig:
         rules_dir = tmp_config.parent / "rules"
         rules_file = rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n  redirect_rules:\n"
             "  - ref: test-redirect\n"
             "    description: Test\n"
             "    expression: 'true'\n"
         )
         config = Config.from_file(tmp_config)
         rules = config.load_zone_rules("example.com")
-        assert "redirect_rules" in rules
-        assert rules["redirect_rules"][0]["ref"] == "test-redirect"
+        assert "fakeprov.redirect_rules" in rules
+        assert rules["fakeprov.redirect_rules"][0]["ref"] == "test-redirect"
 
     def test_load_zone_rules_missing_file(self, tmp_config):
         config = Config.from_file(tmp_config)
@@ -134,7 +134,7 @@ class TestConfig:
         """Zone without 'rules' in sources should not load rules file."""
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "example.com.yaml").write_text("redirect_rules:\n  - ref: r1\n")
+        (rules_dir / "example.com.yaml").write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n")
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
             "providers:\n  cloudflare:\n    token: tok\n  rules: {}\n"
@@ -202,7 +202,7 @@ class TestConfig:
         """Malformed YAML in a rules file should raise ConfigError."""
         rules_dir = tmp_config.parent / "rules"
         rules_file = rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules:\n  - ref: r1\n  bad: [unclosed\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n  bad: [unclosed\n")
         config = Config.from_file(tmp_config)
         with pytest.raises(ConfigError, match="Invalid YAML"):
             config.load_zone_rules("example.com")
@@ -315,12 +315,12 @@ class TestIncludeDirective:
         shared_dir.mkdir()
         (shared_dir / "redirects.yaml").write_text("- ref: shared-r1\n  expression: 'true'\n")
         rules_file = rules_dir / "example.com.yaml"
-        rules_file.write_text("redirect_rules: !include shared/redirects.yaml\n")
+        rules_file.write_text("fakeprov:\n  redirect_rules: !include shared/redirects.yaml\n")
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
         config = Config.from_file(config_file)
         rules = config.load_zone_rules("example.com")
-        assert rules["redirect_rules"][0]["ref"] == "shared-r1"
+        assert rules["fakeprov.redirect_rules"][0]["ref"] == "shared-r1"
 
     def test_nested_includes(self, tmp_path):
         """A includes B includes C."""
@@ -412,12 +412,14 @@ class TestIncludeDirective:
         shared_dir = rules_dir / "shared"
         shared_dir.mkdir()
         (shared_dir / "common.yaml").write_text("- ref: common-r1\n  expression: 'true'\n")
-        (rules_dir / "example.com.yaml").write_text("redirect_rules: !include shared/common.yaml\n")
+        (rules_dir / "example.com.yaml").write_text(
+            "fakeprov:\n  redirect_rules: !include shared/common.yaml\n"
+        )
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
         config = Config.from_file(config_file)
         rules = config.load_zone_rules("example.com")
-        assert rules["redirect_rules"][0]["ref"] == "common-r1"
+        assert rules["fakeprov.redirect_rules"][0]["ref"] == "common-r1"
 
     def test_include_path_traversal_blocked(self, tmp_path):
         """!include with path traversal (../) should raise ConfigError."""
@@ -736,7 +738,7 @@ class TestStrictSections:
     def test_template_propagates_to_expanded_zones(self, tmp_path):
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "x.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "x.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
         config = Config(
             rules_dir=rules_dir,
             providers={"cloudflare": ProviderConfig(name="cloudflare")},
@@ -1007,10 +1009,11 @@ class TestDuplicateYamlKeys:
         rules_dir.mkdir()
         rules_file = rules_dir / "example.com.yaml"
         rules_file.write_text(
-            "redirect_rules:\n"
+            "fakeprov:\n"
+            "  redirect_rules:\n"
             "  - ref: r1\n"
             "    expression: 'true'\n"
-            "redirect_rules:\n"
+            "  redirect_rules:\n"
             "  - ref: r2\n"
             "    expression: 'false'\n"
         )
@@ -1417,12 +1420,13 @@ class TestLoadAccountRules:
         rules_dir = tmp_config.parent / "rules"
         rules_file = rules_dir / "acme-corp.yaml"
         rules_file.write_text(
-            "waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n    action: block\n"
+            "fakeprov:\n  waf_custom_rules:\n"
+            "  - ref: w1\n    expression: 'true'\n    action: block\n"
         )
         config = Config.from_file(tmp_config)
         rules = config.load_account_rules("Acme Corp")
-        assert "waf_custom_rules" in rules
-        assert rules["waf_custom_rules"][0]["ref"] == "w1"
+        assert "fakeprov.waf_custom_rules" in rules
+        assert rules["fakeprov.waf_custom_rules"][0]["ref"] == "w1"
 
     def test_missing_file_returns_empty(self, tmp_config):
         config = Config.from_file(tmp_config)
@@ -1451,17 +1455,19 @@ class TestRulesCache:
     def test_zone_rules_cached(self, tmp_config):
         rules_dir = tmp_config.parent / "rules"
         zone_file = rules_dir / "example.com.yaml"
-        zone_file.write_text("redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
+        zone_file.write_text("fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n")
         config = Config.from_file(tmp_config)
         first = config.load_zone_rules("example.com")
         second = config.load_zone_rules("example.com")
         assert first is second
-        assert first["redirect_rules"][0]["ref"] == "r1"
+        assert first["fakeprov.redirect_rules"][0]["ref"] == "r1"
 
     def test_account_rules_cached(self, tmp_config):
         rules_dir = tmp_config.parent / "rules"
         acct_file = rules_dir / "test-acct.yaml"
-        acct_file.write_text("waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n")
+        acct_file.write_text(
+            "fakeprov:\n  waf_custom_rules:\n  - ref: w1\n    expression: 'true'\n"
+        )
         config = Config.from_file(tmp_config)
         first = config.load_account_rules("Test Acct")
         second = config.load_account_rules("Test Acct")
@@ -1476,13 +1482,17 @@ class TestRulesCache:
 
     def test_different_zones_independent(self, tmp_config):
         rules_dir = tmp_config.parent / "rules"
-        (rules_dir / "a.com.yaml").write_text("redirect_rules:\n  - ref: a\n    expression: 't'\n")
-        (rules_dir / "b.com.yaml").write_text("cache_rules:\n  - ref: b\n    expression: 't'\n")
+        (rules_dir / "a.com.yaml").write_text(
+            "fakeprov:\n  redirect_rules:\n  - ref: a\n    expression: 't'\n"
+        )
+        (rules_dir / "b.com.yaml").write_text(
+            "fakeprov:\n  cache_rules:\n  - ref: b\n    expression: 't'\n"
+        )
         config = Config.from_file(tmp_config)
         a = config.load_zone_rules("a.com")
         b = config.load_zone_rules("b.com")
-        assert "redirect_rules" in a
-        assert "cache_rules" in b
+        assert "fakeprov.redirect_rules" in a
+        assert "fakeprov.cache_rules" in b
         assert a is not b
 
 
@@ -1990,7 +2000,7 @@ class TestZoneTemplates:
     def test_expand_templates_adds_matching_zones(self, tmp_path):
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "discovered.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "discovered.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
 
         config = Config(
             rules_dir=rules_dir,
@@ -2012,7 +2022,7 @@ class TestZoneTemplates:
     def test_expand_templates_skips_existing(self, tmp_path):
         rules_dir = tmp_path / "rules"
         rules_dir.mkdir()
-        (rules_dir / "explicit.com.yaml").write_text("redirect_rules: []\n")
+        (rules_dir / "explicit.com.yaml").write_text("fakeprov:\n  redirect_rules: []\n")
 
         config = Config(
             rules_dir=rules_dir,

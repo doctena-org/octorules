@@ -2,6 +2,7 @@
 
 import yaml
 
+from octorules.config import normalize_zone_format
 from octorules.dumper import dump_zone_rules
 
 
@@ -13,7 +14,7 @@ class TestDumpCustomRulesets:
         custom_rulesets = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [
                     {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
                     {"ref": "r2", "expression": "false", "action": "log"},
@@ -22,13 +23,13 @@ class TestDumpCustomRulesets:
         }
         result = dump_zone_rules("acct", rules, tmp_path, custom_rulesets=custom_rulesets)
         assert result is not None
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert "custom_rulesets" in data
         assert len(data["custom_rulesets"]) == 1
         cr = data["custom_rulesets"][0]
         assert cr["id"] == "rs1"
         assert cr["name"] == "Block attackers"
-        assert cr["phase"] == "http_request_firewall_custom"
+        assert cr["phase"] == "fake_http_request_firewall_custom"
         assert len(cr["rules"]) == 2
         assert cr["rules"][0]["ref"] == "r1"
 
@@ -38,7 +39,7 @@ class TestDumpCustomRulesets:
             "rs1": {"name": "Alpha", "phase": "p", "rules": []},
         }
         result = dump_zone_rules("acct", {}, tmp_path, custom_rulesets=custom_rulesets)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert data["custom_rulesets"][0]["name"] == "Alpha"
         assert data["custom_rulesets"][1]["name"] == "Zebra"
 
@@ -54,7 +55,7 @@ class TestDumpCustomRulesets:
             }
         }
         result = dump_zone_rules("acct", {}, tmp_path, custom_rulesets=custom_rulesets)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         rule = data["custom_rulesets"][0]["rules"][0]
         assert rule["ref"] == "uuid-abc"
         assert "id" not in rule
@@ -77,7 +78,7 @@ class TestDumpCustomRulesets:
             }
         }
         result = dump_zone_rules("acct", {}, tmp_path, custom_rulesets=custom_rulesets)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         rule = data["custom_rulesets"][0]["rules"][0]
         assert "id" not in rule
         assert "version" not in rule
@@ -86,17 +87,17 @@ class TestDumpCustomRulesets:
 
     def test_dump_custom_rulesets_none_no_section(self, tmp_path):
         result = dump_zone_rules("acct", {}, tmp_path, custom_rulesets=None)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert "custom_rulesets" not in (data or {})
 
     def test_dump_custom_rulesets_empty_no_section(self, tmp_path):
         result = dump_zone_rules("acct", {}, tmp_path, custom_rulesets={})
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert "custom_rulesets" not in (data or {})
 
     def test_dump_with_phase_rules_and_custom_rulesets(self, tmp_path):
         rules = {
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {
                     "ref": "deploy1",
                     "expression": "true",
@@ -109,15 +110,15 @@ class TestDumpCustomRulesets:
         custom_rulesets = {
             "rs1": {
                 "name": "Block attackers",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [
                     {"ref": "r1", "expression": "true", "action": "block"},
                 ],
             }
         }
         result = dump_zone_rules("acct", rules, tmp_path, custom_rulesets=custom_rulesets)
-        data = yaml.safe_load(result.read_text())
-        assert "waf_custom_rules" in data
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.waf_custom_rules" in data
         assert "custom_rulesets" in data
 
     def test_round_trip_custom_ruleset(self, tmp_path):
@@ -137,12 +138,12 @@ class TestDumpCustomRulesets:
         custom_rulesets = {
             "rs1": {
                 "name": "Block",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": cf_rules,
             }
         }
         result = dump_zone_rules("acct", {}, tmp_path, custom_rulesets=custom_rulesets)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         dumped_rules = data["custom_rulesets"][0]["rules"]
         crp = diff_custom_ruleset("rs1", "Block", "p", dumped_rules, cf_rules)
         assert not crp.has_changes

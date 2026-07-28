@@ -14,7 +14,7 @@ from octorules.plan_output import (
 )
 from octorules.planner import ChangeType, PhasePlan, RuleChange, ZonePlan
 
-REDIRECT_PHASE = get_phase("redirect_rules")
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
 
 
 def _zone_with_changes():

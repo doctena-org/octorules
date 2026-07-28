@@ -57,14 +57,16 @@ class TestIterProviderPhases:
 
     def test_respects_phase_filter_and_registry(self):
         # Use phases the conftest registers for real.
-        data = {"redirect_rules": [{"ref": "a"}], "cache_rules": [{"ref": "b"}]}
+        data = {"fakeprov.redirect_rules": [{"ref": "a"}], "fakeprov.cache_rules": [{"ref": "b"}]}
         names = frozenset(data)
         assert dict(iter_provider_phases(data, LintContext(), names)) == data
-        ctx = LintContext(phase_filter=["cache_rules"])
-        assert dict(iter_provider_phases(data, ctx, names)) == {"cache_rules": [{"ref": "b"}]}
+        ctx = LintContext(phase_filter=["fakeprov.cache_rules"])
+        assert dict(iter_provider_phases(data, ctx, names)) == {
+            "fakeprov.cache_rules": [{"ref": "b"}]
+        }
 
     def test_skip_suffixes(self):
-        data = {"redirect_rules": [], "cache_rules": []}
+        data = {"fakeprov.redirect_rules": [], "fakeprov.cache_rules": []}
         out = dict(
             iter_provider_phases(data, LintContext(), frozenset(data), skip_suffixes=("_rules",))
         )

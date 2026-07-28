@@ -15,7 +15,6 @@ import yaml
 from octorules.pathutil import validate_path_within
 from octorules.phases import (
     NAMESPACE_CORE_SECTIONS,
-    NAMESPACE_OF_KEY,
     PROVIDER_NAMESPACES,
 )
 from octorules.plan_output import PLAN_OUTPUT_CLASSES, PlanOutput
@@ -125,24 +124,42 @@ def normalize_zone_format(data: dict, *, source: str = "") -> dict:
     """Normalize a zone rules mapping to the canonical flat form.
 
     Provider namespace blocks (``cloudflare: {waf_custom_rules: […],
-    bot_management: {…}}``) flatten through the registered namespace
-    mappings — internal keys never change, the nested form is syntax.
-    The legacy flat spelling keeps working with a deprecation warning;
-    the same section in both forms raises :class:`ConfigError`.
+    bot_management: {…}}``) flatten to the dotted internal key
+    (``cloudflare.waf_custom_rules``), which is the only spelling the rest
+    of the system uses.
 
     ``lists`` / ``custom_rulesets`` inside a namespace stay plain while
     the file uses a single namespace; with several namespaces they become
-    ``"<ns>:lists"`` etc. so each provider keeps its own, and top-level
+    ``"<ns>.lists"`` etc. so each provider keeps its own, and top-level
     spellings of those sections are rejected as ambiguous.
+
+    Raises :class:`ConfigError` when the same section appears both plainly
+    and nested under a namespace, and when a section is written as a
+    top-level dotted key.
+
+    The dotted spelling is the *internal* key, not an input form.  It
+    would otherwise be accepted by accident — the loader passes unknown
+    top-level keys through, and ``cloudflare.waf_custom_rules`` stopped
+    being unknown — which would give one section two grammars and allow a
+    file to interleave providers instead of grouping them, undoing the
+    point of the namespace block.  ``dump`` only ever writes the nested
+    form, so accepting the dotted one would also let a dump/edit/sync
+    round trip silently restyle the author's file.
+
+    The removed flat spelling needs no special case: with internal keys
+    dotted, ``cloudflare_bot_management`` is simply not a section, so it
+    surfaces as an unknown section — and because it differs from
+    ``cloudflare.bot_management`` by one character, the existing fuzzy
+    matcher already suggests the right name.
     """
     label = source or "zone rules"
-    flat_owned = sorted({NAMESPACE_OF_KEY[k][0] for k in data if k in NAMESPACE_OF_KEY})
-    if flat_owned:
-        log.warning(
-            "%s: provider sections use the deprecated flat spelling — nest them under %s",
-            label,
-            ", ".join(f"'{ns}:'" for ns in flat_owned),
-        )
+    for key in data:
+        ns, sep, member = key.partition(".")
+        if sep and ns in PROVIDER_NAMESPACES:
+            raise ConfigError(
+                f"{label}: {key!r} is the internal spelling, not a zone-file key."
+                f" Nest it instead:\n  {ns}:\n    {member}: ..."
+            )
 
     namespaces = [k for k in data if k in PROVIDER_NAMESPACES]
     if not namespaces:
@@ -168,12 +185,12 @@ def normalize_zone_format(data: dict, *, source: str = "") -> dict:
         mapping = PROVIDER_NAMESPACES[ns]
         for member, value in block.items():
             if member in NAMESPACE_CORE_SECTIONS:
-                target = member if len(namespaces) == 1 else f"{ns}:{member}"
+                target = member if len(namespaces) == 1 else f"{ns}.{member}"
             elif member in mapping:
                 target = mapping[member]
             else:
                 log.warning("%s: unknown key %r in namespace %r", label, member, ns)
-                target = f"{ns}:{member}"
+                target = f"{ns}.{member}"
             if target in result:
                 raise ConfigError(
                     f"{label}: section {target!r} is present both flat and nested under {ns!r}"

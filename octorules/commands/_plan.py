@@ -24,7 +24,7 @@ from octorules.extensions import (
     call_plan_zone_finalize,
     call_plan_zone_prefetch,
 )
-from octorules.phases import PHASE_BY_PROVIDER_ID, display_phase_name
+from octorules.phases import PHASE_BY_PROVIDER_ID
 from octorules.planner import (
     ZonePlan,
     check_zone_sections,
@@ -118,7 +118,7 @@ def _plan_single_zone(
         for name in sorted(skipped):
             log.warning(
                 "Skipping %s for %s: failed to fetch current state",
-                display_phase_name(name),
+                name,
                 zone_name,
             )
         if skipped:
@@ -336,7 +336,7 @@ def _plan_account(
             for name in sorted(skipped):
                 log.warning(
                     "Skipping %s for account %s: failed to fetch current state",
-                    display_phase_name(name),
+                    name,
                     provider.account_name,
                 )
             if skipped:

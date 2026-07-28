@@ -24,7 +24,6 @@ from octorules.phases import (
     PROVIDER_NAMESPACES,
     RENAMED_PHASES,
     Phase,
-    display_phase_name,
     get_api_fields,
     get_phase,
     unknown_phase_message,
@@ -358,12 +357,10 @@ def validate_rules(rules: list[RuleDict], phase: Phase) -> None:
     """
     seen_refs: set[str] = set()
     for i, rule in enumerate(rules):
-        ctx = f"Rule at index {i} in {display_phase_name(phase.friendly_name)!r}"
+        ctx = f"Rule at index {i} in {phase.friendly_name!r}"
         ref = _require_string_field(rule, "ref", ctx)
         if ref in seen_refs:
-            raise RuleValidationError(
-                f"Duplicate ref {ref!r} in {display_phase_name(phase.friendly_name)!r}"
-            )
+            raise RuleValidationError(f"Duplicate ref {ref!r} in {phase.friendly_name!r}")
         seen_refs.add(ref)
         # Validate octorules metadata
         _validate_octorules_meta(rule, ref)
@@ -410,7 +407,7 @@ def check_zone_sections(
 
     unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys() - KNOWN_NON_PHASE_KEYS
     for key in sorted(unknown):
-        ns, sep, member = key.partition(":")
+        ns, sep, member = key.partition(".")
         if sep and ns in PROVIDER_NAMESPACES:
             # Scoped key kept by normalize_zone_format: a core section
             # for a namespace, or an unknown namespace member.
@@ -433,15 +430,15 @@ def check_zone_sections(
     for key in sorted(rules_data.keys()):
         owner = NAMESPACE_OF_KEY.get(key)
         owner_ns = owner[0] if owner is not None else None
-        if owner_ns is None and ":" in key:
-            # Scoped core sections ("aws:lists") are registered known keys,
+        if owner_ns is None and "." in key:
+            # Scoped core sections ("aws.lists") are registered known keys,
             # so they bypass the unknown check above — resolve their owner.
-            key_ns, _, section = key.partition(":")
+            key_ns, _, section = key.partition(".")
             if key_ns in PROVIDER_NAMESPACES and section in NAMESPACE_CORE_SECTIONS:
                 owner_ns = key_ns
         if owner_ns is not None and owner_ns not in target_namespaces:
             _emit(
-                f"Section {display_phase_name(key)!r} in rules for {zone_name}"
+                f"Section {key!r} in rules for {zone_name}"
                 f" belongs to provider namespace {owner_ns!r}, which the zone"
                 f" does not target — it will not be managed"
             )
@@ -936,7 +933,7 @@ def check_safety(
             update_phases.append(label)
 
     for pp in zone_plan.phase_plans:
-        _tally(pp.changes, display_phase_name(pp.phase.friendly_name))
+        _tally(pp.changes, pp.phase.friendly_name)
     for crp in zone_plan.custom_ruleset_plans:
         _tally(crp.changes, f"custom_ruleset:{crp.ruleset_name}", extra_deletes=int(crp.delete))
     for lp in zone_plan.list_plans:

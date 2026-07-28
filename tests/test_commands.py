@@ -49,7 +49,7 @@ def _mock_provider():
     return prov
 
 
-_REDIRECT_PHASE = get_phase("redirect_rules")
+_REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
 
 
 def _make_zone_plan(zone_name: str, *, with_changes: bool = False) -> ZonePlan:
@@ -465,7 +465,7 @@ class TestMultiProviderRouting:
             return [fn(item) for item in items]
 
         mock_map.side_effect = side_effect
-        mock_apply.return_value = ("my-cf-account", ["waf_custom_rules"], None)
+        mock_apply.return_value = ("my-cf-account", ["fakeprov.waf_custom_rules"], None)
 
         _apply_zone_changes(
             [zp],
@@ -837,7 +837,7 @@ class TestTargetNameThreading:
             "example.com": MagicMock(zone_id="z-1", allow_unmanaged=False, processors=[]),
         }
         cfg.load_zone_rules.return_value = {
-            "waf_custom_rules": [
+            "fakeprov.waf_custom_rules": [
                 {"ref": "both", "expression": "true", "action": "block"},
                 {
                     "ref": "cf-only",
@@ -871,7 +871,7 @@ class TestTargetNameThreading:
             "example.com": MagicMock(zone_id="z-1", allow_unmanaged=False, processors=[]),
         }
         cfg.load_zone_rules.return_value = {
-            "waf_custom_rules": [
+            "fakeprov.waf_custom_rules": [
                 {"ref": "r1", "expression": "true", "action": "block"},
                 {
                     "ref": "r2",
@@ -971,14 +971,14 @@ class TestAccountSectionCheckIgnoresPhaseFilter:
         from octorules.commands import _plan_account
         from octorules.config import ConfigError
 
-        cfg = self._config({"redirect_rules": [], "totally_bogus_section": []})
+        cfg = self._config({"fakeprov.redirect_rules": [], "totally_bogus_section": []})
         # --phase selects only redirect_rules, so the filtered view drops
         # the bogus key entirely.
         with pytest.raises(ConfigError, match="totally_bogus_section"):
-            _plan_account(cfg, self._provider(), ["redirect_rules"])
+            _plan_account(cfg, self._provider(), ["fakeprov.redirect_rules"])
 
     def test_clean_account_file_with_filter_is_fine(self):
         from octorules.commands import _plan_account
 
-        cfg = self._config({"redirect_rules": [], "cache_rules": []})
-        _plan_account(cfg, self._provider(), ["redirect_rules"])
+        cfg = self._config({"fakeprov.redirect_rules": [], "fakeprov.cache_rules": []})
+        _plan_account(cfg, self._provider(), ["fakeprov.redirect_rules"])

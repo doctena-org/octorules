@@ -79,14 +79,21 @@ class TestRegisterPhase:
         register_phase(TEST_PHASE)
         assert len(PHASES) == original_count + 1
         # Existing phases still there
-        assert get_phase("redirect_rules").provider_id == "http_request_dynamic_redirect"
-        assert get_phase("waf_custom_rules").provider_id == "http_request_firewall_custom"
+        assert (
+            get_phase("fakeprov.redirect_rules").provider_id == "fake_http_request_dynamic_redirect"
+        )
+        assert (
+            get_phase("fakeprov.waf_custom_rules").provider_id
+            == "fake_http_request_firewall_custom"
+        )
 
     def test_register_preserves_aliases(self):
         """waf_managed_exceptions alias should survive registration."""
         register_phase(TEST_PHASE)
         assert "waf_managed_exceptions" in PHASE_BY_NAME
-        assert PHASE_BY_NAME["waf_managed_exceptions"] is PHASE_BY_NAME["waf_managed_rules"]
+        assert (
+            PHASE_BY_NAME["waf_managed_exceptions"] is PHASE_BY_NAME["fakeprov.waf_managed_rules"]
+        )
 
 
 class TestUnregisterPhase:
@@ -106,7 +113,7 @@ class TestUnregisterPhase:
     def test_unregister_aliased_phase_raises(self):
         """Cannot unregister a phase that has backward-compat aliases."""
         with pytest.raises(ValueError, match="backward-compat aliases"):
-            unregister_phase("waf_managed_rules")
+            unregister_phase("fakeprov.waf_managed_rules")
 
 
 class TestRegisterPhases:
@@ -228,16 +235,16 @@ class TestStripApiFields:
 
 class TestRegisterPhaseAlias:
     def test_register_alias(self):
-        register_phase_alias("old_name", "redirect_rules")
+        register_phase_alias("old_name", "fakeprov.redirect_rules")
         assert "old_name" in PHASE_BY_NAME
-        assert PHASE_BY_NAME["old_name"] is PHASE_BY_NAME["redirect_rules"]
+        assert PHASE_BY_NAME["old_name"] is PHASE_BY_NAME["fakeprov.redirect_rules"]
 
     def test_register_alias_appears_in_renamed_phases(self):
-        register_phase_alias("old_name", "redirect_rules")
-        assert RENAMED_PHASES["old_name"] == "redirect_rules"
+        register_phase_alias("old_name", "fakeprov.redirect_rules")
+        assert RENAMED_PHASES["old_name"] == "fakeprov.redirect_rules"
 
     def test_unregister_alias(self):
-        register_phase_alias("old_name", "redirect_rules")
+        register_phase_alias("old_name", "fakeprov.redirect_rules")
         unregister_phase_alias("old_name")
         assert "old_name" not in PHASE_BY_NAME
         assert "old_name" not in RENAMED_PHASES
@@ -246,10 +253,10 @@ class TestRegisterPhaseAlias:
         unregister_phase_alias("nonexistent")  # no error
 
     def test_alias_survives_phase_registration(self):
-        register_phase_alias("old_name", "redirect_rules")
+        register_phase_alias("old_name", "fakeprov.redirect_rules")
         register_phase(TEST_PHASE)
         assert "old_name" in PHASE_BY_NAME
-        assert PHASE_BY_NAME["old_name"] is PHASE_BY_NAME["redirect_rules"]
+        assert PHASE_BY_NAME["old_name"] is PHASE_BY_NAME["fakeprov.redirect_rules"]
 
     def test_alias_to_nonexistent_phase_is_silently_ignored(self):
         register_phase_alias("alias", "nonexistent_phase")

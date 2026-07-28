@@ -36,10 +36,10 @@ from octorules.planner import (
     validate_rules,
 )
 
-REDIRECT_PHASE = get_phase("redirect_rules")
-CACHE_PHASE = get_phase("cache_rules")
-WAF_PHASE = get_phase("waf_custom_rules")
-BARE_PHASE = get_phase("bare_custom_rules")  # prepare_rule=None (AWS/Google style)
+REDIRECT_PHASE = get_phase("fakeprov.redirect_rules")
+CACHE_PHASE = get_phase("fakeprov.cache_rules")
+WAF_PHASE = get_phase("fakeprov.waf_custom_rules")
+BARE_PHASE = get_phase("bareprov.custom_rules")  # prepare_rule=None (AWS/Google style)
 
 
 class TestNormalizeRule:
@@ -110,7 +110,7 @@ class TestValidateRules:
 
     def test_error_message_includes_phase(self):
         rules = [{"expression": "true"}]
-        with pytest.raises(RuleValidationError, match="redirect_rules"):
+        with pytest.raises(RuleValidationError, match="fakeprov.redirect_rules"):
             validate_rules(rules, REDIRECT_PHASE)
 
     def test_error_message_includes_index(self):
@@ -144,13 +144,13 @@ class TestValidateRules:
 
 class TestCheckZoneSections:
     def test_no_warnings_for_valid_keys(self, caplog):
-        rules_data = {"redirect_rules": [], "cache_rules": []}
+        rules_data = {"fakeprov.redirect_rules": [], "fakeprov.cache_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "example.com")
         assert caplog.text == ""
 
     def test_warns_on_unknown_key(self, caplog):
-        rules_data = {"redirect_rules": [], "typo_rules": []}
+        rules_data = {"fakeprov.redirect_rules": [], "typo_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "example.com")
         assert "typo_rules" in caplog.text
@@ -172,7 +172,7 @@ class TestCheckZoneSections:
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "example.com")
         assert "Did you mean" in caplog.text
-        assert "redirect_rules" in caplog.text
+        assert "fakeprov.redirect_rules" in caplog.text
 
     def test_no_match_lists_valid(self, caplog):
         rules_data = {"zzz_totally_wrong": []}
@@ -181,11 +181,11 @@ class TestCheckZoneSections:
         assert "Valid phases:" in caplog.text
 
     def test_provider_id_suggests_friendly_name(self, caplog):
-        rules_data = {"http_request_dynamic_redirect": []}
+        rules_data = {"fake_http_request_dynamic_redirect": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "example.com")
         assert "Did you mean" in caplog.text
-        assert "redirect_rules" in caplog.text
+        assert "fakeprov.redirect_rules" in caplog.text
 
     def test_renamed_phase_warns_with_migration_guidance(self, caplog):
         """Using old name waf_managed_exceptions should produce a deprecation warning."""
@@ -195,7 +195,7 @@ class TestCheckZoneSections:
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(rules_data, "example.com")
         assert "renamed" in caplog.text
-        assert "waf_managed_rules" in caplog.text
+        assert "fakeprov.waf_managed_rules" in caplog.text
         assert "deprecated" in caplog.text
 
     def test_renamed_phase_does_not_show_generic_unknown(self, caplog):
@@ -217,7 +217,7 @@ class TestCheckZoneSectionsStrict:
 
     def test_valid_keys_pass(self):
         check_zone_sections(
-            {"redirect_rules": [], "lists": [], "custom_rulesets": []},
+            {"fakeprov.redirect_rules": [], "lists": [], "custom_rulesets": []},
             "example.com",
             strict=True,
         )
@@ -231,10 +231,10 @@ class TestCheckZoneSectionsStrict:
 
 @pytest.fixture
 def alpha_namespace():
-    register_namespace("alphaprov", {"shield": "alpha_shield"})
-    register_non_phase_key("alpha_shield")
+    register_namespace("alphaprov", ["shield"])
+    register_non_phase_key("alphaprov.shield")
     yield
-    unregister_non_phase_key("alpha_shield")
+    unregister_non_phase_key("alphaprov.shield")
     unregister_namespace("alphaprov")
 
 
@@ -242,7 +242,7 @@ class TestCheckZoneSectionsNamespaces:
     def test_non_target_owned_section_warns(self, alpha_namespace, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(
-                {"alpha_shield": {}},
+                {"alphaprov.shield": {}},
                 "example.com",
                 target_namespaces=frozenset({"betaprov"}),
             )
@@ -252,7 +252,7 @@ class TestCheckZoneSectionsNamespaces:
     def test_target_owned_section_is_silent(self, alpha_namespace, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(
-                {"alpha_shield": {}},
+                {"alphaprov.shield": {}},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
             )
@@ -260,13 +260,13 @@ class TestCheckZoneSectionsNamespaces:
 
     def test_no_namespace_info_disables_coverage_check(self, alpha_namespace, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections({"alpha_shield": {}}, "example.com")
+            check_zone_sections({"alphaprov.shield": {}}, "example.com")
         assert caplog.text == ""
 
     def test_non_target_owned_section_strict_raises(self, alpha_namespace):
         with pytest.raises(ConfigError, match="alphaprov"):
             check_zone_sections(
-                {"alpha_shield": {}},
+                {"alphaprov.shield": {}},
                 "example.com",
                 target_namespaces=frozenset({"betaprov"}),
                 strict=True,
@@ -275,7 +275,7 @@ class TestCheckZoneSectionsNamespaces:
     def test_scoped_core_section_non_target_warns(self, alpha_namespace, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(
-                {"alphaprov:lists": []},
+                {"alphaprov.lists": []},
                 "example.com",
                 target_namespaces=frozenset({"betaprov"}),
             )
@@ -285,7 +285,7 @@ class TestCheckZoneSectionsNamespaces:
     def test_scoped_core_section_target_is_silent(self, alpha_namespace, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(
-                {"alphaprov:lists": []},
+                {"alphaprov.lists": []},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
             )
@@ -295,7 +295,7 @@ class TestCheckZoneSectionsNamespaces:
         """normalize_zone_format keeps unknown members as scoped keys."""
         with caplog.at_level(logging.WARNING, logger="octorules"):
             check_zone_sections(
-                {"alphaprov:weird": []},
+                {"alphaprov.weird": []},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
             )
@@ -305,7 +305,7 @@ class TestCheckZoneSectionsNamespaces:
     def test_unknown_namespace_member_strict_raises(self, alpha_namespace):
         with pytest.raises(ConfigError, match="weird"):
             check_zone_sections(
-                {"alphaprov:weird": []},
+                {"alphaprov.weird": []},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
                 strict=True,
@@ -359,31 +359,31 @@ class TestPrepareDesiredRules:
         assert prepare_desired_rules([], REDIRECT_PHASE) == []
 
     def test_rate_limiting_requires_action(self):
-        rl_phase = get_phase("rate_limiting_rules")
+        rl_phase = get_phase("fakeprov.rate_limiting_rules")
         rules = [{"ref": "r1", "expression": "true"}]
         with pytest.raises(ValueError, match="must specify an 'action'"):
             prepare_desired_rules(rules, rl_phase)
 
     def test_bot_fight_rules_requires_action(self):
-        bf_phase = get_phase("bot_fight_rules")
+        bf_phase = get_phase("fakeprov.bot_fight_rules")
         rules = [{"ref": "r1", "expression": "true"}]
         with pytest.raises(ValueError, match="must specify an 'action'"):
             prepare_desired_rules(rules, bf_phase)
 
     def test_bot_fight_rules_with_action_ok(self):
-        bf_phase = get_phase("bot_fight_rules")
+        bf_phase = get_phase("fakeprov.bot_fight_rules")
         rules = [{"ref": "r1", "expression": "true", "action": "block"}]
         prepared = prepare_desired_rules(rules, bf_phase)
         assert prepared[0]["action"] == "block"
 
     def test_sensitive_data_detection_requires_action(self):
-        sd_phase = get_phase("sensitive_data_detection")
+        sd_phase = get_phase("fakeprov.sensitive_data_detection")
         rules = [{"ref": "r1", "expression": "true"}]
         with pytest.raises(ValueError, match="must specify an 'action'"):
             prepare_desired_rules(rules, sd_phase)
 
     def test_sensitive_data_detection_with_action_ok(self):
-        sd_phase = get_phase("sensitive_data_detection")
+        sd_phase = get_phase("fakeprov.sensitive_data_detection")
         rules = [{"ref": "r1", "expression": "true", "action": "log"}]
         prepared = prepare_desired_rules(rules, sd_phase)
         assert prepared[0]["action"] == "log"
@@ -677,7 +677,7 @@ class TestPlanZone:
 
     def test_new_phase_rules(self):
         desired = {
-            "redirect_rules": [{"ref": "r1", "expression": "true"}],
+            "fakeprov.redirect_rules": [{"ref": "r1", "expression": "true"}],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
@@ -685,7 +685,7 @@ class TestPlanZone:
 
     def test_removes_existing_phase(self):
         current = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect"}
             ],
         }
@@ -695,8 +695,8 @@ class TestPlanZone:
 
     def test_multiple_phases(self):
         desired = {
-            "redirect_rules": [{"ref": "r1", "expression": "true"}],
-            "cache_rules": [{"ref": "c1", "expression": "true"}],
+            "fakeprov.redirect_rules": [{"ref": "r1", "expression": "true"}],
+            "fakeprov.cache_rules": [{"ref": "c1", "expression": "true"}],
         }
         zone_plan = plan_zone("example.com", desired, {})
         assert zone_plan.has_changes
@@ -714,12 +714,12 @@ class TestPlanZone:
 
     def test_no_changes_same_rules(self):
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
         current = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
@@ -744,18 +744,18 @@ class TestRenamedPhaseAlias:
         zp = plan_zone("example.com", desired, current)
         assert zp.has_changes
         assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.provider_id == "http_request_firewall_managed"
+        assert zp.phase_plans[0].phase.provider_id == "fake_http_request_firewall_managed"
 
     def test_canonical_name_works_in_plan_zone(self):
         """Using canonical name waf_managed_rules should work normally."""
         desired = {
-            "waf_managed_rules": [{"ref": "r1", "expression": "true", "action": "block"}],
+            "fakeprov.waf_managed_rules": [{"ref": "r1", "expression": "true", "action": "block"}],
         }
         current = {}
         zp = plan_zone("example.com", desired, current)
         assert zp.has_changes
         assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.provider_id == "http_request_firewall_managed"
+        assert zp.phase_plans[0].phase.provider_id == "fake_http_request_firewall_managed"
 
     def test_alias_diff_against_current(self):
         """Alias name should correctly diff against current rules from CF."""
@@ -765,7 +765,7 @@ class TestRenamedPhaseAlias:
             ],
         }
         current = {
-            "http_request_firewall_managed": [
+            "fake_http_request_firewall_managed": [
                 {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
             ],
         }
@@ -780,7 +780,7 @@ class TestRenamedPhaseAlias:
             ],
         }
         current = {
-            "http_request_firewall_managed": [
+            "fake_http_request_firewall_managed": [
                 {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
                 {"ref": "r2", "expression": "false", "action": "log", "enabled": True},
             ],
@@ -805,7 +805,7 @@ class TestRenamedPhaseAlias:
             "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
         }
         current = {
-            "http_request_firewall_managed": [
+            "fake_http_request_firewall_managed": [
                 {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
                 {"ref": "r2", "expression": "false", "action": "log", "enabled": True},
             ],
@@ -866,7 +866,7 @@ class TestAllowUnmanaged:
         """With allow_unmanaged, phases in current but not desired are not removed."""
         desired = {}  # no desired rules
         current = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect"}
             ],
         }
@@ -877,7 +877,7 @@ class TestAllowUnmanaged:
         """Without allow_unmanaged, phases in current but not desired are removed."""
         desired = {}
         current = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect"}
             ],
         }
@@ -911,7 +911,7 @@ class TestBuildPhasePayload:
         assert payload[0]["action_parameters"] == {"status_code": 301}
 
 
-ORIGIN_PHASE = get_phase("origin_rules")
+ORIGIN_PHASE = get_phase("fakeprov.origin_rules")
 
 # Example Origin Rule: routes /api requests on app.example.com to api.example.com
 EXAMPLE_ORIGIN_RULE_YAML = {
@@ -1011,17 +1011,17 @@ class TestOriginRule:
 
     def test_zone_plan_with_origin_rules(self):
         """Full zone plan with origin rules phase."""
-        desired = {"origin_rules": [EXAMPLE_ORIGIN_RULE_YAML]}
+        desired = {"fakeprov.origin_rules": [EXAMPLE_ORIGIN_RULE_YAML]}
         current = {}
         zp = plan_zone("example.com", desired, current)
         assert zp.has_changes
         assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.provider_id == "http_request_origin"
+        assert zp.phase_plans[0].phase.provider_id == "fake_http_request_origin"
 
     def test_zone_plan_no_changes(self):
         """Full zone plan when CF already has the rule."""
-        desired = {"origin_rules": [EXAMPLE_ORIGIN_RULE_YAML]}
-        current = {"http_request_origin": [EXAMPLE_ORIGIN_RULE_CF]}
+        desired = {"fakeprov.origin_rules": [EXAMPLE_ORIGIN_RULE_YAML]}
+        current = {"fake_http_request_origin": [EXAMPLE_ORIGIN_RULE_CF]}
         zp = plan_zone("example.com", desired, current)
         assert not zp.has_changes
 
@@ -1191,7 +1191,7 @@ class TestCheckSafety:
         """1 delete out of 10 rules = 10%, under 30% threshold."""
         changes = [RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert violations == []
 
@@ -1199,7 +1199,7 @@ class TestCheckSafety:
         """4 deletes out of 10 rules = 40%, exceeds 30% threshold."""
         changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(4)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
         assert violations[0].kind == "delete"
@@ -1210,7 +1210,7 @@ class TestCheckSafety:
         """4 modifies out of 10 rules = 40%, exceeds 30% threshold."""
         changes = [RuleChange(ChangeType.MODIFY, f"r{i}", REDIRECT_PHASE) for i in range(4)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
         assert violations[0].kind == "update"
@@ -1219,7 +1219,7 @@ class TestCheckSafety:
         """With only 2 existing rules and min_existing=3, skip checks."""
         changes = [RuleChange(ChangeType.REMOVE, "r1", REDIRECT_PHASE)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": "r1"}, {"ref": "r2"}]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": "r1"}, {"ref": "r2"}]}
         violations = check_safety(zp, current, self._zone_cfg(min_existing=3))
         assert violations == []
 
@@ -1232,7 +1232,7 @@ class TestCheckSafety:
             RuleChange(ChangeType.MODIFY, "r4", REDIRECT_PHASE),
         ]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 2
         kinds = {v.kind for v in violations}
@@ -1242,7 +1242,7 @@ class TestCheckSafety:
         """Adding rules never triggers safety checks."""
         changes = [RuleChange(ChangeType.ADD, f"new{i}", REDIRECT_PHASE) for i in range(5)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert violations == []
 
@@ -1250,7 +1250,7 @@ class TestCheckSafety:
         """Exactly at threshold (30% = 3 out of 10) should be OK (strict >)."""
         changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(3)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert violations == []
 
@@ -1258,19 +1258,19 @@ class TestCheckSafety:
         """Delete violation should include the affected phase names."""
         changes = [RuleChange(ChangeType.REMOVE, f"r{i}", REDIRECT_PHASE) for i in range(4)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
-        assert violations[0].phases == ["redirect_rules"]
+        assert violations[0].phases == ["fakeprov.redirect_rules"]
 
     def test_update_violation_has_phases(self):
         """Update violation should include the affected phase names."""
         changes = [RuleChange(ChangeType.MODIFY, f"r{i}", REDIRECT_PHASE) for i in range(4)]
         zp = self._make_zone_plan(changes)
-        current = {"http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
+        current = {"fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(10)]}
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
-        assert violations[0].phases == ["redirect_rules"]
+        assert violations[0].phases == ["fakeprov.redirect_rules"]
 
     def test_multiple_phases_in_violation(self):
         """Violation spanning multiple phases should list all phase names."""
@@ -1280,13 +1280,13 @@ class TestCheckSafety:
         pp2 = PhasePlan(phase=CACHE_PHASE, changes=c2)
         zp = ZonePlan(zone_name="test.com", phase_plans=[pp1, pp2])
         current = {
-            "http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)],
-            "http_request_cache_settings": [{"ref": f"c{i}"} for i in range(5)],
+            "fake_http_request_dynamic_redirect": [{"ref": f"r{i}"} for i in range(5)],
+            "fake_http_request_cache_settings": [{"ref": f"c{i}"} for i in range(5)],
         }
         violations = check_safety(zp, current, self._zone_cfg())
         delete_v = next(v for v in violations if v.kind == "delete")
-        assert "redirect_rules" in delete_v.phases
-        assert "cache_rules" in delete_v.phases
+        assert "fakeprov.redirect_rules" in delete_v.phases
+        assert "fakeprov.cache_rules" in delete_v.phases
 
     def test_multiple_phases_summed(self):
         """Changes across multiple phases should be summed against total existing."""
@@ -1297,8 +1297,8 @@ class TestCheckSafety:
         zp = ZonePlan(zone_name="test.com", phase_plans=[pp1, pp2])
         # 2 deletes out of 5 total existing = 40%
         current = {
-            "http_request_dynamic_redirect": [{"ref": "r1"}, {"ref": "r2"}],
-            "http_request_cache_settings": [{"ref": "c1"}, {"ref": "c2"}, {"ref": "c3"}],
+            "fake_http_request_dynamic_redirect": [{"ref": "r1"}, {"ref": "r2"}],
+            "fake_http_request_cache_settings": [{"ref": "c1"}, {"ref": "c2"}, {"ref": "c3"}],
         }
         violations = check_safety(zp, current, self._zone_cfg())
         assert len(violations) == 1
@@ -1514,12 +1514,12 @@ class TestCFApiResilience:
     def test_unknown_provider_id_mixed_with_known(self):
         """Unknown phases don't interfere with known phase processing."""
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
         current = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
             "http_request_unknown_new_phase": [{"ref": "x1", "expression": "true", "action": "x"}],
@@ -1609,7 +1609,7 @@ class TestCFApiResilience:
         zp = ZonePlan(zone_name="test.com", phase_plans=[pp])
         # 10 rules total, including ref-less ones
         current = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 *[{"ref": f"r{i}"} for i in range(8)],
                 {"expression": "managed-1"},  # No ref
                 {"expression": "managed-2"},  # No ref
@@ -1637,7 +1637,7 @@ class TestDiffPhasePreparedRules:
 
     def test_prepared_rules_stored_on_phase_plan(self):
         """diff_phase should store the prepared rules on PhasePlan."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [{"ref": "r1", "expression": "true"}]
         plan = diff_phase(phase, desired, [])
         assert plan.prepared_rules is not None
@@ -1648,7 +1648,7 @@ class TestDiffPhasePreparedRules:
 
     def test_prepared_rules_available_for_no_changes(self):
         """Even when there are no changes, prepared_rules should be available."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
         current = [{"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}]
         plan = diff_phase(phase, desired, current)
@@ -1661,7 +1661,7 @@ class TestNormalizeRuleCaching:
 
     def test_modify_change_has_cached_normalized(self):
         """MODIFY RuleChange should have normalized values pre-populated."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [{"ref": "r1", "expression": "new_expr", "action": "redirect", "enabled": True}]
         current = [{"ref": "r1", "expression": "old_expr", "action": "redirect", "enabled": True}]
         plan = diff_phase(phase, desired, current)
@@ -1676,7 +1676,7 @@ class TestNormalizeRuleCaching:
 
     def test_add_change_no_pre_populated_normalized(self):
         """ADD changes should NOT have pre-populated normalized values."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [{"ref": "r1", "expression": "true"}]
         plan = diff_phase(phase, desired, [])
         change = plan.changes[0]
@@ -1689,7 +1689,7 @@ class TestDiffRulesHelper:
     """Tests for the extracted _diff_rules() helper."""
 
     def test_basic_add_remove_modify(self):
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "new_expr", "action": "redirect", "enabled": True},
             {"ref": "r3", "expression": "added", "action": "redirect", "enabled": True},
@@ -1712,7 +1712,7 @@ class TestDiffRulesHelper:
         assert refs_by_type[ChangeType.MODIFY] == "r1"
 
     def test_allow_unmanaged_skips_remove(self):
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
         ]
@@ -1724,7 +1724,7 @@ class TestDiffRulesHelper:
         assert not any(c.change_type == ChangeType.REMOVE for c in changes)
 
     def test_reorder_detection(self):
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
             {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
@@ -1738,7 +1738,7 @@ class TestDiffRulesHelper:
 
     def test_allow_unmanaged_reorder_detected_for_managed_subset(self):
         """Reorder among managed refs is detected even with allow_unmanaged."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
             {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
@@ -1753,7 +1753,7 @@ class TestDiffRulesHelper:
 
     def test_allow_unmanaged_no_false_reorder(self):
         """No reorder when managed refs are in the same order but unmanaged refs differ."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
             {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
@@ -1801,7 +1801,7 @@ class TestValidateCustomRuleset:
         entry = {
             "id": "rs-1",
             "name": "My Ruleset",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [
                 {"ref": "r1", "expression": "true", "action": "block"},
             ],
@@ -1845,7 +1845,7 @@ class TestValidateCustomRuleset:
 
     def test_friendly_name_rejected_as_phase(self):
         """Phase field must be a CF phase ID, not the friendly name."""
-        entry = self._valid_entry(phase="waf_custom_rules")
+        entry = self._valid_entry(phase="fakeprov.waf_custom_rules")
         with pytest.raises(RuleValidationError, match="invalid 'phase'"):
             validate_custom_ruleset(entry, 0)
 
@@ -1884,7 +1884,7 @@ class TestValidateCustomRuleset:
 # Expression normalization integration tests
 # ---------------------------------------------------------------------------
 
-RATE_LIMIT_PHASE = get_phase("rate_limiting_rules")
+RATE_LIMIT_PHASE = get_phase("fakeprov.rate_limiting_rules")
 
 
 class TestExpressionNormalizationIntegration:
@@ -1979,7 +1979,7 @@ class TestExpressionNormalizationIntegration:
             }
         ]
         plan = diff_custom_ruleset(
-            "rs-1", "test-ruleset", "http_request_firewall_custom", desired, current
+            "rs-1", "test-ruleset", "fake_http_request_firewall_custom", desired, current
         )
         modify_changes = [c for c in plan.changes if c.change_type == ChangeType.MODIFY]
         assert len(modify_changes) == 0
@@ -2111,7 +2111,7 @@ class TestIgnoredFiltering:
 
     def test_diff_custom_ruleset_ignores_rule(self):
         rules = [self._rule("a"), self._rule("b", ignored=True)]
-        plan = diff_custom_ruleset("rs-1", "test", "http_request_firewall_custom", rules, [])
+        plan = diff_custom_ruleset("rs-1", "test", "fake_http_request_firewall_custom", rules, [])
         refs = [c.ref for c in plan.changes]
         assert refs == ["a"]
         prepared_refs = [r["ref"] for r in plan.prepared_rules]
@@ -2124,7 +2124,9 @@ class TestIgnoredFiltering:
             {"ref": "a", "expression": "true", "action": "block", "enabled": True},
             {"ref": "b", "expression": "true", "action": "block", "enabled": True},
         ]
-        plan = diff_custom_ruleset("rs-1", "test", "http_request_firewall_custom", desired, current)
+        plan = diff_custom_ruleset(
+            "rs-1", "test", "fake_http_request_firewall_custom", desired, current
+        )
         assert not plan.has_changes
 
 
@@ -2199,38 +2201,38 @@ class TestRuleMatchesTarget:
 class TestFilterByTarget:
     def test_filters_rules_by_target(self):
         desired = {
-            "waf_custom_rules": [
+            "fakeprov.waf_custom_rules": [
                 {"ref": "both", "expression": "true"},
                 {"ref": "cf-only", "expression": "true", "octorules": {"included": ["cloudflare"]}},
                 {"ref": "aws-only", "expression": "true", "octorules": {"included": ["aws"]}},
             ],
         }
         result = filter_by_target(desired, "cloudflare")
-        refs = [r["ref"] for r in result["waf_custom_rules"]]
+        refs = [r["ref"] for r in result["fakeprov.waf_custom_rules"]]
         assert refs == ["both", "cf-only"]
 
     def test_non_list_values_pass_through(self):
-        desired = {"some_setting": "value", "waf_custom_rules": []}
+        desired = {"some_setting": "value", "fakeprov.waf_custom_rules": []}
         result = filter_by_target(desired, "cloudflare")
         assert result["some_setting"] == "value"
 
     def test_excluded_filter(self):
         desired = {
-            "waf_custom_rules": [
+            "fakeprov.waf_custom_rules": [
                 {"ref": "r1", "expression": "true", "octorules": {"excluded": ["staging"]}},
             ],
         }
-        assert len(filter_by_target(desired, "prod")["waf_custom_rules"]) == 1
-        assert len(filter_by_target(desired, "staging")["waf_custom_rules"]) == 0
+        assert len(filter_by_target(desired, "prod")["fakeprov.waf_custom_rules"]) == 1
+        assert len(filter_by_target(desired, "staging")["fakeprov.waf_custom_rules"]) == 0
 
     def test_empty_phase_after_filtering(self):
         desired = {
-            "waf_custom_rules": [
+            "fakeprov.waf_custom_rules": [
                 {"ref": "r1", "expression": "true", "octorules": {"included": ["aws"]}},
             ],
         }
         result = filter_by_target(desired, "cloudflare")
-        assert result["waf_custom_rules"] == []
+        assert result["fakeprov.waf_custom_rules"] == []
 
 
 class TestTargetsExcludedMutualExclusion:
@@ -2281,7 +2283,7 @@ class TestTargetsExcludedMutualExclusion:
         entry = {
             "id": "rs-1",
             "name": "test",
-            "phase": "http_request_firewall_custom",
+            "phase": "fake_http_request_firewall_custom",
             "rules": [
                 {
                     "ref": "bad",
@@ -2303,9 +2305,9 @@ class TestChecksumDeterminism:
 
     def test_checksum_deterministic_across_calls(self):
         """Same plan always produces same checksum."""
-        phase = get_phase("redirect_rules")
-        waf = get_phase("waf_custom_rules")
-        cache = get_phase("cache_rules")
+        phase = get_phase("fakeprov.redirect_rules")
+        waf = get_phase("fakeprov.waf_custom_rules")
+        cache = get_phase("fakeprov.cache_rules")
 
         # Build a complex plan with many change types, custom rulesets, lists
         pp_redirect = PhasePlan(
@@ -2344,11 +2346,13 @@ class TestChecksumDeterminism:
 
         from octorules.planner import CustomRulesetPlan, ListPlan, _make_synthetic_phase
 
-        cr_phase = _make_synthetic_phase("custom_ruleset", "MyRS", "http_request_firewall_custom")
+        cr_phase = _make_synthetic_phase(
+            "custom_ruleset", "MyRS", "fake_http_request_firewall_custom"
+        )
         crp = CustomRulesetPlan(
             ruleset_id="rs1",
             ruleset_name="MyRS",
-            phase="http_request_firewall_custom",
+            phase="fake_http_request_firewall_custom",
             changes=[RuleChange(ChangeType.ADD, "cr1", cr_phase, desired={"expression": "true"})],
         )
         lp = ListPlan(
@@ -2372,7 +2376,7 @@ class TestChecksumDeterminism:
 
     def test_checksum_deterministic_with_unicode(self):
         """Checksum handles Unicode refs and expressions."""
-        phase = get_phase("waf_custom_rules")
+        phase = get_phase("fakeprov.waf_custom_rules")
         changes = [
             RuleChange(
                 ChangeType.ADD,
@@ -2410,7 +2414,7 @@ class TestDiffReflessCurrentRules:
 
     def test_diff_handles_refless_current_rules(self):
         """Rules without ref in current are handled gracefully."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "new_expr", "action": "redirect", "enabled": True},
         ]
@@ -2431,7 +2435,7 @@ class TestDiffReflessCurrentRules:
 
     def test_reorder_detection_with_refless_current(self):
         """Reorder detection works when current has refless rules."""
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         desired = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
             {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
@@ -2456,7 +2460,7 @@ class TestLargeRulesetReorderPerformance:
         """Reorder detection with 500 rules completes quickly."""
         import time
 
-        phase = get_phase("redirect_rules")
+        phase = get_phase("fakeprov.redirect_rules")
         # Generate 500 rules with refs "r000" to "r499"
         desired = [
             {"ref": f"r{i:03d}", "expression": f"expr_{i}", "action": "redirect", "enabled": True}

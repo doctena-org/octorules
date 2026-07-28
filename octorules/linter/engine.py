@@ -352,15 +352,15 @@ def _plugin_view(rules_data: dict[str, Any], plugin_name: str) -> dict[str, Any]
     scoped = [
         k
         for k in rules_data
-        if ":" in k
-        and k.partition(":")[0] in PROVIDER_NAMESPACES
-        and k.partition(":")[2] in NAMESPACE_CORE_SECTIONS
+        if "." in k
+        and k.partition(".")[0] in PROVIDER_NAMESPACES
+        and k.partition(".")[2] in NAMESPACE_CORE_SECTIONS
     ]
     if not scoped:
         return rules_data
     view = {k: v for k, v in rules_data.items() if k not in scoped}
     for key in scoped:
-        ns, _, section = key.partition(":")
+        ns, _, section = key.partition(".")
         if ns == plugin_name:
             view[section] = rules_data[key]
     return view

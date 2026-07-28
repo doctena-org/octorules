@@ -37,7 +37,6 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
         KNOWN_NON_PHASE_KEYS,
         PHASE_BY_NAME,
         PROVIDER_NAMESPACES,
-        display_phase_name,
         get_phase,
         iter_scoped_sections,
         suggest_namespace_member,
@@ -174,10 +173,10 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
     for key in sorted(desired):
         if key in PHASE_BY_NAME or key in KNOWN_NON_PHASE_KEYS or key in claimed:
             continue
-        ns, sep, member = key.partition(":")
+        ns, sep, member = key.partition(".")
         if sep and ns in PROVIDER_NAMESPACES:
             message = (
-                f"Unknown section {display_phase_name(key)!r} — {member!r} is not a"
+                f"Unknown section {key!r} — {member!r} is not a"
                 f" section of the {ns!r} namespace; it will not be managed"
             )
             # Match against the namespace's own member names, not the flat
@@ -190,9 +189,9 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
         else:
             message = f"Unknown top-level section {key!r} — it will not be managed"
             hint = suggest_phase(key)
-            suggestion = f"Rename to {display_phase_name(hint)!r}" if hint else ""
+            suggestion = f"Rename to {hint!r}" if hint else ""
             if hint:
-                message += f". Did you mean {display_phase_name(hint)!r}?"
+                message += f". Did you mean {hint!r}?"
         ctx.add(
             LintResult(
                 rule_id="CORE011",

@@ -15,7 +15,7 @@ class TestCore003AllDisabled:
     def test_all_disabled_warns(self):
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "enabled": False, "expression": "true"},
                 {"ref": "r2", "enabled": False, "expression": "true"},
             ]
@@ -27,7 +27,7 @@ class TestCore003AllDisabled:
     def test_some_enabled_ok(self):
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "enabled": False, "expression": "true"},
                 {"ref": "r2", "enabled": True, "expression": "true"},
             ]
@@ -39,7 +39,7 @@ class TestCore003AllDisabled:
         """Rules without 'enabled' key are considered enabled."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "expression": "true"},
             ]
         }
@@ -50,7 +50,7 @@ class TestCore003AllDisabled:
         """A single disabled rule is CF018/WA600's job, not CORE003."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "enabled": False, "expression": "true"},
             ]
         }
@@ -60,7 +60,7 @@ class TestCore003AllDisabled:
     def test_empty_phase_not_flagged(self):
         """Phase with no rules doesn't trigger CORE003."""
         ctx = LintContext(zone_name="test.com")
-        desired = {"redirect_rules": []}
+        desired = {"fakeprov.redirect_rules": []}
         _core_lint_zone(desired, ctx)
         assert_no_lint(ctx, "CORE003")
 
@@ -72,21 +72,21 @@ class TestCore004RefCollision:
     def test_same_ref_different_phases_warns(self):
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [{"ref": "block-bots", "expression": "true"}],
-            "cache_rules": [{"ref": "block-bots", "expression": "true"}],
+            "fakeprov.redirect_rules": [{"ref": "block-bots", "expression": "true"}],
+            "fakeprov.cache_rules": [{"ref": "block-bots", "expression": "true"}],
         }
         _core_lint_zone(desired, ctx)
         assert_lint(ctx, "CORE004")
         assert "block-bots" in ctx.results[0].message
-        assert "redirect_rules" in ctx.results[0].message
-        assert "cache_rules" in ctx.results[0].message
+        assert "fakeprov.redirect_rules" in ctx.results[0].message
+        assert "fakeprov.cache_rules" in ctx.results[0].message
 
     def test_same_ref_same_phase_not_flagged(self):
         """Duplicate refs within a single phase are NOT a CORE004 issue
         (that's a provider-specific check like CF018 or WA022)."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "expression": "true"},
                 {"ref": "r1", "expression": "false"},
             ],
@@ -98,22 +98,22 @@ class TestCore004RefCollision:
         """CORE004 fires when ref appears in 3+ different phases."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [{"ref": "block-bots", "expression": "true"}],
-            "cache_rules": [{"ref": "block-bots", "expression": "true"}],
-            "waf_custom_rules": [{"ref": "block-bots", "expression": "true"}],
+            "fakeprov.redirect_rules": [{"ref": "block-bots", "expression": "true"}],
+            "fakeprov.cache_rules": [{"ref": "block-bots", "expression": "true"}],
+            "fakeprov.waf_custom_rules": [{"ref": "block-bots", "expression": "true"}],
         }
         _core_lint_zone(desired, ctx)
         assert_lint(ctx, "CORE004")
         msg = ctx.results[0].message
-        assert "cache_rules" in msg
-        assert "redirect_rules" in msg
-        assert "waf_custom_rules" in msg
+        assert "fakeprov.cache_rules" in msg
+        assert "fakeprov.redirect_rules" in msg
+        assert "fakeprov.waf_custom_rules" in msg
 
     def test_different_refs_ok(self):
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [{"ref": "r1", "expression": "true"}],
-            "cache_rules": [{"ref": "r2", "expression": "true"}],
+            "fakeprov.redirect_rules": [{"ref": "r1", "expression": "true"}],
+            "fakeprov.cache_rules": [{"ref": "r2", "expression": "true"}],
         }
         _core_lint_zone(desired, ctx)
         assert_no_lint(ctx, "CORE004")
@@ -127,7 +127,7 @@ class TestCore003EdgeCases:
         """Non-dict entries in a phase list are ignored, not counted."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 None,
                 "not-a-dict",
                 {"ref": "r1", "enabled": False},
@@ -142,23 +142,23 @@ class TestCore003EdgeCases:
         """CORE003 fires only for the phase where ALL rules are disabled."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "r1", "enabled": False},
                 {"ref": "r2", "enabled": False},
             ],
-            "cache_rules": [
+            "fakeprov.cache_rules": [
                 {"ref": "r3", "enabled": True},
             ],
         }
         _core_lint_zone(desired, ctx)
         core003 = [r for r in ctx.results if r.rule_id == "CORE003"]
         assert len(core003) == 1
-        assert "redirect_rules" in core003[0].phase
+        assert "fakeprov.redirect_rules" in core003[0].phase
 
     def test_non_list_phase_value_skipped(self):
         """Phase with non-list value (e.g., string) is silently skipped."""
         ctx = LintContext(zone_name="test.com")
-        desired = {"redirect_rules": "not-a-list"}
+        desired = {"fakeprov.redirect_rules": "not-a-list"}
         _core_lint_zone(desired, ctx)
         assert_no_lint(ctx, "CORE003")
 
@@ -166,13 +166,13 @@ class TestCore003EdgeCases:
 class TestCore006EmptyFile:
     def test_no_rules_flags_info(self):
         ctx = LintContext(zone_name="test.com")
-        desired = {"redirect_rules": [], "cache_rules": []}
+        desired = {"fakeprov.redirect_rules": [], "fakeprov.cache_rules": []}
         _core_lint_zone(desired, ctx)
         assert_lint(ctx, "CORE006", severity=Severity.INFO)
 
     def test_has_rules_ok(self):
         ctx = LintContext(zone_name="test.com")
-        desired = {"redirect_rules": [{"ref": "r1", "expression": "true"}]}
+        desired = {"fakeprov.redirect_rules": [{"ref": "r1", "expression": "true"}]}
         _core_lint_zone(desired, ctx)
         assert_no_lint(ctx, "CORE006")
 
@@ -233,17 +233,17 @@ class TestCore002OrphanedFiles:
 class TestCore007PrepareFailures:
     def test_missing_ref_errors(self):
         ctx = LintContext(zone_name="test.com")
-        desired = {"redirect_rules": [{"expression": "true", "action": "redirect"}]}
+        desired = {"fakeprov.redirect_rules": [{"expression": "true", "action": "redirect"}]}
         _core_lint_zone(desired, ctx)
         assert_lint(ctx, "CORE007", severity=Severity.ERROR)
         core007 = next(r for r in ctx.results if r.rule_id == "CORE007")
         assert "ref" in core007.message
-        assert core007.phase == "redirect_rules"
+        assert core007.phase == "fakeprov.redirect_rules"
 
     def test_duplicate_ref_errors(self):
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"ref": "dup", "expression": "true", "action": "redirect"},
                 {"ref": "dup", "expression": "false", "action": "redirect"},
             ]
@@ -254,7 +254,9 @@ class TestCore007PrepareFailures:
 
     def test_valid_rules_pass(self):
         ctx = LintContext(zone_name="test.com")
-        desired = {"redirect_rules": [{"ref": "r1", "expression": "true", "action": "redirect"}]}
+        desired = {
+            "fakeprov.redirect_rules": [{"ref": "r1", "expression": "true", "action": "redirect"}]
+        }
         _core_lint_zone(desired, ctx)
         assert_no_lint(ctx, "CORE007")
 
@@ -262,7 +264,7 @@ class TestCore007PrepareFailures:
         """Ignored rules go through ref validation before being filtered."""
         ctx = LintContext(zone_name="test.com")
         desired = {
-            "redirect_rules": [
+            "fakeprov.redirect_rules": [
                 {"expression": "true", "action": "redirect", "octorules": {"ignored": True}}
             ]
         }
@@ -277,7 +279,7 @@ class TestCore007PrepareFailures:
     def test_prepare_does_not_mutate_input(self):
         """Prepare hooks must not leak into the shared rules cache."""
         rules = [{"ref": "r1", "expression": "true\n  and true", "action": "redirect"}]
-        desired = {"redirect_rules": rules}
+        desired = {"fakeprov.redirect_rules": rules}
         before = repr(desired)
         _core_lint_zone(desired, LintContext(zone_name="test.com"))
         assert repr(desired) == before
@@ -327,7 +329,7 @@ class TestCore009CustomRulesetsShape:
             "custom_rulesets": [
                 {
                     "name": "Block attackers",
-                    "phase": "http_request_firewall_custom",
+                    "phase": "fake_http_request_firewall_custom",
                     "capacity": 10,
                     "rules": [{"ref": "r1", "expression": "true"}],  # no action
                 }
@@ -342,7 +344,7 @@ class TestCore009CustomRulesetsShape:
             "custom_rulesets": [
                 {
                     "name": "Block attackers",
-                    "phase": "http_request_firewall_custom",
+                    "phase": "fake_http_request_firewall_custom",
                     "capacity": 10,
                     "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
                 }
@@ -378,14 +380,14 @@ class TestCore010ExtensionValidation:
 
     def test_clean_extension_section_passes(self):
         ctx = LintContext(zone_name="test.com")
-        _core_lint_zone({"redirect_rules": []}, ctx)
+        _core_lint_zone({"fakeprov.redirect_rules": []}, ctx)
         assert_no_lint(ctx, "CORE010")
 
 
 class TestCoreRuleSuppressions:
     def test_core007_file_wide_suppression(self):
         ctx = LintContext(zone_name="test.com", suppressions={"*": {"CORE007"}})
-        desired = {"redirect_rules": [{"expression": "true", "action": "redirect"}]}
+        desired = {"fakeprov.redirect_rules": [{"expression": "true", "action": "redirect"}]}
         _core_lint_zone(desired, ctx)
         assert_no_lint(ctx, "CORE007")
         assert ctx.suppressed_count == 1
@@ -444,7 +446,7 @@ class TestCoreRuleRobustness:
         register_validate_extension(_bad_hook)
         try:
             ctx = LintContext(zone_name="test.com")
-            _core_lint_zone({"redirect_rules": []}, ctx)
+            _core_lint_zone({"fakeprov.redirect_rules": []}, ctx)
             assert_lint(ctx, "CORE010")
             assert "RuntimeError" in next(r for r in ctx.results if r.rule_id == "CORE010").message
         finally:
@@ -459,7 +461,7 @@ def fake_namespace():
     """Register a throwaway provider namespace and yield its name."""
     from octorules.phases import register_namespace, unregister_namespace
 
-    register_namespace("core11prov", {"waf_custom_rules": "core11prov_waf_custom_rules"})
+    register_namespace("core11prov", ["waf_custom_rules"])
     yield "core11prov"
     unregister_namespace("core11prov")
 
@@ -484,19 +486,19 @@ class TestCore011UnknownSection:
         ctx = LintContext(zone_name="example.com")
         _core_lint_zone({"redirect_rulez": []}, ctx)
         found = assert_lint(ctx, "CORE011", count=1, severity=Severity.ERROR)
-        assert "redirect_rules" in found[0].suggestion
+        assert "fakeprov.redirect_rules" in found[0].suggestion
 
     def test_known_phase_and_non_phase_keys_are_clean(self):
         ctx = LintContext(zone_name="example.com")
         _core_lint_zone(
-            {"redirect_rules": [{"ref": "r1"}], "lists": [], "custom_rulesets": []}, ctx
+            {"fakeprov.redirect_rules": [{"ref": "r1"}], "lists": [], "custom_rulesets": []}, ctx
         )
         assert_no_lint(ctx, "CORE011")
 
     def test_registered_namespace_and_scoped_core_sections_are_clean(self, fake_namespace):
         ctx = LintContext(zone_name="example.com")
         _core_lint_zone(
-            {fake_namespace: {}, f"{fake_namespace}:lists": [], "redirect_rules": []}, ctx
+            {fake_namespace: {}, f"{fake_namespace}.lists": [], "fakeprov.redirect_rules": []}, ctx
         )
         assert_no_lint(ctx, "CORE011")
 
@@ -504,7 +506,7 @@ class TestCore011UnknownSection:
         """The author wrote a nested member, so the diagnostic must echo
         the nesting rather than the internal ``ns:member`` scoped key."""
         ctx = LintContext(zone_name="example.com")
-        _core_lint_zone({f"{fake_namespace}:waf_custom_rulez": []}, ctx)
+        _core_lint_zone({f"{fake_namespace}.waf_custom_rulez": []}, ctx)
         found = assert_lint(ctx, "CORE011", count=1, severity=Severity.ERROR)
         assert f"'{fake_namespace}.waf_custom_rulez'" in found[0].message
         assert f"{fake_namespace}:" not in found[0].message
@@ -515,14 +517,14 @@ class TestCore011UnknownSection:
         Matching a nested member against the flat registry would miss for
         every provider whose nested spelling drops a flat prefix."""
         ctx = LintContext(zone_name="example.com")
-        _core_lint_zone({f"{fake_namespace}:waf_custom_rulez": []}, ctx)
+        _core_lint_zone({f"{fake_namespace}.waf_custom_rulez": []}, ctx)
         found = assert_lint(ctx, "CORE011", count=1)
         assert f"Did you mean '{fake_namespace}.waf_custom_rules'?" in found[0].message
         assert found[0].suggestion == f"Rename to '{fake_namespace}.waf_custom_rules'"
 
     def test_mistyped_scoped_core_section_suggests_it(self, fake_namespace):
         ctx = LintContext(zone_name="example.com")
-        _core_lint_zone({f"{fake_namespace}:listz": []}, ctx)
+        _core_lint_zone({f"{fake_namespace}.listz": []}, ctx)
         found = assert_lint(ctx, "CORE011", count=1)
         assert f"Did you mean '{fake_namespace}.lists'?" in found[0].message
 

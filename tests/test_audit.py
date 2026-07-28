@@ -38,13 +38,26 @@ from octorules.extensions import (
     unregister_audit_extension,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _nested(rules: dict) -> dict:
+    """Fixtures are written in the canonical nested form.
+
+    Tests build rule dicts with internal keys; ``_nest_output`` is the same
+    transform ``dump`` uses, so the fixture on disk is exactly what a real
+    zone file looks like.
+    """
+    from octorules.dumper import _nest_output
+
+    return _nest_output(dict(rules))
+
+
 def _make_rule_ip(
     zone: str = "example.com",
-    phase: str = "waf_custom_rules",
+    phase: str = "fakeprov.waf_custom_rules",
     ref: str = "rule1",
     action: str = "block",
     ips: list[str] | None = None,
@@ -402,7 +415,7 @@ class TestApplyAuditAcceptances:
         directive anchors on the bare spelling — both must match."""
         from octorules.phases import register_namespace, unregister_namespace
 
-        register_namespace("acceptprov", {"shield": "acceptprov_shield"})
+        register_namespace("acceptprov", ["shield"])
         try:
             f = self._f(
                 "cdn-ranges",
@@ -426,7 +439,7 @@ class TestApplyAuditAcceptances:
     def test_non_suppressible_survives_bare_anchor_on_qualified_ref(self):
         from octorules.phases import register_namespace, unregister_namespace
 
-        register_namespace("acceptprov", {"shield": "acceptprov_shield"})
+        register_namespace("acceptprov", ["shield"])
         try:
             f = self._f(
                 "cdn-ranges",
@@ -851,7 +864,7 @@ class TestLoadBakedInRanges:
         """Corrupt JSON files are skipped with a warning."""
         data_dir = tmp_path / "cdn_ranges"
         data_dir.mkdir()
-        (data_dir / "cloudflare.json").write_text("not json{{{")
+        (data_dir / "fakeprov.json").write_text("not json{{{")
         with patch("octorules.audit._CDN_DATA_DIR", data_dir):
             result = _load_baked_in_ranges()
         assert "Cloudflare" not in result.ranges
@@ -1432,13 +1445,13 @@ def _write_config_and_rules(
 
     for name, rules in zone_rules.items():
         with open(rules_dir / f"{name}.yaml", "w") as f:
-            yaml.dump(rules, f)
+            yaml.dump(_nested(rules), f)
 
     # Write extra files not in zones (e.g. account rules)
     if extra_files:
         for name, rules in extra_files.items():
             with open(rules_dir / f"{name}.yaml", "w") as f:
-                yaml.dump(rules, f)
+                yaml.dump(_nested(rules), f)
 
     return config_path
 
@@ -1508,7 +1521,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
@@ -1519,7 +1532,7 @@ class TestCmdAudit:
             },
             extra_files={
                 "account-rules": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r2",
                             "action": "block",
@@ -1546,7 +1559,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
@@ -1557,7 +1570,7 @@ class TestCmdAudit:
             },
             extra_files={
                 "account-rules": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r2",
                             "action": "skip",
@@ -1583,7 +1596,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
@@ -1592,7 +1605,7 @@ class TestCmdAudit:
                     ]
                 },
                 "zone-b": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r2",
                             "action": "allow",
@@ -1638,7 +1651,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
@@ -1663,14 +1676,14 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
                             "expression": "ip.src in {10.0.0.0/8}",
                         }
                     ],
-                    "rate_limiting_rules": [
+                    "fakeprov.rate_limiting_rules": [
                         {
                             "ref": "r2",
                             "action": "block",
@@ -1687,7 +1700,7 @@ class TestCmdAudit:
             exit_code = cmd_audit(
                 config,
                 zone_filter=None,
-                phase_filter=["rate_limiting_rules"],
+                phase_filter=["fakeprov.rate_limiting_rules"],
                 checks=["ip-overlap"],
             )
         assert exit_code == 0
@@ -1710,7 +1723,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
@@ -1743,7 +1756,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1764,7 +1777,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1788,7 +1801,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1817,7 +1830,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1845,7 +1858,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1866,7 +1879,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1887,7 +1900,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {
                             "ref": "r1",
                             "action": "block",
@@ -1911,7 +1924,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1933,7 +1946,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -1960,12 +1973,12 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
                 },
                 "zone-b": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r2", "action": "allow", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
                 },
@@ -1992,7 +2005,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2018,7 +2031,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2050,7 +2063,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2076,7 +2089,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2108,11 +2121,13 @@ class TestCmdAudit:
         rules_file = tmp_path / "rules" / "zone-a.yaml"
         # Hand-written so refs are first-key (matching the `- ref:` anchor),
         # as real rules files are.
-        r1 = "- ref: r1\n  action: block\n  expression: 'ip.src in {10.0.0.0/8}'\n"
-        r2 = "- ref: r2\n  action: block\n  expression: 'ip.src in {10.0.0.0/24}'\n"
+        # Indented one level: the rules live inside the `fakeprov:` block.
+        r1 = "  - ref: r1\n    action: block\n    expression: 'ip.src in {10.0.0.0/8}'\n"
+        r2 = "  - ref: r2\n    action: block\n    expression: 'ip.src in {10.0.0.0/24}'\n"
+        head = "fakeprov:\n  waf_custom_rules:\n"
 
         # Directive above r1: the finding (ref r2) is NOT suppressed.
-        rules_file.write_text(f"waf_custom_rules:\n# octorules:accept=ip-overlap\n{r1}{r2}")
+        rules_file.write_text(f"{head}# octorules:accept=ip-overlap\n{r1}{r2}")
         config = Config.from_file(str(config_path))
         with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
             cmd_audit(config, zone_filter=None, checks=["ip-overlap"])
@@ -2120,7 +2135,7 @@ class TestCmdAudit:
         assert "Overlapping IP ranges" in captured.out
 
         # Directive above r2: the finding is suppressed.
-        rules_file.write_text(f"waf_custom_rules:\n{r1}# octorules:accept=ip-overlap\n{r2}")
+        rules_file.write_text(f"{head}{r1}# octorules:accept=ip-overlap\n{r2}")
         config = Config.from_file(str(config_path))
         with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
             exit_code = cmd_audit(config, zone_filter=None, checks=["ip-overlap"], exit_code=True)
@@ -2140,7 +2155,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2168,7 +2183,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2200,7 +2215,7 @@ class TestCmdAudit:
             tmp_path,
             zone_rules={
                 "zone-a": {
-                    "waf_custom_rules": [
+                    "fakeprov.waf_custom_rules": [
                         {"ref": "r1", "action": "block", "expression": "ip.src in {10.0.0.0/8}"},
                         {"ref": "r2", "action": "block", "expression": "ip.src in {10.0.0.0/24}"},
                     ]
@@ -2282,7 +2297,7 @@ class TestAuditPerformance:
         return [
             _make_rule_ip(
                 ref=f"rule-{i}",
-                phase="waf_custom_rules",
+                phase="fakeprov.waf_custom_rules",
                 action="block",
                 ips=[f"198.51.{i // 256}.{i % 256}/32"],
             )
@@ -2305,7 +2320,7 @@ class TestAuditPerformance:
 
         rules = self._make_rules(5000)
         t0 = time.monotonic()
-        check_ip_shadow(rules, phase_order=["waf_custom_rules"])
+        check_ip_shadow(rules, phase_order=["fakeprov.waf_custom_rules"])
         elapsed = time.monotonic() - t0
         assert elapsed < 5.0, f"ip-shadow on 5000 rules took {elapsed:.1f}s (limit 5s)"
 
@@ -2389,7 +2404,7 @@ class TestAuditPerformance:
             _make_rule_ip(
                 zone=f"zone-{i % 10}.example.com",
                 ref=f"rule-{i}",
-                phase="waf_custom_rules",
+                phase="fakeprov.waf_custom_rules",
                 action="block",
                 ips=[f"198.51.{i // 256}.{i % 256}/32"],
             )

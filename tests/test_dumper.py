@@ -2,7 +2,7 @@
 
 import yaml
 
-from octorules.config import _yaml_load
+from octorules.config import _yaml_load, normalize_zone_format
 from octorules.dumper import (
     _add_blank_lines,
     _clean_list_item,
@@ -75,7 +75,7 @@ class TestCleanRule:
             '        not starts_with(http.request.uri.path, "/api"))'
         )
         rules = {
-            "http_request_transform": [
+            "fake_http_request_transform": [
                 {
                     "ref": "r1",
                     "expression": expr,
@@ -91,8 +91,8 @@ class TestCleanRule:
         assert "\\n" not in text
         assert '"dev.example.com"' in text
         # Trailing whitespace stripped, round-trip preserves meaning
-        data = yaml.safe_load(text)
-        dumped_expr = data["url_rewrite_rules"][0]["expression"]
+        data = normalize_zone_format(yaml.safe_load(text))
+        dumped_expr = data["fakeprov.url_rewrite_rules"][0]["expression"]
         assert "\n" in dumped_expr
         assert "dev.example.com" in dumped_expr
         # No trailing spaces on any line
@@ -127,7 +127,7 @@ class TestCleanRule:
 class TestDumpZoneRules:
     def test_dump_creates_file(self, tmp_path):
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "id": "abc",
                     "ref": "r1",
@@ -144,14 +144,14 @@ class TestDumpZoneRules:
         assert result.exists()
         assert result.name == "example.com.yaml"
 
-        data = yaml.safe_load(result.read_text())
-        assert "redirect_rules" in data
-        assert len(data["redirect_rules"]) == 1
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.redirect_rules" in data
+        assert len(data["fakeprov.redirect_rules"]) == 1
         # Default action should be stripped
-        assert "action" not in data["redirect_rules"][0]
+        assert "action" not in data["fakeprov.redirect_rules"][0]
         # API fields should be stripped, but ref preserved
-        assert "id" not in data["redirect_rules"][0]
-        assert data["redirect_rules"][0]["ref"] == "r1"
+        assert "id" not in data["fakeprov.redirect_rules"][0]
+        assert data["fakeprov.redirect_rules"][0]["ref"] == "r1"
         assert result.read_text().startswith("---\n")
 
     def test_dump_empty_rules(self, tmp_path):
@@ -170,7 +170,7 @@ class TestDumpZoneRules:
     def test_dump_creates_output_dir(self, tmp_path):
         output_dir = tmp_path / "sub" / "dir"
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
@@ -180,10 +180,10 @@ class TestDumpZoneRules:
 
     def test_dump_multiple_phases(self, tmp_path):
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
-            "http_request_cache_settings": [
+            "fake_http_request_cache_settings": [
                 {
                     "ref": "c1",
                     "expression": "true",
@@ -194,41 +194,41 @@ class TestDumpZoneRules:
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         assert result is not None
-        data = yaml.safe_load(result.read_text())
-        assert "redirect_rules" in data
-        assert "cache_rules" in data
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.redirect_rules" in data
+        assert "fakeprov.cache_rules" in data
         # Default actions should be stripped for both
-        assert "action" not in data["redirect_rules"][0]
-        assert "action" not in data["cache_rules"][0]
+        assert "action" not in data["fakeprov.redirect_rules"][0]
+        assert "action" not in data["fakeprov.cache_rules"][0]
 
     def test_dump_waf_keeps_action(self, tmp_path):
         """WAF has no default action, so action should be preserved."""
         rules = {
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {"ref": "w1", "expression": "true", "action": "block", "enabled": True}
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         assert result is not None
-        data = yaml.safe_load(result.read_text())
-        assert "waf_custom_rules" in data
-        assert data["waf_custom_rules"][0]["action"] == "block"
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.waf_custom_rules" in data
+        assert data["fakeprov.waf_custom_rules"][0]["action"] == "block"
 
     def test_dump_multiple_rules_per_phase(self, tmp_path):
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "a", "action": "redirect", "enabled": True},
                 {"ref": "r2", "expression": "b", "action": "redirect", "enabled": False},
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert len(data["redirect_rules"]) == 2
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert len(data["fakeprov.redirect_rules"]) == 2
 
     def test_dump_origin_rule(self, tmp_path):
         """Dump an Origin Rule with host_header routing."""
         rules = {
-            "http_request_origin": [
+            "fake_http_request_origin": [
                 {
                     "id": "a1b2c3d4e5f6",
                     "version": "3",
@@ -250,10 +250,10 @@ class TestDumpZoneRules:
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         assert result is not None
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
 
-        assert "origin_rules" in data
-        rule = data["origin_rules"][0]
+        assert "fakeprov.origin_rules" in data
+        rule = data["fakeprov.origin_rules"][0]
         # API fields stripped
         assert "id" not in rule
         assert "version" not in rule
@@ -276,7 +276,7 @@ class TestCFApiResilience:
     def test_new_unknown_field_preserved_in_dump(self, tmp_path):
         """New fields from CF not in DUMP_STRIP_FIELDS are preserved in dump output."""
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "ref": "r1",
                     "expression": "true",
@@ -288,8 +288,8 @@ class TestCFApiResilience:
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        rule = data["redirect_rules"][0]
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        rule = data["fakeprov.redirect_rules"][0]
         # Unknown fields are preserved (not stripped)
         assert rule["risk_score"] == 0.5
         assert rule["deployment_id"] == "dep-123"
@@ -297,7 +297,7 @@ class TestCFApiResilience:
     def test_dump_strip_fields_complete(self, tmp_path):
         """Server-only fields are stripped; user-controllable fields round-trip."""
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "id": "uuid",
                     "version": "42",
@@ -312,8 +312,8 @@ class TestCFApiResilience:
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        rule = data["redirect_rules"][0]
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        rule = data["fakeprov.redirect_rules"][0]
         # Server-managed metadata: stripped
         assert "id" not in rule
         assert "version" not in rule
@@ -326,7 +326,7 @@ class TestCFApiResilience:
     def test_unknown_provider_id_skipped_in_dump(self, tmp_path):
         """New provider phases not in PHASE_BY_PROVIDER_ID are silently skipped during dump."""
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
             "http_request_new_future_phase": [
@@ -334,8 +334,8 @@ class TestCFApiResilience:
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "redirect_rules" in data
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.redirect_rules" in data
         assert "new_future_phase" not in data  # Not in PHASE_BY_PROVIDER_ID, so skipped
         assert len(data) == 1
 
@@ -352,7 +352,7 @@ class TestCFApiResilience:
     def test_action_parameters_with_nested_new_fields(self, tmp_path):
         """New nested fields in action_parameters are preserved."""
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "ref": "r1",
                     "expression": "true",
@@ -367,21 +367,21 @@ class TestCFApiResilience:
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        ap = data["redirect_rules"][0]["action_parameters"]
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        ap = data["fakeprov.redirect_rules"][0]["action_parameters"]
         assert ap["new_param"] == {"nested": True}
         assert ap["status_code"] == 301
 
     def test_rule_without_ref_still_dumped(self, tmp_path):
         """CF rules without ref are still included in dump."""
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"expression": "managed-rule", "action": "redirect", "enabled": True},
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        rule = data["redirect_rules"][0]
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        rule = data["fakeprov.redirect_rules"][0]
         assert "ref" not in rule
         assert rule["expression"] == "managed-rule"
 
@@ -422,19 +422,19 @@ class TestDumpNewPhases:
     def test_dump_bulk_redirect_strips_default_action(self, tmp_path):
         """bulk_redirect_rules has default action 'redirect' — should be stripped."""
         rules = {
-            "http_request_redirect": [
+            "fake_http_request_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "bulk_redirect_rules" in data
-        assert "action" not in data["bulk_redirect_rules"][0]
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.bulk_redirect_rules" in data
+        assert "action" not in data["fakeprov.bulk_redirect_rules"][0]
 
     def test_dump_log_custom_fields_strips_default_action(self, tmp_path):
         """log_custom_fields has default action 'log_custom_field' — should be stripped."""
         rules = {
-            "http_log_custom_fields": [
+            "fake_http_log_custom_fields": [
                 {
                     "ref": "lcf1",
                     "expression": "true",
@@ -446,78 +446,88 @@ class TestDumpNewPhases:
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "log_custom_fields" in data
-        assert "action" not in data["log_custom_fields"][0]
-        assert data["log_custom_fields"][0]["action_parameters"] is not None
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.log_custom_fields" in data
+        assert "action" not in data["fakeprov.log_custom_fields"][0]
+        assert data["fakeprov.log_custom_fields"][0]["action_parameters"] is not None
 
     def test_dump_ddos_l7_keeps_action(self, tmp_path):
         """http_ddos_rules has no default action — action should be preserved."""
         rules = {
-            "ddos_l7": [{"ref": "d1", "expression": "true", "action": "managed_challenge"}],
+            "fake_ddos_l7": [{"ref": "d1", "expression": "true", "action": "managed_challenge"}],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "http_ddos_rules" in data
-        assert data["http_ddos_rules"][0]["action"] == "managed_challenge"
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.http_ddos_rules" in data
+        assert data["fakeprov.http_ddos_rules"][0]["action"] == "managed_challenge"
 
     def test_dump_magic_transit_keeps_action(self, tmp_path):
         """network_firewall_rules has no default action — action should be preserved."""
         rules = {
-            "magic_transit": [{"ref": "mf1", "expression": "true", "action": "block"}],
+            "fake_magic_transit": [{"ref": "mf1", "expression": "true", "action": "block"}],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "network_firewall_rules" in data
-        assert data["network_firewall_rules"][0]["action"] == "block"
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.network_firewall_rules" in data
+        assert data["fakeprov.network_firewall_rules"][0]["action"] == "block"
 
     def test_dump_url_normalization_keeps_action(self, tmp_path):
         """url_normalization has no default action — action should be preserved."""
         rules = {
-            "http_request_sanitize": [{"ref": "un1", "expression": "true", "action": "rewrite"}],
+            "fake_http_request_sanitize": [
+                {"ref": "un1", "expression": "true", "action": "rewrite"}
+            ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "url_normalization" in data
-        assert data["url_normalization"][0]["action"] == "rewrite"
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.url_normalization" in data
+        assert data["fakeprov.url_normalization"][0]["action"] == "rewrite"
 
     def test_dump_network_ddos_keeps_action(self, tmp_path):
         rules = {
-            "ddos_l4": [{"ref": "nd1", "expression": "true", "action": "block"}],
+            "fake_ddos_l4": [{"ref": "nd1", "expression": "true", "action": "block"}],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "network_ddos_rules" in data
-        assert data["network_ddos_rules"][0]["action"] == "block"
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.network_ddos_rules" in data
+        assert data["fakeprov.network_ddos_rules"][0]["action"] == "block"
 
     def test_dump_all_new_phases_together(self, tmp_path):
         """All new phases should appear correctly in a combined dump."""
         rules = {
-            "ddos_l7": [{"ref": "d1", "expression": "true", "action": "block"}],
-            "http_request_redirect": [{"ref": "br1", "expression": "true", "action": "redirect"}],
-            "http_log_custom_fields": [
+            "fake_ddos_l7": [{"ref": "d1", "expression": "true", "action": "block"}],
+            "fake_http_request_redirect": [
+                {"ref": "br1", "expression": "true", "action": "redirect"}
+            ],
+            "fake_http_log_custom_fields": [
                 {"ref": "lcf1", "expression": "true", "action": "log_custom_field"}
             ],
-            "ddos_l4": [{"ref": "nd1", "expression": "true", "action": "block"}],
-            "magic_transit": [{"ref": "mf1", "expression": "true", "action": "block"}],
-            "magic_transit_managed": [{"ref": "mm1", "expression": "true", "action": "execute"}],
-            "magic_transit_ratelimit": [{"ref": "mr1", "expression": "true", "action": "block"}],
-            "magic_transit_ids_managed": [
+            "fake_ddos_l4": [{"ref": "nd1", "expression": "true", "action": "block"}],
+            "fake_magic_transit": [{"ref": "mf1", "expression": "true", "action": "block"}],
+            "fake_magic_transit_managed": [
+                {"ref": "mm1", "expression": "true", "action": "execute"}
+            ],
+            "fake_magic_transit_ratelimit": [
+                {"ref": "mr1", "expression": "true", "action": "block"}
+            ],
+            "fake_magic_transit_ids_managed": [
                 {"ref": "mi1", "expression": "true", "action": "execute"}
             ],
-            "http_request_sanitize": [{"ref": "un1", "expression": "true", "action": "rewrite"}],
+            "fake_http_request_sanitize": [
+                {"ref": "un1", "expression": "true", "action": "rewrite"}
+            ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "http_ddos_rules" in data
-        assert "bulk_redirect_rules" in data
-        assert "log_custom_fields" in data
-        assert "network_ddos_rules" in data
-        assert "network_firewall_rules" in data
-        assert "network_firewall_managed" in data
-        assert "network_firewall_ratelimit" in data
-        assert "network_firewall_ids" in data
-        assert "url_normalization" in data
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.http_ddos_rules" in data
+        assert "fakeprov.bulk_redirect_rules" in data
+        assert "fakeprov.log_custom_fields" in data
+        assert "fakeprov.network_ddos_rules" in data
+        assert "fakeprov.network_firewall_rules" in data
+        assert "fakeprov.network_firewall_managed" in data
+        assert "fakeprov.network_firewall_ratelimit" in data
+        assert "fakeprov.network_firewall_ids" in data
+        assert "fakeprov.url_normalization" in data
 
 
 class TestAddBlankLines:
@@ -525,44 +535,44 @@ class TestAddBlankLines:
 
     def test_blank_line_between_sections(self):
         text = "---\nredirect_rules:\n- ref: r1\n  expression: true\ncache_rules:\n- ref: c1\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         assert "\n\ncache_rules:" in result
 
     def test_no_blank_line_after_document_start(self):
         text = "---\nredirect_rules:\n- ref: r1\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         assert result.startswith("---\nredirect_rules:")
 
     def test_blank_line_between_items(self):
         text = "---\nredirect_rules:\n- ref: r1\n  expression: a\n- ref: r2\n  expression: b\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         assert "  expression: a\n\n- ref: r2" in result
 
     def test_no_blank_line_after_section_header(self):
         """First item in a section should NOT get a blank line before it."""
         text = "---\nredirect_rules:\n- ref: r1\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         assert "redirect_rules:\n- ref: r1" in result
 
     def test_nested_list_items_not_separated(self):
         """Indented list items (e.g. rules inside custom_rulesets) should not get blank lines."""
         text = "---\ncustom_rulesets:\n- id: rs1\n  rules:\n  - ref: r1\n  - ref: r2\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         # Indented items should remain adjacent
         assert "  - ref: r1\n  - ref: r2" in result
 
     def test_single_section_single_item(self):
         text = "---\nredirect_rules:\n- ref: r1\n  expression: true\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         # No blank lines added — only one section, one item
         assert result == text
 
     def test_empty_text(self):
-        assert _add_blank_lines("") == ""
+        assert _add_blank_lines("", {}) == ""
 
     def test_preserves_trailing_newline(self):
         text = "---\nredirect_rules:\n- ref: r1\n"
-        result = _add_blank_lines(text)
+        result = _add_blank_lines(text, {})
         assert result.endswith("\n")
 
 
@@ -571,10 +581,10 @@ class TestDumpBlankLineFormatting:
 
     def test_blank_line_between_phases(self, tmp_path):
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
-            "http_request_cache_settings": [
+            "fake_http_request_cache_settings": [
                 {
                     "ref": "c1",
                     "expression": "true",
@@ -586,24 +596,24 @@ class TestDumpBlankLineFormatting:
         result = dump_zone_rules("example.com", rules, tmp_path)
         text = result.read_text()
         # Blank line between the two sections
-        assert "\n\ncache_rules:" in text
+        assert "\n\n  cache_rules:" in text
         # Still valid YAML
-        data = yaml.safe_load(text)
-        assert "redirect_rules" in data
-        assert "cache_rules" in data
+        data = normalize_zone_format(yaml.safe_load(text))
+        assert "fakeprov.redirect_rules" in data
+        assert "fakeprov.cache_rules" in data
 
     def test_blank_line_between_rules_in_phase(self, tmp_path):
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "a", "action": "redirect", "enabled": True},
                 {"ref": "r2", "expression": "b", "action": "redirect", "enabled": True},
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         text = result.read_text()
-        assert "\n\n- ref: r2" in text
-        data = yaml.safe_load(text)
-        assert len(data["redirect_rules"]) == 2
+        assert "\n\n  - ref: r2" in text
+        data = normalize_zone_format(yaml.safe_load(text))
+        assert len(data["fakeprov.redirect_rules"]) == 2
 
     def test_blank_line_between_list_entries(self, tmp_path):
         lists = {
@@ -621,19 +631,19 @@ class TestDumpBlankLineFormatting:
         custom_rulesets = {
             "rs1": {
                 "name": "Alpha",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r1", "expression": "true", "action": "block"}],
             },
             "rs2": {
                 "name": "Beta",
-                "phase": "http_request_firewall_custom",
+                "phase": "fake_http_request_firewall_custom",
                 "rules": [{"ref": "r2", "expression": "false", "action": "log"}],
             },
         }
         result = dump_zone_rules("example.com", {}, tmp_path, custom_rulesets=custom_rulesets)
         text = result.read_text()
         assert "\n\n- id: rs2" in text
-        data = yaml.safe_load(text)
+        data = normalize_zone_format(yaml.safe_load(text))
         assert len(data["custom_rulesets"]) == 2
 
     def test_blank_line_between_extra_sections(self, tmp_path):
@@ -655,34 +665,34 @@ class TestDumpBlankLineFormatting:
             },
         ]
         result = dump_zone_rules(
-            "example.com", {}, tmp_path, extra_sections={"page_shield_policies": policies}
+            "example.com", {}, tmp_path, extra_sections={"fakeprov.page_shield_policies": policies}
         )
         text = result.read_text()
-        assert "\n\n- description: Beta" in text
-        data = yaml.safe_load(text)
-        assert len(data["page_shield_policies"]) == 2
+        assert "\n\n  - description: Beta" in text
+        data = normalize_zone_format(yaml.safe_load(text))
+        assert len(data["fakeprov.page_shield_policies"]) == 2
 
     def test_full_dump_readability(self, tmp_path):
         """A dump with multiple sections and multiple items is readable."""
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "a", "action": "redirect", "enabled": True},
                 {"ref": "r2", "expression": "b", "action": "redirect", "enabled": True},
             ],
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {"ref": "w1", "expression": "c", "action": "block", "enabled": True},
             ],
         }
         result = dump_zone_rules("example.com", rules, tmp_path)
         text = result.read_text()
         # Blank line between r1 and r2
-        assert "\n\n- ref: r2" in text
+        assert "\n\n  - ref: r2" in text
         # Blank line between redirect_rules section and waf_custom_rules section
-        assert "\n\nwaf_custom_rules:" in text
+        assert "\n\n  waf_custom_rules:" in text
         # Still valid YAML
-        data = yaml.safe_load(text)
-        assert len(data["redirect_rules"]) == 2
-        assert len(data["waf_custom_rules"]) == 1
+        data = normalize_zone_format(yaml.safe_load(text))
+        assert len(data["fakeprov.redirect_rules"]) == 2
+        assert len(data["fakeprov.waf_custom_rules"]) == 1
 
 
 class TestRoundTripResilience:
@@ -693,7 +703,7 @@ class TestRoundTripResilience:
         from octorules.planner import plan_zone
 
         cf_rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "id": "uuid-123",
                     "version": "42",
@@ -709,7 +719,7 @@ class TestRoundTripResilience:
             ],
         }
         result = dump_zone_rules("example.com", cf_rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         zp = plan_zone("example.com", data, cf_rules)
         assert not zp.has_changes
 
@@ -723,7 +733,7 @@ class TestRoundTripResilience:
         from octorules.planner import plan_zone
 
         cf_rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "id": "uuid-123",
                     "ref": "r1",
@@ -735,10 +745,10 @@ class TestRoundTripResilience:
             ],
         }
         result = dump_zone_rules("example.com", cf_rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
 
         # The dumped YAML includes risk_score
-        assert data["redirect_rules"][0]["risk_score"] == 0.5
+        assert data["fakeprov.redirect_rules"][0]["risk_score"] == 0.5
 
         # Re-planning with the dump against the original CF data → no changes
         zp = plan_zone("example.com", data, cf_rules)
@@ -749,7 +759,7 @@ class TestRoundTripResilience:
         from octorules.planner import plan_zone
 
         cf_rules = {
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {
                     "id": "waf-id",
                     "version": "5",
@@ -764,9 +774,9 @@ class TestRoundTripResilience:
             ],
         }
         result = dump_zone_rules("example.com", cf_rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         # WAF action preserved (no default)
-        assert data["waf_custom_rules"][0]["action"] == "block"
+        assert data["fakeprov.waf_custom_rules"][0]["action"] == "block"
         zp = plan_zone("example.com", data, cf_rules)
         assert not zp.has_changes
 
@@ -775,7 +785,7 @@ class TestRoundTripResilience:
         from octorules.planner import plan_zone
 
         cf_rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {
                     "id": "r-id",
                     "version": "1",
@@ -786,7 +796,7 @@ class TestRoundTripResilience:
                     "enabled": True,
                 }
             ],
-            "http_request_cache_settings": [
+            "fake_http_request_cache_settings": [
                 {
                     "id": "c-id",
                     "version": "2",
@@ -798,7 +808,7 @@ class TestRoundTripResilience:
                     "action_parameters": {"cache": True},
                 }
             ],
-            "http_request_origin": [
+            "fake_http_request_origin": [
                 {
                     "id": "o-id",
                     "ref": "o1",
@@ -810,10 +820,10 @@ class TestRoundTripResilience:
             ],
         }
         result = dump_zone_rules("example.com", cf_rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
-        assert "redirect_rules" in data
-        assert "cache_rules" in data
-        assert "origin_rules" in data
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.redirect_rules" in data
+        assert "fakeprov.cache_rules" in data
+        assert "fakeprov.origin_rules" in data
         zp = plan_zone("example.com", data, cf_rules)
         assert not zp.has_changes, f"Unexpected changes: {zp.phase_plans}"
 
@@ -832,7 +842,7 @@ class TestRoundTripResilience:
             '        not starts_with(http.request.uri.path, "/api"))'
         )
         cf_rules = {
-            "http_request_transform": [
+            "fake_http_request_transform": [
                 {
                     "id": "uuid-456",
                     "ref": "r1",
@@ -843,9 +853,9 @@ class TestRoundTripResilience:
             ],
         }
         result = dump_zone_rules("example.com", cf_rules, tmp_path)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         # Dumped expression has trailing spaces stripped
-        dumped_expr = data["url_rewrite_rules"][0]["expression"]
+        dumped_expr = data["fakeprov.url_rewrite_rules"][0]["expression"]
         assert "and \n" not in dumped_expr
         # Round-trip should show no changes despite the whitespace difference
         zp = plan_zone("example.com", data, cf_rules)
@@ -878,7 +888,7 @@ class TestDumpErrorPaths:
         bad_path.mkdir()
 
         rules = {
-            "http_request_dynamic_redirect": [
+            "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
             ],
         }

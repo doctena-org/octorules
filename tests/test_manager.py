@@ -139,8 +139,8 @@ class TestManagerDelegation:
         """Phases are validated and passed through."""
         mgr = Manager(_cfg_path)
         with patch("octorules.manager.cmd_plan", return_value=0) as mock:
-            mgr.plan(phases=["redirect_rules"])
-            assert mock.call_args[1]["phase_filter"] == ["redirect_rules"]
+            mgr.plan(phases=["fakeprov.redirect_rules"])
+            assert mock.call_args[1]["phase_filter"] == ["fakeprov.redirect_rules"]
 
     def test_invalid_phase_raises(self, _cfg_path):
         """Invalid phase names raise ConfigError before reaching cmd_*."""

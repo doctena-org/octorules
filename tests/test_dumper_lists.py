@@ -4,7 +4,7 @@ import logging
 
 import yaml
 
-from octorules.config import _yaml_load
+from octorules.config import _yaml_load, normalize_zone_format
 from octorules.dumper import _write_list_file, dump_zone_rules
 
 
@@ -84,12 +84,12 @@ class TestDumpLists:
 
     def test_dump_lists_none_no_section(self, tmp_path):
         result = dump_zone_rules("example.com", {}, tmp_path, lists=None)
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert "lists" not in (data or {})
 
     def test_dump_lists_empty_no_section(self, tmp_path):
         result = dump_zone_rules("example.com", {}, tmp_path, lists={})
-        data = yaml.safe_load(result.read_text())
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert "lists" not in (data or {})
 
     def test_dump_lists_description_omitted_when_empty(self, tmp_path):
@@ -108,7 +108,7 @@ class TestDumpLists:
 
     def test_dump_with_phase_rules_and_lists(self, tmp_path):
         rules = {
-            "http_request_firewall_custom": [
+            "fake_http_request_firewall_custom": [
                 {
                     "ref": "w1",
                     "expression": "true",
@@ -126,8 +126,8 @@ class TestDumpLists:
             }
         }
         result = dump_zone_rules("example.com", rules, tmp_path, lists=lists)
-        data = _yaml_load(result)
-        assert "waf_custom_rules" in data
+        data = normalize_zone_format(_yaml_load(result))
+        assert "fakeprov.waf_custom_rules" in data
         assert "lists" in data
 
     def test_round_trip_list(self, tmp_path):

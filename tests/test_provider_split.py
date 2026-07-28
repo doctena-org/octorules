@@ -121,9 +121,9 @@ class TestMultiProviderCoexistence:
         assert len(PHASE_BY_PROVIDER_ID) == len(PHASES)
         assert len(PHASE_BY_NAME) >= len(PHASES)
         names = set(PHASE_BY_NAME)
-        assert any(n.startswith("aws_waf_") for n in names), "no AWS phases"
-        assert any(n.startswith("gcloud_armor_") for n in names), "no Google phases"
-        assert "redirect_rules" in names, "no Cloudflare phases"
+        assert any(n.startswith("aws.") for n in names), "no AWS phases"
+        assert any(n.startswith("google.") for n in names), "no Google phases"
+        assert "fakeprov.redirect_rules" in names, "no Cloudflare phases"
 
     def test_api_fields_merge_across_providers(self):
         """API field registrations from multiple providers accumulate, not overwrite."""
@@ -181,9 +181,9 @@ class TestEntryPointDiscovery:
         _discover_provider_modules()
         assert len(PHASES) > 0
         names = set(PHASE_BY_NAME)
-        assert any(n.startswith("aws_waf_") for n in names), "AWS not loaded"
-        assert any(n.startswith("gcloud_armor_") for n in names), "Google not loaded"
-        assert "redirect_rules" in names, "Cloudflare not loaded"
+        assert any(n.startswith("aws.") for n in names), "AWS not loaded"
+        assert any(n.startswith("google.") for n in names), "Google not loaded"
+        assert "fakeprov.redirect_rules" in names, "Cloudflare not loaded"
 
     def test_discover_provider_modules_is_idempotent(self):
         """Calling _discover_provider_modules twice does not raise."""
