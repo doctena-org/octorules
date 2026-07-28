@@ -1,10 +1,8 @@
 """Extension hook registries for provider-specific features.
 
 Providers register hooks at import time to extend core functionality
-without coupling the core to any specific provider.  Five registries:
+without coupling the core to any specific provider.  Three registries:
 
-- **plan_zone_hook**: Called during zone planning to add extension plans.
-- **apply_extension**: Called during sync to apply extension-specific changes.
 - **format_extension**: Provides formatters for extension plan types.
 - **validate_extension**: Called during offline validation.
 - **audit_extension**: Called during audit to extract IP ranges from rules.
@@ -50,19 +48,6 @@ log = logging.getLogger(__name__)
 # Hook type aliases
 # ---------------------------------------------------------------------------
 
-# Prefetch: (all_desired, scope, provider) -> opaque context or None
-# Called BEFORE get_all_phase_rules to start concurrent fetches.
-PlanZonePrefetchHook = Callable[[dict, "Scope", "BaseProvider"], object]
-
-# Finalize: (zone_plan, all_desired, scope, provider, prefetch_ctx) -> None
-# Called AFTER plan_zone to process the prefetched data.
-PlanZoneFinalizeHook = Callable[["ZonePlan", dict, "Scope", "BaseProvider", object], None]
-
-# (zone_plan, plans, scope, provider) -> (synced_labels, error_msg)
-ApplyExtensionFn = Callable[
-    ["ZonePlan", list, "Scope", "BaseProvider"],
-    tuple[list[str], str | None],
-]
 
 # (desired, zone_name, errors, lines) -> None
 # Appends to errors/lines in place.
@@ -102,9 +87,6 @@ class FormatExtension(Protocol):
 # Expected parameter names for each hook type, derived from the actual
 # provider implementations.  Validated at registration time so signature
 # mismatches surface immediately instead of at runtime.
-_PREFETCH_PARAMS = ("all_desired", "scope", "provider")
-_FINALIZE_PARAMS = ("zp", "all_desired", "scope", "provider", "ctx")
-_APPLY_PARAMS = ("zp", "plans", "scope", "provider")
 _VALIDATE_PARAMS = ("desired", "zone_name", "errors", "lines")
 _AUDIT_PARAMS = ("rules_data", "phase_name")
 
@@ -144,8 +126,6 @@ def _validate_hook_signature(
 # Lock protecting all mutable registries in this module.
 _REGISTRY_LOCK = threading.Lock()
 
-_plan_zone_hooks: list[tuple[PlanZonePrefetchHook, PlanZoneFinalizeHook]] = []
-_apply_extensions: dict[str, ApplyExtensionFn] = {}
 _format_extensions: dict[str, FormatExtension] = {}
 _validate_extensions: list[ValidateExtensionFn] = []
 _audit_extensions: dict[str, AuditExtensionFn] = {}
@@ -154,31 +134,6 @@ _audit_extensions: dict[str, AuditExtensionFn] = {}
 # ---------------------------------------------------------------------------
 # Registration functions
 # ---------------------------------------------------------------------------
-def register_plan_zone_hook(
-    prefetch: PlanZonePrefetchHook,
-    finalize: PlanZoneFinalizeHook,
-) -> None:
-    """Register a two-phase plan hook.
-
-    *prefetch* is called before ``get_all_phase_rules()`` to start concurrent
-    background work (e.g. API fetches).  *finalize* is called after
-    ``plan_zone()`` with the opaque context returned by *prefetch*.
-    """
-    _validate_hook_signature("plan_zone_prefetch", prefetch, _PREFETCH_PARAMS)
-    _validate_hook_signature("plan_zone_finalize", finalize, _FINALIZE_PARAMS)
-    with _REGISTRY_LOCK:
-        pair = (prefetch, finalize)
-        if pair not in _plan_zone_hooks:
-            _plan_zone_hooks.append(pair)
-
-
-def register_apply_extension(name: str, fn: ApplyExtensionFn) -> None:
-    """Register an apply function for extension *name*."""
-    _validate_hook_signature("apply_extension", fn, _APPLY_PARAMS)
-    with _REGISTRY_LOCK:
-        _apply_extensions[name] = fn
-
-
 def register_format_extension(name: str, fmt: FormatExtension) -> None:
     """Register a formatter for extension *name*.
 
@@ -213,22 +168,6 @@ def register_audit_extension(name: str, fn: AuditExtensionFn) -> None:
 # ---------------------------------------------------------------------------
 # Unregister (for test teardown)
 # ---------------------------------------------------------------------------
-def unregister_plan_zone_hook(
-    prefetch: PlanZonePrefetchHook,
-    finalize: PlanZoneFinalizeHook,
-) -> None:
-    """Remove a plan zone hook pair."""
-    with _REGISTRY_LOCK:
-        try:
-            _plan_zone_hooks.remove((prefetch, finalize))
-        except ValueError:
-            pass
-
-
-def unregister_apply_extension(name: str) -> None:
-    """Remove an apply extension."""
-    with _REGISTRY_LOCK:
-        _apply_extensions.pop(name, None)
 
 
 def unregister_format_extension(name: str) -> None:
@@ -260,56 +199,48 @@ def call_plan_zone_prefetch(
     scope: "Scope",
     provider: "BaseProvider",
 ) -> list[tuple]:
-    """Call prefetch hooks concurrently. Returns list of (finalize_fn, context) pairs.
+    """Start each applicable extension's prefetch. Returns (extension, ctx) pairs.
 
-    Snapshots the hook list so finalize uses the same hooks even if
-    registrations change between prefetch and finalize.
+    Walks the provider's own extensions, so an extension is only ever handed
+    the provider that owns it.  Core applies the section check, which every
+    hook used to repeat by hand.
 
-    All prefetch hooks are submitted to a thread pool and run concurrently.
-    If any hook raises an exception, all pending futures are cancelled and
-    the first exception propagates immediately.
+    Prefetch exists to overlap API work with the main phase-rules fetch, so
+    the extensions run concurrently.  If one raises, pending futures are
+    cancelled and the first exception propagates.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    with _REGISTRY_LOCK:
-        hooks = list(_plan_zone_hooks)
-    log.debug("Prefetching %d extension(s)", len(hooks))
-
-    if not hooks:
+    exts = applicable_extensions(provider, all_desired)
+    log.debug("Prefetching %d extension(s)", len(exts))
+    if not exts:
         return []
 
-    # Single hook — no thread pool overhead needed.
-    if len(hooks) == 1:
-        prefetch, finalize = hooks[0]
+    if len(exts) == 1:
+        ext = exts[0]
         try:
-            ctx = prefetch(all_desired, scope, provider)
+            return [(ext, ext.prefetch(all_desired, scope, provider))]
         except Exception:
-            log.exception("Error in plan zone prefetch hook %s", prefetch)
+            log.exception("Error in %s prefetch", type(ext).__name__)
             raise
-        return [(finalize, ctx)]
 
-    # Multiple hooks — run concurrently.
     results: dict[int, object] = {}
-    with ThreadPoolExecutor(max_workers=len(hooks)) as executor:
-        future_to_idx = {}
-        for idx, (prefetch, _finalize) in enumerate(hooks):
-            future = executor.submit(prefetch, all_desired, scope, provider)
-            future_to_idx[future] = idx
-
+    with ThreadPoolExecutor(max_workers=len(exts)) as executor:
+        future_to_idx = {
+            executor.submit(ext.prefetch, all_desired, scope, provider): idx
+            for idx, ext in enumerate(exts)
+        }
         for future in as_completed(future_to_idx):
             idx = future_to_idx[future]
             try:
                 results[idx] = future.result()
             except Exception:
-                # Cancel remaining futures and propagate the error.
                 for f in future_to_idx:
                     f.cancel()
-                prefetch_fn = hooks[idx][0]
-                log.exception("Error in plan zone prefetch hook %s", prefetch_fn)
+                log.exception("Error in %s prefetch", type(exts[idx]).__name__)
                 raise
 
-    # Rebuild pairs in original registration order.
-    return [(hooks[idx][1], results[idx]) for idx in range(len(hooks))]
+    return [(exts[idx], results[idx]) for idx in range(len(exts))]
 
 
 def call_plan_zone_finalize(
@@ -319,12 +250,12 @@ def call_plan_zone_finalize(
     provider: "BaseProvider",
     prefetch_pairs: list[tuple],
 ) -> None:
-    """Call finalize hooks with their paired prefetch contexts."""
-    for finalize, ctx in prefetch_pairs:
+    """Let each extension turn its prefetched result into plans."""
+    for ext, ctx in prefetch_pairs:
         try:
-            finalize(zone_plan, all_desired, scope, provider, ctx)
+            ext.finalize(zone_plan, all_desired, scope, provider, ctx)
         except Exception:
-            log.exception("Error in plan zone finalize hook %s", finalize)
+            log.exception("Error in %s finalize", type(ext).__name__)
             raise
 
 
@@ -333,19 +264,17 @@ def call_apply_extensions(
     scope: "Scope",
     provider: "BaseProvider",
 ) -> tuple[list[str], str | None]:
-    """Call apply functions for all extensions that have plans.
+    """Apply each of the provider's extensions that produced plans.
 
     Returns (synced_labels, first_error).
     """
-    with _REGISTRY_LOCK:
-        extensions = dict(_apply_extensions)
     all_synced: list[str] = []
-    for name, fn in extensions.items():
-        plans = zone_plan.extension_plans.get(name, [])
+    for ext in getattr(provider, "extensions", None) or []:
+        plans = zone_plan.extension_plans.get(ext.plan_key(), [])
         if not plans:
             continue
-        log.debug("Applying extension %s", name)
-        synced, error = fn(zone_plan, plans, scope, provider)
+        log.debug("Applying extension %s", ext.plan_key())
+        synced, error = ext.apply(zone_plan, plans, scope, provider)
         all_synced.extend(synced)
         if error:
             return all_synced, error

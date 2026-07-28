@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 import pytest
 
 from octorules.extensions import (
-    _apply_extensions,
+    _VALIDATE_PARAMS,
+    ProviderExtension,
     _audit_extensions,
-    _plan_zone_hooks,
     _validate_extensions,
     _validate_hook_signature,
     call_audit_extensions,
@@ -15,270 +15,147 @@ from octorules.extensions import (
     call_plan_zone_prefetch,
     call_validate_extensions,
     get_format_extensions,
-    register_apply_extension,
     register_audit_extension,
     register_format_extension,
-    register_plan_zone_hook,
     register_validate_extension,
-    unregister_apply_extension,
     unregister_audit_extension,
     unregister_format_extension,
-    unregister_plan_zone_hook,
     unregister_validate_extension,
 )
 from octorules.provider.base import Scope
 
 
-class TestPlanZoneHookPrefetch:
-    """Tests for plan zone prefetch/finalize hook lifecycle."""
+class _FakeProvider:
+    """A provider whose extensions are supplied directly."""
+
+    def __init__(self, extensions):
+        self.extensions = extensions
+
+
+def _ext(name, prefetch=None, finalize=None):
+    """Build a one-off ProviderExtension with the given stages."""
+
+    class _E(ProviderExtension):
+        section = ""  # always applicable
+
+        def prefetch(self, desired, scope, provider):
+            return prefetch(desired, scope, provider) if prefetch else None
+
+        def finalize(self, zp, desired, scope, provider, ctx):
+            if finalize:
+                finalize(zp, desired, scope, provider, ctx)
+
+    _E.__name__ = name
+    return _E()
+
+
+class TestProviderExtensionPrefetch:
+    """Prefetch runs the provider's own extensions, concurrently."""
 
     def test_prefetch_exception_propagates(self):
-        """Exception in prefetch hook propagates correctly."""
-
-        def bad_prefetch(all_desired, scope, provider):
+        def boom(desired, scope, provider):
             raise RuntimeError("prefetch failed")
 
-        def noop_finalize(zp, all_desired, scope, provider, ctx):
-            pass
+        provider = _FakeProvider([_ext("Boom", prefetch=boom)])
+        with pytest.raises(RuntimeError, match="prefetch failed"):
+            call_plan_zone_prefetch({}, Scope(zone_id="z1"), provider)
 
-        register_plan_zone_hook(bad_prefetch, noop_finalize)
-        try:
-            with pytest.raises(RuntimeError, match="prefetch failed"):
-                call_plan_zone_prefetch({}, Scope(zone_id="z1"), MagicMock())
-        finally:
-            unregister_plan_zone_hook(bad_prefetch, noop_finalize)
+    def test_all_extensions_called(self):
+        calls = []
+        exts = [
+            _ext(f"E{i}", prefetch=lambda d, s, p, i=i: calls.append(i) or f"ctx-{i}")
+            for i in range(3)
+        ]
+        pairs = call_plan_zone_prefetch({}, Scope(zone_id="z1"), _FakeProvider(exts))
+        assert sorted(calls) == [0, 1, 2]
+        assert [ctx for _e, ctx in pairs] == ["ctx-0", "ctx-1", "ctx-2"]
 
-    def test_multiple_hooks_all_called(self):
-        """All registered hooks are called during prefetch/finalize."""
-        call_log = []
+    def test_only_applicable_extensions_run(self):
+        """Core applies the section check, so an extension whose section is
+        absent never runs — the guard every hook used to repeat by hand."""
+        ran = []
 
-        def make_hooks(tag):
-            def prefetch(all_desired, scope, provider):
-                call_log.append(f"prefetch-{tag}")
-                return f"ctx-{tag}"
+        class _Scoped(ProviderExtension):
+            section = "someprov.thing"
 
-            def finalize(zp, all_desired, scope, provider, ctx):
-                call_log.append(f"finalize-{tag}")
-                assert ctx == f"ctx-{tag}"
+            def prefetch(self, desired, scope, provider):
+                ran.append("yes")
+                return "ctx"
 
-            return prefetch, finalize
+        provider = _FakeProvider([_Scoped()])
+        assert call_plan_zone_prefetch({}, Scope(zone_id="z1"), provider) == []
+        assert ran == []
+        pairs = call_plan_zone_prefetch({"someprov.thing": {}}, Scope(zone_id="z1"), provider)
+        assert ran == ["yes"] and [c for _e, c in pairs] == ["ctx"]
 
-        # Account for hooks registered by real providers (e.g. Page Shield)
-        baseline = len(_plan_zone_hooks)
-
-        hooks = [make_hooks(i) for i in range(3)]
-        for pf, fn in hooks:
-            register_plan_zone_hook(pf, fn)
-        try:
-            scope = Scope(zone_id="z1")
-            provider = MagicMock()
-
-            pairs = call_plan_zone_prefetch({}, scope, provider)
-            assert len(pairs) == baseline + 3
-            # Prefetch hooks run concurrently — order is non-deterministic,
-            # but all three must have been called.
-            assert set(call_log) == {"prefetch-0", "prefetch-1", "prefetch-2"}
-
-            call_log.clear()
-            zp = MagicMock()
-            call_plan_zone_finalize(zp, {}, scope, provider, pairs)
-            assert call_log == ["finalize-0", "finalize-1", "finalize-2"]
-        finally:
-            for pf, fn in hooks:
-                unregister_plan_zone_hook(pf, fn)
-
-    def test_unregister_nonexistent_hook_is_noop(self):
-        """Unregistering a hook that was never registered doesn't raise and
-        leaves the registry unchanged."""
-
-        # Cannot use lambdas with wrong param names — use proper signatures
-        def sentinel_pre(all_desired, scope, provider):
-            return None
-
-        def sentinel_fin(zp, all_desired, scope, provider, ctx):
-            return None
-
-        before = list(_plan_zone_hooks)
-        unregister_plan_zone_hook(sentinel_pre, sentinel_fin)  # Should not raise
-        assert (sentinel_pre, sentinel_fin) not in _plan_zone_hooks
-        assert _plan_zone_hooks == before
+    def test_no_extensions_is_a_noop(self):
+        assert call_plan_zone_prefetch({}, Scope(zone_id="z1"), _FakeProvider([])) == []
+        # A provider predating the property at all.
+        assert call_plan_zone_prefetch({}, Scope(zone_id="z1"), object()) == []
 
     def test_finalize_exception_propagates(self):
-        """Exception in finalize hook propagates correctly."""
+        def boom(zp, desired, scope, provider, ctx):
+            raise RuntimeError("finalize failed")
 
-        def ok_prefetch(all_desired, scope, provider):
-            return "ok"
-
-        def bad_finalize(zp, all_desired, scope, provider, ctx):
-            raise ValueError("finalize exploded")
-
-        register_plan_zone_hook(ok_prefetch, bad_finalize)
-        try:
-            scope = Scope(zone_id="z1")
-            provider = MagicMock()
-            pairs = call_plan_zone_prefetch({}, scope, provider)
-
-            with pytest.raises(ValueError, match="finalize exploded"):
-                call_plan_zone_finalize(MagicMock(), {}, scope, provider, pairs)
-        finally:
-            unregister_plan_zone_hook(ok_prefetch, bad_finalize)
+        provider = _FakeProvider([_ext("Boom", finalize=boom)])
+        pairs = call_plan_zone_prefetch({}, Scope(zone_id="z1"), provider)
+        with pytest.raises(RuntimeError, match="finalize failed"):
+            call_plan_zone_finalize(MagicMock(), {}, Scope(zone_id="z1"), provider, pairs)
 
     def test_concurrent_prefetch_preserves_result_order(self):
-        """Results are returned in registration order, not completion order."""
+        """Results come back in extension order, not completion order."""
         import threading
         import time
 
         barrier = threading.Barrier(3)
 
-        def make_hooks(tag, delay):
-            def prefetch(all_desired, scope, provider):
-                barrier.wait()  # Synchronize all hooks to start together
+        def make(tag, delay):
+            def prefetch(desired, scope, provider):
+                barrier.wait()  # start together
                 time.sleep(delay)
                 return f"ctx-{tag}"
 
-            def finalize(zp, all_desired, scope, provider, ctx):
-                pass
+            return _ext(f"E{tag}", prefetch=prefetch)
 
-            return prefetch, finalize
+        # Index 1 finishes first, index 0 last.
+        exts = [make(0, 0.1), make(1, 0.0), make(2, 0.05)]
+        pairs = call_plan_zone_prefetch({}, Scope(zone_id="z1"), _FakeProvider(exts))
+        assert [ctx for _e, ctx in pairs] == ["ctx-0", "ctx-1", "ctx-2"]
 
-        # Hook-1 completes fastest, hook-0 and hook-2 are slower.
-        hooks = [
-            make_hooks(0, 0.1),  # registered first, slow
-            make_hooks(1, 0.0),  # registered second, fastest
-            make_hooks(2, 0.05),  # registered third, medium
-        ]
-        for pf, fn in hooks:
-            register_plan_zone_hook(pf, fn)
-        try:
-            scope = Scope(zone_id="z1")
-            provider = MagicMock()
-            pairs = call_plan_zone_prefetch({}, scope, provider)
-
-            # Extract our test results (skip any baseline hooks from real providers).
-            our_pairs = [
-                (fin, ctx) for fin, ctx in pairs if isinstance(ctx, str) and ctx.startswith("ctx-")
-            ]
-            assert len(our_pairs) == 3
-            # Must be in registration order (0, 1, 2) not completion order (1, 2, 0).
-            assert [ctx for _fin, ctx in our_pairs] == ["ctx-0", "ctx-1", "ctx-2"]
-        finally:
-            for pf, fn in hooks:
-                unregister_plan_zone_hook(pf, fn)
-
-    def test_prefetch_error_cancels_concurrent_hooks(self):
-        """Error in one concurrent hook propagates without hanging."""
+    def test_prefetch_error_cancels_concurrent_extensions(self):
+        """An error propagates without hanging the others."""
         from octorules.provider.exceptions import ProviderAuthError
 
-        def ok_prefetch_0(all_desired, scope, provider):
-            return "ctx-0"
-
-        def ok_finalize_0(zp, all_desired, scope, provider, ctx):
-            pass
-
-        def bad_prefetch(all_desired, scope, provider):
+        def bad(desired, scope, provider):
             raise ProviderAuthError("auth expired")
 
-        def bad_finalize(zp, all_desired, scope, provider, ctx):
-            pass
-
-        def ok_prefetch_2(all_desired, scope, provider):
-            return "ctx-2"
-
-        def ok_finalize_2(zp, all_desired, scope, provider, ctx):
-            pass
-
-        hooks = [
-            (ok_prefetch_0, ok_finalize_0),
-            (bad_prefetch, bad_finalize),
-            (ok_prefetch_2, ok_finalize_2),
+        exts = [
+            _ext("Ok0", prefetch=lambda d, s, p: "ctx-0"),
+            _ext("Bad", prefetch=bad),
+            _ext("Ok2", prefetch=lambda d, s, p: "ctx-2"),
         ]
-        for pf, fn in hooks:
-            register_plan_zone_hook(pf, fn)
-        try:
-            with pytest.raises(ProviderAuthError, match="auth expired"):
-                call_plan_zone_prefetch({}, Scope(zone_id="z1"), MagicMock())
-        finally:
-            for pf, fn in hooks:
-                unregister_plan_zone_hook(pf, fn)
-
-    def test_hooks_cleaned_up_after_test(self):
-        """Verify hooks don't leak between tests (sanity check for test isolation)."""
-        # If previous tests leaked hooks, this would fail.
-        # We can't assert it's completely empty since other test modules might
-        # have loaded, but we verify no hooks with our specific test markers.
-        for prefetch, _finalize in _plan_zone_hooks:
-            # None of the hooks from our tests above should remain
-            assert "prefetch failed" not in str(prefetch)
+        with pytest.raises(ProviderAuthError, match="auth expired"):
+            call_plan_zone_prefetch({}, Scope(zone_id="z1"), _FakeProvider(exts))
 
 
 class TestHookSignatureValidation:
     """Tests for _validate_hook_signature and registration-time validation."""
 
-    def test_valid_prefetch_hook_accepted(self):
-        """Prefetch hook with correct signature is accepted and registered."""
-
-        def my_prefetch(all_desired, scope, provider):
-            return None
-
-        def my_finalize(zp, all_desired, scope, provider, ctx):
-            pass
-
-        register_plan_zone_hook(my_prefetch, my_finalize)
-        assert (my_prefetch, my_finalize) in _plan_zone_hooks
-        unregister_plan_zone_hook(my_prefetch, my_finalize)
-        assert (my_prefetch, my_finalize) not in _plan_zone_hooks
-
-    def test_invalid_prefetch_hook_rejected(self):
-        """Prefetch hook with wrong parameter names raises TypeError."""
-
-        def bad_prefetch(data, scope, prov):
-            return None
-
-        def ok_finalize(zp, all_desired, scope, provider, ctx):
-            pass
-
-        with pytest.raises(TypeError, match="plan_zone_prefetch hook.*incorrect signature"):
-            register_plan_zone_hook(bad_prefetch, ok_finalize)
-
-    def test_invalid_finalize_hook_rejected(self):
-        """Finalize hook with wrong parameter names raises TypeError."""
-
-        def ok_prefetch(all_desired, scope, provider):
-            return None
-
-        def bad_finalize(zone_plan, desired, scope, provider, context):
-            pass
-
-        with pytest.raises(TypeError, match="plan_zone_finalize hook.*incorrect signature"):
-            register_plan_zone_hook(ok_prefetch, bad_finalize)
-
     def test_extra_kwargs_accepted(self):
-        """Hook with **kwargs is accepted (forward-compatible) and registered."""
+        """A hook with **kwargs stays valid — forward-compatible."""
 
-        def my_prefetch(all_desired, scope, provider, **kwargs):
-            return None
-
-        def my_finalize(zp, all_desired, scope, provider, ctx, **kwargs):
+        def my_validate(desired, zone_name, errors, lines, **kwargs):
             pass
 
-        register_plan_zone_hook(my_prefetch, my_finalize)
-        assert (my_prefetch, my_finalize) in _plan_zone_hooks
-        unregister_plan_zone_hook(my_prefetch, my_finalize)
-        assert (my_prefetch, my_finalize) not in _plan_zone_hooks
+        _validate_hook_signature("validate_extension", my_validate, _VALIDATE_PARAMS)
 
     def test_extra_args_accepted(self):
-        """Hook with *args is accepted (ignored in validation) and registered."""
+        """A hook with *args stays valid — only named parameters are checked."""
 
-        def my_prefetch(all_desired, scope, provider, *args):
-            return None
-
-        def my_finalize(zp, all_desired, scope, provider, ctx, *args):
+        def my_validate(desired, zone_name, errors, lines, *args):
             pass
 
-        register_plan_zone_hook(my_prefetch, my_finalize)
-        assert (my_prefetch, my_finalize) in _plan_zone_hooks
-        unregister_plan_zone_hook(my_prefetch, my_finalize)
-        assert (my_prefetch, my_finalize) not in _plan_zone_hooks
+        _validate_hook_signature("validate_extension", my_validate, _VALIDATE_PARAMS)
 
     def test_wrong_param_names_same_count_rejected(self):
         """Hook with wrong param names (even if count matches) is rejected."""
@@ -297,26 +174,6 @@ class TestHookSignatureValidation:
 
         with pytest.raises(TypeError, match="incorrect signature"):
             _validate_hook_signature("test", too_few, ("all_desired", "scope", "provider"))
-
-    def test_apply_extension_validation(self):
-        """Apply extension validates signature at registration."""
-
-        def bad_apply(zone_plan, plans, scope, prov):
-            return [], None
-
-        with pytest.raises(TypeError, match="apply_extension hook.*incorrect signature"):
-            register_apply_extension("test_bad", bad_apply)
-
-    def test_valid_apply_extension_accepted(self):
-        """Apply extension with correct signature is accepted and registered."""
-
-        def ok_apply(zp, plans, scope, provider):
-            return [], None
-
-        register_apply_extension("test_ok_apply", ok_apply)
-        assert _apply_extensions.get("test_ok_apply") is ok_apply
-        unregister_apply_extension("test_ok_apply")
-        assert "test_ok_apply" not in _apply_extensions
 
     def test_validate_extension_validation(self):
         """Validate extension validates signature at registration."""

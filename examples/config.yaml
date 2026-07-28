@@ -137,9 +137,13 @@ processors:
 # ---------------------------------------------------------------------------
 manager:
   max_workers: 4               # Parallel zone/phase processing (default: 1)
-  strict_sections: false       # true: error (instead of warn) when a zone-file
-                               # section would be skipped unmanaged; each zone
-                               # can override with its own strict_sections key
+  lint:
+    # Which named rule sets are active. Defaults to [default, strict].
+    # `default` is the everyday rule set; `strict` additionally makes plan
+    # *enforce* the rules in it, so a zone-file section that would be
+    # skipped unmanaged aborts instead of warning. Drop `strict` to warn.
+    # Any zone can override this with its own `lint:` block.
+    sets: [default, strict]
   plan_outputs:
     text:
       class: octorules.plan_output.PlanText
