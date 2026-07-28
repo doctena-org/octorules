@@ -56,17 +56,20 @@ class PhaseFilter:
             raise ConfigError("PhaseFilter: one of 'include' or 'exclude' is required")
 
         def _resolve(names: list[str]) -> set[str]:
-            # Accept the dotted namespace form alongside the flat name.
-            from octorules.phases import PROVIDER_NAMESPACES
+            """Validate phase names against the registry.
+
+            An unknown name used to pass through silently, so a typo in
+            ``include`` quietly dropped that phase from the plan — the same
+            class of silent-unmanage this filter exists to make deliberate.
+            ``--phase`` and ChangeTypeFilter both reject unknown values; this
+            now matches them.
+            """
+            from octorules.phases import PHASE_BY_NAME, unknown_phase_message
 
             resolved = set()
             for name in names:
-                if "." in name:
-                    ns, _, nested = name.partition(".")
-                    mapping = PROVIDER_NAMESPACES.get(ns)
-                    if mapping and nested in mapping:
-                        resolved.add(mapping[nested])
-                        continue
+                if name not in PHASE_BY_NAME:
+                    raise ConfigError(f"PhaseFilter: {unknown_phase_message(name)}")
                 resolved.add(name)
             return resolved
 

@@ -9,19 +9,16 @@ from octorules.phases import (
     PHASE_BY_NAME,
     PHASE_BY_PROVIDER_ID,
     PHASES,
-    RENAMED_PHASES,
     ZONE_PROVIDER_IDS,
     Phase,
     get_api_fields,
     get_phase,
     register_api_fields,
     register_phase,
-    register_phase_alias,
     register_phases,
     strip_api_fields,
     unregister_api_fields,
     unregister_phase,
-    unregister_phase_alias,
 )
 
 
@@ -31,12 +28,9 @@ def _restore_registry():
     from octorules.phases import _api_fields, _rebuild_derived
 
     orig_phases = list(PHASES)
-    orig_aliases = dict(RENAMED_PHASES)
     orig_api_fields = {k: set(v) for k, v in _api_fields.items()}
     yield
     PHASES[:] = orig_phases
-    RENAMED_PHASES.clear()
-    RENAMED_PHASES.update(orig_aliases)
     for k in _api_fields:
         _api_fields[k] = orig_api_fields.get(k, set())
     _rebuild_derived()
@@ -87,14 +81,6 @@ class TestRegisterPhase:
             == "fake_http_request_firewall_custom"
         )
 
-    def test_register_preserves_aliases(self):
-        """waf_managed_exceptions alias should survive registration."""
-        register_phase(TEST_PHASE)
-        assert "waf_managed_exceptions" in PHASE_BY_NAME
-        assert (
-            PHASE_BY_NAME["waf_managed_exceptions"] is PHASE_BY_NAME["fakeprov.waf_managed_rules"]
-        )
-
 
 class TestUnregisterPhase:
     def test_unregister_phase_removes_from_all_dicts(self):
@@ -109,11 +95,6 @@ class TestUnregisterPhase:
     def test_unregister_nonexistent_raises(self):
         with pytest.raises(KeyError, match="not registered"):
             unregister_phase("nonexistent_phase")
-
-    def test_unregister_aliased_phase_raises(self):
-        """Cannot unregister a phase that has backward-compat aliases."""
-        with pytest.raises(ValueError, match="backward-compat aliases"):
-            unregister_phase("fakeprov.waf_managed_rules")
 
 
 class TestRegisterPhases:
@@ -231,33 +212,3 @@ class TestStripApiFields:
     def test_unknown_category_raises(self):
         with pytest.raises(ValueError, match="Unknown API field category"):
             strip_api_fields({"a": 1}, "nonexistent")
-
-
-class TestRegisterPhaseAlias:
-    def test_register_alias(self):
-        register_phase_alias("old_name", "fakeprov.redirect_rules")
-        assert "old_name" in PHASE_BY_NAME
-        assert PHASE_BY_NAME["old_name"] is PHASE_BY_NAME["fakeprov.redirect_rules"]
-
-    def test_register_alias_appears_in_renamed_phases(self):
-        register_phase_alias("old_name", "fakeprov.redirect_rules")
-        assert RENAMED_PHASES["old_name"] == "fakeprov.redirect_rules"
-
-    def test_unregister_alias(self):
-        register_phase_alias("old_name", "fakeprov.redirect_rules")
-        unregister_phase_alias("old_name")
-        assert "old_name" not in PHASE_BY_NAME
-        assert "old_name" not in RENAMED_PHASES
-
-    def test_unregister_nonexistent_is_safe(self):
-        unregister_phase_alias("nonexistent")  # no error
-
-    def test_alias_survives_phase_registration(self):
-        register_phase_alias("old_name", "fakeprov.redirect_rules")
-        register_phase(TEST_PHASE)
-        assert "old_name" in PHASE_BY_NAME
-        assert PHASE_BY_NAME["old_name"] is PHASE_BY_NAME["fakeprov.redirect_rules"]
-
-    def test_alias_to_nonexistent_phase_is_silently_ignored(self):
-        register_phase_alias("alias", "nonexistent_phase")
-        assert "alias" not in PHASE_BY_NAME

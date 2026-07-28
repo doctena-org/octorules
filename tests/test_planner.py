@@ -187,24 +187,6 @@ class TestCheckZoneSections:
         assert "Did you mean" in caplog.text
         assert "fakeprov.redirect_rules" in caplog.text
 
-    def test_renamed_phase_warns_with_migration_guidance(self, caplog):
-        """Using old name waf_managed_exceptions should produce a deprecation warning."""
-        rules_data = {
-            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}]
-        }
-        with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
-        assert "renamed" in caplog.text
-        assert "fakeprov.waf_managed_rules" in caplog.text
-        assert "deprecated" in caplog.text
-
-    def test_renamed_phase_does_not_show_generic_unknown(self, caplog):
-        """Renamed phase should NOT show generic 'Unknown phase' message."""
-        rules_data = {"waf_managed_exceptions": []}
-        with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
-        assert "Unknown phase" not in caplog.text
-
 
 class TestCheckZoneSectionsStrict:
     def test_unknown_key_raises(self):
@@ -221,12 +203,6 @@ class TestCheckZoneSectionsStrict:
             "example.com",
             strict=True,
         )
-
-    def test_renamed_phase_stays_a_warning(self, caplog):
-        """Aliases still work — the section IS managed, so strict must not raise."""
-        with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections({"waf_managed_exceptions": []}, "example.com", strict=True)
-        assert "renamed" in caplog.text
 
 
 @pytest.fixture
@@ -730,94 +706,6 @@ class TestPlanZone:
         zone_plan = plan_zone("example.com", {}, {})
         assert zone_plan.has_changes is False
         assert zone_plan.total_changes == 0
-
-
-class TestRenamedPhaseAlias:
-    """Tests for waf_managed_exceptions -> waf_managed_rules alias in planning."""
-
-    def test_alias_works_in_plan_zone(self):
-        """Using old name waf_managed_exceptions in desired rules should still work."""
-        desired = {
-            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
-        }
-        current = {}
-        zp = plan_zone("example.com", desired, current)
-        assert zp.has_changes
-        assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.provider_id == "fake_http_request_firewall_managed"
-
-    def test_canonical_name_works_in_plan_zone(self):
-        """Using canonical name waf_managed_rules should work normally."""
-        desired = {
-            "fakeprov.waf_managed_rules": [{"ref": "r1", "expression": "true", "action": "block"}],
-        }
-        current = {}
-        zp = plan_zone("example.com", desired, current)
-        assert zp.has_changes
-        assert zp.total_changes == 1
-        assert zp.phase_plans[0].phase.provider_id == "fake_http_request_firewall_managed"
-
-    def test_alias_diff_against_current(self):
-        """Alias name should correctly diff against current rules from CF."""
-        desired = {
-            "waf_managed_exceptions": [
-                {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
-            ],
-        }
-        current = {
-            "fake_http_request_firewall_managed": [
-                {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
-            ],
-        }
-        zp = plan_zone("example.com", desired, current)
-        assert not zp.has_changes
-
-    def test_alias_with_allow_unmanaged(self):
-        """Alias should work correctly with allow_unmanaged=True."""
-        desired = {
-            "waf_managed_exceptions": [
-                {"ref": "r1", "expression": "true", "action": "block", "enabled": True}
-            ],
-        }
-        current = {
-            "fake_http_request_firewall_managed": [
-                {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
-                {"ref": "r2", "expression": "false", "action": "log", "enabled": True},
-            ],
-        }
-        zp = plan_zone("example.com", desired, current, allow_unmanaged=True)
-        # r2 is unmanaged but allow_unmanaged is True, so no changes
-        assert not zp.has_changes
-
-    def test_alias_does_not_cause_double_processing(self):
-        """Using the alias should not cause the phase to be processed twice."""
-        desired = {
-            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
-        }
-        current = {}
-        zp = plan_zone("example.com", desired, current)
-        # Only one phase plan should be created, not two
-        assert len(zp.phase_plans) == 1
-
-    def test_alias_removal_detection(self):
-        """Alias should not cause spurious removal when current has the phase."""
-        desired = {
-            "waf_managed_exceptions": [{"ref": "r1", "expression": "true", "action": "block"}],
-        }
-        current = {
-            "fake_http_request_firewall_managed": [
-                {"ref": "r1", "expression": "true", "action": "block", "enabled": True},
-                {"ref": "r2", "expression": "false", "action": "log", "enabled": True},
-            ],
-        }
-        zp = plan_zone("example.com", desired, current)
-        # r2 should be removed (not in desired), but only once
-        removes = []
-        for pp in zp.phase_plans:
-            for c in pp.changes:
-                if c.change_type == ChangeType.REMOVE:
-                    removes.append(c.ref)
-        assert removes == ["r2"]
 
 
 class TestAllowUnmanaged:

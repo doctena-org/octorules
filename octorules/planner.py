@@ -22,7 +22,6 @@ from octorules.phases import (
     PHASE_BY_NAME,
     PHASE_BY_PROVIDER_ID,
     PROVIDER_NAMESPACES,
-    RENAMED_PHASES,
     Phase,
     get_api_fields,
     get_phase,
@@ -392,18 +391,6 @@ def check_zone_sections(
         if strict:
             raise ConfigError(f"{message} (strict_sections)")
         log.warning("%s", message)
-
-    # Renamed phases still work via aliases — deprecation warning only,
-    # even in strict mode (the section IS managed).
-    for key in sorted(set(rules_data.keys()) & RENAMED_PHASES.keys()):
-        new_name = RENAMED_PHASES[key]
-        log.warning(
-            "Phase %r has been renamed to %r in rules for %s. "
-            "Please update your YAML file. The old name still works but is deprecated.",
-            key,
-            new_name,
-            zone_name,
-        )
 
     unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys() - KNOWN_NON_PHASE_KEYS
     for key in sorted(unknown):

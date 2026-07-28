@@ -35,6 +35,12 @@ _CHANGE_COLORS: dict[ChangeType, str] = {
     ChangeType.REORDER: _CYAN,
 }
 
+# Re-exported as the public colour surface for extension formatters.  An
+# extension that renders its own plan lines (Page Shield's, whose model is
+# rule-changes rather than settings fields, so it cannot inherit
+# SettingsFormatter) needs the same styling core uses, and reaching into a
+# private module for it made `_color` de-facto public without saying so.
+
 
 def _change_symbol(change_type: ChangeType) -> str:
     return _CHANGE_SYMBOLS[change_type]

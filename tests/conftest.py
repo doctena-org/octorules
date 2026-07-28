@@ -11,12 +11,10 @@ from octorules.phases import (
     register_api_fields,
     register_namespace,
     register_non_phase_key,
-    register_phase_alias,
     register_phases,
     unregister_api_fields,
     unregister_namespace,
     unregister_non_phase_key,
-    unregister_phase_alias,
 )
 
 
@@ -152,7 +150,6 @@ def _do_register() -> None:
         [n.split(".", 1)[1] for n, *_ in _TEST_PHASE_SPECS] + ["page_shield_policies"],
     )
     register_namespace("bareprov", [n.split(".", 1)[1] for n, *_ in _TEST_BARE_PHASE_SPECS])
-    register_phase_alias("waf_managed_exceptions", "fakeprov.waf_managed_rules")
     for key in _TEST_NON_PHASE_KEYS:
         register_non_phase_key(key)
     for category, fields in _TEST_API_FIELDS.items():
@@ -172,7 +169,6 @@ def _register_test_phases():
     PHASES.clear()
     unregister_namespace("fakeprov")
     unregister_namespace("bareprov")
-    unregister_phase_alias("waf_managed_exceptions")
     for key in _TEST_NON_PHASE_KEYS:
         unregister_non_phase_key(key)
     for category in _TEST_API_FIELDS:

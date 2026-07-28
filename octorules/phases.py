@@ -58,18 +58,11 @@ ALL_PROVIDER_IDS: list[str] = []
 ZONE_PROVIDER_IDS: list[str] = []
 ACCOUNT_PROVIDER_IDS: list[str] = []
 
-# Phase names that were renamed — old name → current friendly name.
-RENAMED_PHASES: dict[str, str] = {}
-
 
 def _rebuild_derived() -> None:
     """Rebuild all derived collections in-place from PHASES."""
     PHASE_BY_NAME.clear()
     PHASE_BY_NAME.update({p.friendly_name: p for p in PHASES})
-    for alias, canonical in RENAMED_PHASES.items():
-        if canonical in PHASE_BY_NAME:
-            PHASE_BY_NAME[alias] = PHASE_BY_NAME[canonical]
-
     PHASE_BY_PROVIDER_ID.clear()
     PHASE_BY_PROVIDER_ID.update({p.provider_id: p for p in PHASES})
 
@@ -87,23 +80,6 @@ def _rebuild_derived() -> None:
 
 
 _rebuild_derived()
-
-
-def register_phase_alias(old: str, new: str) -> None:
-    """Register a backward-compat alias: *old* → *new*.
-
-    After registration, ``PHASE_BY_NAME[old]`` resolves to the same Phase as *new*.
-    """
-    with _REGISTRY_LOCK:
-        RENAMED_PHASES[old] = new
-        _rebuild_derived()
-
-
-def unregister_phase_alias(old: str) -> None:
-    """Remove a phase alias (for test teardown)."""
-    with _REGISTRY_LOCK:
-        RENAMED_PHASES.pop(old, None)
-        _rebuild_derived()
 
 
 # ---------------------------------------------------------------------------
@@ -169,8 +145,6 @@ def unregister_phase(friendly_name: str) -> None:
     with _REGISTRY_LOCK:
         if friendly_name not in PHASE_BY_NAME:
             raise KeyError(f"Phase {friendly_name!r} is not registered")
-        if friendly_name in RENAMED_PHASES.values():
-            raise ValueError(f"Cannot unregister {friendly_name!r}: it has backward-compat aliases")
         PHASES[:] = [p for p in PHASES if p.friendly_name != friendly_name]
         _rebuild_derived()
 

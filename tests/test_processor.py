@@ -162,16 +162,34 @@ class TestPhaseFilter:
         assert set(result.keys()) == {"fakeprov.redirect_rules", "fakeprov.cache_rules"}
 
     def test_include_empty_result(self):
-        pf = PhaseFilter(include=["nonexistent_phase"])
+        """Including a real phase the zone does not use yields nothing."""
+        pf = PhaseFilter(include=["fakeprov.cache_rules"])
         desired = {"fakeprov.redirect_rules": [{"ref": "r1"}]}
         result = pf.process_desired("example.com", desired, MagicMock())
         assert result == {}
 
     def test_exclude_keeps_all_when_no_match(self):
-        pf = PhaseFilter(exclude=["nonexistent_phase"])
+        """Excluding a real phase the zone does not use keeps everything."""
+        pf = PhaseFilter(exclude=["fakeprov.cache_rules"])
         desired = {"fakeprov.redirect_rules": [{"ref": "r1"}]}
         result = pf.process_desired("example.com", desired, MagicMock())
         assert set(result.keys()) == {"fakeprov.redirect_rules"}
+
+    def test_unknown_phase_raises(self):
+        """A typo must not silently change the plan's scope.
+
+        Passing through unknown names meant a mistyped `include` quietly
+        dropped that phase from the plan, and a mistyped `exclude` quietly
+        planned everything.
+        """
+        with pytest.raises(ConfigError, match="Unknown phase 'nonexistent_phase'"):
+            PhaseFilter(include=["nonexistent_phase"])
+        with pytest.raises(ConfigError, match="Unknown phase 'nonexistent_phase'"):
+            PhaseFilter(exclude=["nonexistent_phase"])
+
+    def test_unknown_phase_suggests_a_near_miss(self):
+        with pytest.raises(ConfigError, match="Did you mean 'fakeprov.redirect_rules'"):
+            PhaseFilter(include=["redirect_rulez"])
 
     def test_both_include_and_exclude_raises(self):
         with pytest.raises(ConfigError, match="mutually exclusive"):

@@ -108,14 +108,14 @@ processors:
   waf_only:
     class: octorules.processor.filters.PhaseFilter
     include:
-      - waf_custom_rules
-      - waf_managed_rules
-      - rate_limiting_rules
-      - aws_waf_custom_rules
-      - aws_waf_rate_rules
-      - gcloud_armor_custom_rules
-      - azure_waf_custom_rules
-      - bunny_waf_custom_rules
+      - cloudflare.waf_custom_rules
+      - cloudflare.waf_managed_rules
+      - cloudflare.rate_limiting_rules
+      - aws.waf_custom_rules
+      - aws.waf_rate_rules
+      - google.custom_rules
+      - azure.waf_custom_rules
+      - bunny.waf_custom_rules
 
   # Skip rules whose ref starts with "test-"
   skip_test_rules:
