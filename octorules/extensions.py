@@ -367,7 +367,12 @@ class ProviderExtension:
     be requested from a provider unable to serve it.
 
     Subclasses set :attr:`section` and override only the stages they need;
-    every stage defaults to doing nothing.  Core skips an extension whose
+    every stage defaults to doing nothing.  These are the stages core
+    dispatches *through the provider*.  Formatters and validators stay in
+    their own registries: a formatter is looked up by plan bucket from
+    ``format_zone_plan(zone_plan)``, which holds no provider, and lint calls
+    validators with no provider either — so neither can be reached from
+    ``provider.extensions``.  Core skips an extension whose
     :attr:`section` is absent from the zone's desired data, so subclasses
     do not repeat that check.
 
@@ -386,8 +391,6 @@ class ProviderExtension:
     #: Key for this extension's plans in ``ZonePlan.extension_plans``.
     #: Defaults to :attr:`section` when left empty.
     name: ClassVar[str] = ""
-    #: Formatter for this extension's plans in plan output, if any.
-    formatter: ClassVar["FormatExtension | None"] = None
 
     @classmethod
     def plan_key(cls) -> str:
@@ -421,16 +424,6 @@ class ProviderExtension:
 
     def dump(self, scope: "Scope", provider: "BaseProvider") -> dict | None:
         """Return this section's current state for dump output."""
-        return None
-
-    def validate(
-        self,
-        desired: object,
-        zone_name: str,
-        errors: list[str],
-        lines: list[str],
-    ) -> None:
-        """Offline validation of this section; append to *errors* in place."""
         return None
 
 
