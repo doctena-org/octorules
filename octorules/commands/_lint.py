@@ -79,6 +79,7 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
     )
     from octorules.planner import (
         RuleValidationError,
+        looks_like_an_uninstalled_namespace,
         prepare_desired_rules,
         validate_custom_ruleset,
         validate_list_entry,
@@ -221,6 +222,23 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
             suggestion = f"Rename to {dotted!r}" if hint else ""
             if hint:
                 message += f". Did you mean {dotted!r}?"
+        elif looks_like_an_uninstalled_namespace(key, desired[key]):
+            # A shared zone file may carry another provider's block while only
+            # some packages are installed. That file is correct; failing on it
+            # would punish it for the environment it was linted in.
+            ctx.add(
+                LintResult(
+                    rule_id="CORE011",
+                    severity=Severity.WARNING,
+                    message=(
+                        f"Section {key!r} looks like a provider namespace with no"
+                        f" package installed — it will not be managed here"
+                    ),
+                    phase=key,
+                    suggestion=f"Install octorules-{key} to manage it",
+                )
+            )
+            continue
         else:
             message = f"Unknown top-level section {key!r} — it will not be managed"
             hint = suggest_phase(key)

@@ -663,3 +663,51 @@ class TestPlanEnforcementFollowsTheRegistry:
         from octorules.planner import section_skip_is_fatal
 
         assert section_skip_is_fatal() is section_skip_is_fatal(frozenset(DEFAULT_LINT_SETS))
+
+
+class TestUninstalledProviderNamespace:
+    """A partial install must not fail a correct multi-provider file.
+
+    A shared zone file may carry an `aws:` block while only the Cloudflare
+    package is present. That file is correct; erroring on it would punish it
+    for the environment it happened to be linted in — and with strict on by
+    default, it would abort `plan`, not just lint.
+    """
+
+    def test_mapping_valued_unknown_key_is_a_warning(self):
+        from octorules.linter.engine import Severity
+
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({"someprov": {"waf_custom_rules": [{"ref": "r1"}]}}, ctx)
+        found = assert_lint(ctx, "CORE011", count=1, severity=Severity.WARNING)
+        assert "no package installed" in found[0].message
+        assert "octorules-someprov" in found[0].suggestion
+
+    def test_list_valued_unknown_key_is_still_an_error(self):
+        """A mistyped phase holds a list of rules, so it stays fatal."""
+        from octorules.linter.engine import Severity
+
+        ctx = LintContext(zone_name="example.com")
+        _core_lint_zone({"typo_rules": [{"ref": "r1"}]}, ctx)
+        assert_lint(ctx, "CORE011", count=1, severity=Severity.ERROR)
+
+    def test_plan_does_not_abort_on_an_uninstalled_namespace(self):
+        from octorules.planner import check_zone_sections
+
+        # Would raise if it were treated like a typo.
+        check_zone_sections(
+            {"someprov": {"waf_custom_rules": []}},
+            "example.com",
+            enabled_sets={"default", "strict"},
+        )
+
+    def test_plan_still_aborts_on_a_mistyped_phase(self):
+        from octorules.config import ConfigError
+        from octorules.planner import check_zone_sections
+
+        with pytest.raises(ConfigError, match="CORE011"):
+            check_zone_sections(
+                {"typo_rules": [{"ref": "r1"}]},
+                "example.com",
+                enabled_sets={"default", "strict"},
+            )

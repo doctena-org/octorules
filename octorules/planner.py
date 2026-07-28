@@ -403,6 +403,22 @@ def section_skip_is_fatal(enabled_sets: "frozenset[str] | set[str] | None" = Non
     return meta.default_severity is Severity.ERROR
 
 
+def looks_like_an_uninstalled_namespace(key: str, value: object) -> bool:
+    """Whether *key* is plausibly a provider namespace that is not installed.
+
+    A partial install is legitimate: a shared zone file may carry an ``aws:``
+    block while only the Cloudflare package is present, and that file is
+    correct — aborting on it would punish a correct file for the environment
+    it happens to be linted in.
+
+    Core cannot know the namespaces of packages that are absent, so the
+    discriminator is shape: a namespace block is a mapping of sections, while
+    a mistyped phase key holds a list of rules.  A mistyped phase stays an
+    error; an uninstalled provider's block is only a warning.
+    """
+    return "." not in key and isinstance(value, dict)
+
+
 def check_zone_sections(
     rules_data: dict,
     zone_name: str,
@@ -438,8 +454,8 @@ def check_zone_sections(
         and meta.default_severity is Severity.ERROR
     )
 
-    def _emit(message: str) -> None:
-        if fatal:
+    def _emit(message: str, *, downgrade: bool = False) -> None:
+        if fatal and not downgrade:
             raise ConfigError(f"{message} ({SKIPPED_SECTION_RULE})")
         if active:
             log.warning("%s", message)
@@ -461,6 +477,14 @@ def check_zone_sections(
                     f"Unknown key {member!r} in namespace {ns!r} in rules"
                     f" for {zone_name} — it will not be managed"
                 )
+            continue
+        if looks_like_an_uninstalled_namespace(key, rules_data[key]):
+            _emit(
+                f"Section {key!r} in rules for {zone_name} looks like a provider"
+                f" namespace with no package installed — it will not be managed"
+                f" here. Install octorules-{key} to manage it.",
+                downgrade=True,
+            )
             continue
         _emit(f"{unknown_phase_message(key)} in rules for {zone_name}")
 
