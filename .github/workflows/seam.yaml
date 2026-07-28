@@ -1,0 +1,114 @@
+---
+# The cross-provider seam is untestable in a single-package venv: core's 23
+# provider-conditional tests skip, and `octorules dump` on a multi-provider
+# zone crashed for a whole release without anything noticing. Two topologies,
+# because they catch different things.
+name: Seam
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, to catch a provider release that breaks against core's main.
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # Editable: this core plus every provider from source, so a seam regression
+  # surfaces on the PR that causes it rather than after release.
+  editable:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: octorules
+      - uses: actions/checkout@v7
+        with:
+          repository: doctena-org/octorules-cloudflare
+          path: octorules-cloudflare
+      - uses: actions/checkout@v7
+        with:
+          repository: doctena-org/octorules-aws
+          path: octorules-aws
+      - uses: actions/checkout@v7
+        with:
+          repository: doctena-org/octorules-azure
+          path: octorules-azure
+      - uses: actions/checkout@v7
+        with:
+          repository: doctena-org/octorules-google
+          path: octorules-google
+      - uses: actions/checkout@v7
+        with:
+          repository: doctena-org/octorules-bunny
+          path: octorules-bunny
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install core and every provider from source
+        run: |
+          pip install -e ./octorules[dev]
+          for p in cloudflare aws azure google bunny; do
+            pip install -e "./octorules-$p"
+          done
+      - name: Core suite with every provider present
+        # The 23 provider-conditional tests only execute here.
+        run: |
+          cd octorules
+          pytest tests/ -q -rs
+      - name: The provider-conditional tests must not be skipped
+        run: |
+          cd octorules
+          skipped=$(pytest tests/ -q -rs 2>&1 | grep -c 'not all providers installed' || true)
+          if [ "$skipped" != "0" ]; then
+            echo "::error::provider-conditional tests skipped in the combined venv"
+            exit 1
+          fi
+      - name: Lint the five-provider example estate
+        run: |
+          cd octorules/examples
+          octorules --config config.yaml lint
+
+  # Published: the same estate against real wheels from PyPI, which is the
+  # only thing that sees packaging faults — an editable install maps the
+  # source tree, so a wheel-contents bug is invisible in every dev venv.
+  published:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install the published fleet, non-editable
+        run: |
+          pip install octorules-cloudflare octorules-aws \
+                      octorules-azure octorules-google octorules-bunny
+      - name: Every namespace registers together
+        run: |
+          python -c "
+          import octorules_cloudflare, octorules_aws, octorules_azure
+          import octorules_google, octorules_bunny
+          from octorules.phases import PROVIDER_NAMESPACES
+          got = sorted(PROVIDER_NAMESPACES)
+          want = ['aws', 'azure', 'bunny', 'cloudflare', 'google']
+          assert got == want, f'{got} != {want}'
+          print('namespaces:', got)
+          "
+      - name: Test helpers must not be importable from a wheel
+        run: |
+          python - <<'PY'
+          import importlib.util
+          for name in ("tests", "scripts"):
+              if importlib.util.find_spec(name) is not None:
+                  raise SystemExit(f"{name!r} is importable from an installed wheel")
+          print("no test or script packages leaked into the wheels")
+          PY
