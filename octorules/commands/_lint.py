@@ -131,8 +131,13 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
                     )
                 )
 
-    # CORE006: empty rules file (no actual rules in any phase)
-    if total_rules == 0:
+    # CORE006: empty rules file (no actual rules in any phase).  Skipped when
+    # the file's only content belongs to a provider that is not installed:
+    # core cannot see inside that namespace, so "contains no rules" would be
+    # plainly false about a file that has plenty.
+    if total_rules == 0 and not any(
+        looks_like_an_uninstalled_namespace(k, v) for k, v in desired.items()
+    ):
         ctx.add(
             LintResult(
                 rule_id="CORE006",

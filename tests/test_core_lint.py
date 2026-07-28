@@ -711,3 +711,17 @@ class TestUninstalledProviderNamespace:
                 "example.com",
                 enabled_sets={"default", "strict"},
             )
+
+
+class TestCore006AndUninstalledProviders:
+    def test_no_empty_file_claim_when_a_provider_is_absent(self):
+        """ "Contains no rules" would be plainly false about a file whose rules
+        sit in a namespace core cannot see into."""
+        ctx = LintContext(zone_name="other.example")
+        _core_lint_zone({"someprov": {"waf_custom_rules": [{"ref": "r1"}]}}, ctx)
+        assert_no_lint(ctx, "CORE006")
+
+    def test_a_genuinely_empty_file_still_reports(self):
+        ctx = LintContext(zone_name="empty.example")
+        _core_lint_zone({"fakeprov.redirect_rules": []}, ctx)
+        assert_lint(ctx, "CORE006", count=1)
