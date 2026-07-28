@@ -12,7 +12,6 @@ on:
     # Weekly, to catch a provider release that breaks against core's main.
     - cron: '17 4 * * 1'
   workflow_dispatch:
-  workflow_call:
 
 permissions:
   contents: read
@@ -58,15 +57,14 @@ jobs:
             pip install -e "./octorules-$p"
           done
       - name: Core suite with every provider present
-        # The 23 provider-conditional tests only execute here.
+        # The 23 provider-conditional tests only execute here, so this run is
+        # also what proves they were not skipped -- read from the same output
+        # rather than a second run that could differ.
         run: |
           cd octorules
-          pytest tests/ -q -rs
-      - name: The provider-conditional tests must not be skipped
-        run: |
-          cd octorules
-          skipped=$(pytest tests/ -q -rs 2>&1 | grep -c 'not all providers installed' || true)
-          if [ "$skipped" != "0" ]; then
+          set -o pipefail
+          pytest tests/ -q -rs 2>&1 | tee run.log
+          if grep -q 'not all providers installed' run.log; then
             echo "::error::provider-conditional tests skipped in the combined venv"
             exit 1
           fi
@@ -83,6 +81,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Nothing here reads the working tree, but `cache: pip` needs a
+      # dependency file to hash for its key.
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
