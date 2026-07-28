@@ -145,7 +145,14 @@ class LintContext:
             return
         if self.phase_filter and result.phase and result.phase not in self.phase_filter:
             return
-        if self.enabled_sets is not None and not self._rule_is_active(result.rule_id):
+        # `--rule X` is an explicit request for X, so it wins over the set
+        # selection: asking for a rule and silently getting nothing back is
+        # the sort of quiet no-op this filtering is meant to prevent.
+        if (
+            self.enabled_sets is not None
+            and not (self.rule_filter and result.rule_id in self.rule_filter)
+            and not self._rule_is_active(result.rule_id)
+        ):
             return
         if self.suppressions and is_suppressed(self.suppressions, result.ref, result.rule_id):
             from octorules.linter.rules.registry import is_suppressible
@@ -301,7 +308,7 @@ def _register_core_rules() -> None:
                 # In both sets, for different reasons.  `default` keeps lint
                 # reporting it always; `strict` is what makes *plan* enforce
                 # it — drop strict and an unknown section warns instead of
-                # aborting, which is what the old strict_sections: false did.
+                # aborting.
                 # Not waivable from a zone file: this rule decides whether
                 # plan manages a section, so a comment in a data file must
                 # not switch off a deploy guard.  Exempt a zone through its

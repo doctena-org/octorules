@@ -8,6 +8,12 @@ from dataclasses import dataclass
 
 from octorules.linter.engine import Severity
 
+#: The named sets a rule may belong to, and the only names
+#: ``manager.lint.sets`` accepts.  Both sides validate against this list: a
+#: typo'd set name puts a rule in no active set, which stops it reporting
+#: without saying so.
+KNOWN_RULE_SETS = frozenset({"default", "strict"})
+
 
 @dataclass(frozen=True)
 class RuleMeta:
@@ -25,6 +31,14 @@ class RuleMeta:
     #: section: a comment in a data file must not switch off a deploy-time
     #: guard, and the exemption belongs in the config instead.
     suppressible: bool = True
+
+    def __post_init__(self) -> None:
+        unknown = sorted(self.sets - KNOWN_RULE_SETS)
+        if unknown:
+            raise ValueError(
+                f"{self.rule_id}: unknown rule set(s) {', '.join(unknown)} —"
+                f" known sets are {', '.join(sorted(KNOWN_RULE_SETS))}"
+            )
 
 
 RULE_REGISTRY: dict[str, RuleMeta] = {}
@@ -50,11 +64,6 @@ def get_rule_meta(rule_id: str) -> RuleMeta | None:
 def all_rule_ids() -> list[str]:
     """Return all registered rule IDs, sorted."""
     return sorted(RULE_REGISTRY.keys())
-
-
-def active_rule_ids(enabled_sets: "frozenset[str] | set[str]") -> set[str]:
-    """Rule IDs belonging to at least one of *enabled_sets*."""
-    return {rid for rid, meta in RULE_REGISTRY.items() if meta.sets & set(enabled_sets)}
 
 
 def is_suppressible(rule_id: str) -> bool:

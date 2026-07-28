@@ -202,7 +202,8 @@ def _plan_zones(
         zone_cfg = config.zones[zn]
         target_pairs = _get_zone_providers(zone_cfg, providers)
         # Zone-level section check on the full (pre-scoping) rules view,
-        # before any API work — warns, or raises under strict_sections.
+        # before any API work — reports at CORE011's severity, and raises
+        # when the strict set is enabled.
         check_zone_sections(
             config.load_zone_rules(zn),
             zn,

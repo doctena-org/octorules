@@ -162,8 +162,8 @@ def unregister_phase(friendly_name: str) -> None:
 # provider can actually manage them is a separate question, answered by
 # the SUPPORTS_LISTS / SUPPORTS_CUSTOM_RULESETS capability check at plan
 # time; treating them as unknown sections here made a plain ``lists:``
-# section abort plan under ``strict_sections`` on every provider that
-# didn't register it (aws, azure, google, bunny).
+# section abort plan (via CORE011, under the strict set) on every provider
+# that didn't register it (aws, azure, google, bunny).
 NAMESPACE_CORE_SECTIONS = frozenset({"lists", "custom_rulesets"})
 
 # Mutable set — mutated **in-place** so that code which did

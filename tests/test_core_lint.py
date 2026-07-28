@@ -725,3 +725,25 @@ class TestCore006AndUninstalledProviders:
         ctx = LintContext(zone_name="empty.example")
         _core_lint_zone({"fakeprov.redirect_rules": []}, ctx)
         assert_lint(ctx, "CORE006", count=1)
+
+
+class TestRuleFilterBeatsTheSetSelection:
+    def test_explicit_rule_runs_even_when_its_set_is_off(self):
+        """`--rule X` is a request for X; returning nothing would be a quiet
+        no-op of exactly the kind this filtering exists to prevent."""
+        from octorules.linter.engine import LintResult, Severity, get_known_rule_ids
+
+        get_known_rule_ids()
+        ctx = LintContext(
+            zone_name="z", enabled_sets=frozenset({"strict"}), rule_filter=["CORE006"]
+        )
+        ctx.add(LintResult(rule_id="CORE006", severity=Severity.INFO, message="x"))
+        assert [r.rule_id for r in ctx.results] == ["CORE006"]
+
+    def test_without_the_flag_the_set_still_filters(self):
+        from octorules.linter.engine import LintResult, Severity, get_known_rule_ids
+
+        get_known_rule_ids()
+        ctx = LintContext(zone_name="z", enabled_sets=frozenset({"strict"}))
+        ctx.add(LintResult(rule_id="CORE006", severity=Severity.INFO, message="x"))
+        assert ctx.results == []

@@ -142,6 +142,14 @@ def _parse_lint_sets(section: object, where: str, ctx: str = "") -> frozenset[st
         )
     if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
         raise ConfigError(f"'{where}.sets' must be a list of set names{ctx}")
+    from octorules.linter.rules.registry import KNOWN_RULE_SETS
+
+    unknown = sorted(set(raw) - KNOWN_RULE_SETS)
+    if unknown:
+        raise ConfigError(
+            f"'{where}.sets' names unknown set(s) {', '.join(repr(s) for s in unknown)} —"
+            f" known sets are {', '.join(sorted(KNOWN_RULE_SETS))}{ctx}"
+        )
     return frozenset(raw)
 
 

@@ -9,6 +9,7 @@ from octorules.config import (
     ProviderConfig,
     ZoneConfig,
     _ctx,
+    _parse_lint_sets,
     _resolve_deep,
     _resolve_secret,
     resolve_value,
@@ -3048,3 +3049,26 @@ class TestUnknownConfigKeys:
         config_file.write_text(_cfg(extra_zone="    lint:\n      sets: [default]\n"))
         config = Config.from_file(config_file)
         assert config.zones["example.com"].lint_sets == frozenset({"default"})
+
+
+class TestLintSetNameValidation:
+    """A typo'd set name would put rules in no active set — silently."""
+
+    def test_unknown_set_name_is_rejected(self):
+        with pytest.raises(ConfigError, match="unknown set"):
+            _parse_lint_sets({"sets": ["defualt", "strict"]}, "manager.lint")
+
+    def test_known_names_pass(self):
+        assert _parse_lint_sets({"sets": ["default", "strict"]}, "manager.lint") == frozenset(
+            {"default", "strict"}
+        )
+
+    def test_empty_list_is_allowed_as_an_explicit_opt_out(self):
+        assert _parse_lint_sets({"sets": []}, "manager.lint") == frozenset()
+
+    def test_a_rule_declaring_an_unknown_set_fails_loudly(self):
+        from octorules.linter.engine import Severity
+        from octorules.linter.rules.registry import RuleMeta
+
+        with pytest.raises(ValueError, match="unknown rule set"):
+            RuleMeta("XX001", "cat", "desc", Severity.ERROR, sets=frozenset({"strcit"}))

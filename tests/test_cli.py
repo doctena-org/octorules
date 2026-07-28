@@ -219,7 +219,7 @@ class TestCmdPlan:
         assert result == 0
 
     @patch("octorules.commands._providers._init_providers")
-    def test_plan_strict_sections_aborts_before_api(self, mock_init_provs, sample_config):
+    def test_plan_strict_set_aborts_before_api(self, mock_init_provs, sample_config):
         """manager.lint.sets escalates an unknown section to ConfigError."""
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
@@ -246,7 +246,7 @@ class TestCmdPlan:
         assert "typo_rules" in caplog.text
 
     @patch("octorules.commands._providers._init_providers")
-    def test_plan_strict_sections_unsupported_feature(self, mock_init_provs, sample_config):
+    def test_plan_strict_set_unsupported_feature(self, mock_init_provs, sample_config):
         """The strict set also escalates the unsupported-feature skip."""
         mock_prov = MagicMock(spec=BaseProvider)
         mock_prov.SUPPORTS = frozenset()  # supports nothing
