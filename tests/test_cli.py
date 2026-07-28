@@ -220,26 +220,26 @@ class TestCmdPlan:
 
     @patch("octorules.commands._providers._init_providers")
     def test_plan_strict_sections_aborts_before_api(self, mock_init_provs, sample_config):
-        """manager.strict_sections escalates an unknown section to ConfigError."""
+        """manager.lint.sets escalates an unknown section to ConfigError."""
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("typo_rules:\n  - ref: r1\n    expression: 'true'\n")
-        sample_config.strict_sections = True
-        with pytest.raises(ConfigError, match="strict_sections"):
+        sample_config.lint_sets = frozenset({"default", "strict"})
+        with pytest.raises(ConfigError, match="CORE011"):
             cmd_plan(sample_config, ["example.com"])
         mock_prov.get_all_phase_rules.assert_not_called()
 
     @patch("octorules.commands._providers._init_providers")
     def test_plan_zone_override_disables_strict(self, mock_init_provs, sample_config, caplog):
-        """zones.<name>.strict_sections: false wins over the manager flag."""
+        """zones.<name>.lint.sets without strict wins over the manager flag."""
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("typo_rules:\n  - ref: r1\n    expression: 'true'\n")
-        sample_config.strict_sections = True
-        sample_config.zones["example.com"].strict_sections = False
+        sample_config.lint_sets = frozenset({"default", "strict"})
+        sample_config.zones["example.com"].lint_sets = frozenset({"default"})
         with caplog.at_level(logging.WARNING, logger="octorules"):
             result = cmd_plan(sample_config, ["example.com"])
         assert result == 0
@@ -247,13 +247,13 @@ class TestCmdPlan:
 
     @patch("octorules.commands._providers._init_providers")
     def test_plan_strict_sections_unsupported_feature(self, mock_init_provs, sample_config):
-        """strict_sections also escalates the unsupported-feature skip."""
+        """The strict set also escalates the unsupported-feature skip."""
         mock_prov = MagicMock(spec=BaseProvider)
         mock_prov.SUPPORTS = frozenset()  # supports nothing
         mock_init_provs.return_value = {"cloudflare": mock_prov}
         rules_file = sample_config.rules_dir / "example.com.yaml"
         rules_file.write_text("lists:\n  - name: blocked\n    kind: ip\n    items: []\n")
-        sample_config.strict_sections = True
+        sample_config.lint_sets = frozenset({"default", "strict"})
         with pytest.raises(ConfigError, match="does not support"):
             cmd_plan(sample_config, ["example.com"])
 

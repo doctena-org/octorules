@@ -556,3 +556,110 @@ class TestCore011UnknownSection:
         _core_lint_zone({"some_other_key": [], "an_unclaimed_typo": []}, ctx)
         found = assert_lint(ctx, "CORE011", count=1)
         assert "an_unclaimed_typo" in found[0].message
+
+
+class TestLintSetsAndSuppressibility:
+    """manager.lint.sets selects which rules run; some cannot be waived."""
+
+    def test_rule_outside_the_enabled_sets_does_not_run(self):
+        """A rule in `default` only is silent when just `strict` is enabled."""
+        from octorules.linter.engine import LintResult, Severity
+
+        ctx = LintContext(zone_name="z", enabled_sets=frozenset({"strict"}))
+        # CORE006 is a default-set rule.
+        ctx.add(LintResult(rule_id="CORE006", severity=Severity.INFO, message="x"))
+        assert [r.rule_id for r in ctx.results] == []
+
+    def test_rule_in_an_enabled_set_runs(self):
+        from octorules.linter.engine import LintResult, Severity
+
+        ctx = LintContext(zone_name="z", enabled_sets=frozenset({"default"}))
+        ctx.add(LintResult(rule_id="CORE006", severity=Severity.INFO, message="x"))
+        assert [r.rule_id for r in ctx.results] == ["CORE006"]
+
+    def test_none_enabled_sets_runs_everything(self):
+        """A caller with no config — a single-file lint — gets every rule."""
+        from octorules.linter.engine import LintResult, Severity
+
+        ctx = LintContext(zone_name="z")
+        assert ctx.enabled_sets is None
+        ctx.add(LintResult(rule_id="CORE006", severity=Severity.INFO, message="x"))
+        assert [r.rule_id for r in ctx.results] == ["CORE006"]
+
+    def test_core011_is_declared_non_suppressible(self):
+        from octorules.linter.engine import get_known_rule_ids
+        from octorules.linter.rules.registry import is_suppressible
+
+        get_known_rule_ids()
+        assert is_suppressible("CORE011") is False
+        assert is_suppressible("CORE006") is True
+
+    def test_unknown_rule_defaults_to_suppressible(self):
+        """A provider rule we have no metadata for must not become unwaivable."""
+        from octorules.linter.rules.registry import is_suppressible
+
+        assert is_suppressible("ZZ999") is True
+
+    def test_directive_cannot_waive_a_non_suppressible_rule(self):
+        """The guard holds, and the author is told the directive did nothing."""
+        from octorules.linter.engine import LintResult, Severity
+
+        ctx = LintContext(zone_name="z", suppressions={"*": {"CORE011"}})
+        ctx.add(LintResult(rule_id="CORE011", severity=Severity.ERROR, message="skipped"))
+        assert [r.rule_id for r in ctx.results] == ["CORE011"]
+        assert ctx.suppressed_count == 0
+        assert any("cannot be suppressed" in reason for _, reason in ctx.ineffective_suppressions)
+
+    def test_directive_waives_a_suppressible_rule(self):
+        from octorules.linter.engine import LintResult, Severity
+
+        ctx = LintContext(zone_name="z", suppressions={"*": {"CORE006"}})
+        ctx.add(LintResult(rule_id="CORE006", severity=Severity.INFO, message="empty"))
+        assert ctx.results == []
+        assert ctx.suppressed_count == 1
+        assert ctx.ineffective_suppressions == []
+
+    def test_core012_reports_a_directive_for_an_inactive_rule(self):
+        from octorules.commands._lint import _report_ineffective_suppressions
+        from octorules.linter.engine import get_known_rule_ids
+
+        get_known_rule_ids()
+        ctx = LintContext(
+            zone_name="z",
+            enabled_sets=frozenset({"strict"}),
+            suppressions={"*": {"CORE006"}},
+        )
+        _report_ineffective_suppressions(ctx)
+        found = [r for r in ctx.results if r.rule_id == "CORE012"]
+        assert len(found) == 1
+        assert "no enabled validator set contains it" in found[0].message
+
+    def test_core012_stays_active_in_every_set(self):
+        """Selecting a set must not silence the rule that explains the choice."""
+        from octorules.linter.engine import get_known_rule_ids
+        from octorules.linter.rules.registry import get_rule_meta
+
+        get_known_rule_ids()
+        assert get_rule_meta("CORE012").sets == frozenset({"default", "strict"})
+
+
+class TestPlanEnforcementFollowsTheRegistry:
+    """Plan reads the same rule lint does, rather than its own switch."""
+
+    def test_strict_enabled_makes_a_skipped_section_fatal(self):
+        from octorules.planner import section_skip_is_fatal
+
+        assert section_skip_is_fatal(frozenset({"default", "strict"})) is True
+
+    def test_strict_disabled_downgrades_to_a_warning(self):
+        """Dropping strict must warn, not go silent — the old strict_sections:
+        false behaviour."""
+        from octorules.planner import section_skip_is_fatal
+
+        assert section_skip_is_fatal(frozenset({"default"})) is False
+
+    def test_default_matches_the_config_default(self):
+        from octorules.config import DEFAULT_LINT_SETS
+        from octorules.planner import section_skip_is_fatal
+
+        assert section_skip_is_fatal() is section_skip_is_fatal(frozenset(DEFAULT_LINT_SETS))

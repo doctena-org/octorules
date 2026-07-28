@@ -120,6 +120,31 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
         raise ConfigError(f"Invalid YAML in {path}: {e}") from e
 
 
+#: Sets enabled when ``manager.lint`` says nothing.  Strict is on by default:
+#: a section octorules would silently skip should stop a deploy, and opting
+#: into safety is the wrong default for a tool that writes to production.
+DEFAULT_LINT_SETS: tuple[str, ...] = ("default", "strict")
+
+
+def _parse_lint_sets(section: object, where: str, ctx: str = "") -> frozenset[str] | None:
+    """Parse a ``lint: {sets: [...]}`` block. Returns None when absent."""
+    if section is None:
+        return None
+    if not isinstance(section, dict):
+        raise ConfigError(f"'{where}' must be a mapping (got {type(section).__name__}){ctx}")
+    if "sets" not in section:
+        return None
+    raw = section["sets"]
+    if isinstance(raw, str):
+        raise ConfigError(
+            f"'{where}.sets' must be a list of set names, not a string —"
+            f" use [{raw!r}] to enable a single set{ctx}"
+        )
+    if not isinstance(raw, list) or not all(isinstance(s, str) for s in raw):
+        raise ConfigError(f"'{where}.sets' must be a list of set names{ctx}")
+    return frozenset(raw)
+
+
 def normalize_zone_format(data: dict, *, source: str = "") -> dict:
     """Normalize a zone rules mapping to the canonical flat form.
 
@@ -335,8 +360,8 @@ class ZoneConfig:
     processors: list[str] = field(default_factory=list)
     always_dry_run: bool = False
     allow_unmanaged: bool = False
-    # Per-zone override of manager.strict_sections; None inherits.
-    strict_sections: bool | None = None
+    # Per-zone override of manager.lint.sets; None inherits.
+    lint_sets: frozenset[str] | None = None
     delete_threshold: float = 30.0
     update_threshold: float = 30.0
     min_existing: int = 3
@@ -457,13 +482,7 @@ def _parse_zone(
         )
     allow_unmanaged = raw_unmanaged
 
-    raw_strict = zone_data.get("strict_sections")
-    if raw_strict is not None and not isinstance(raw_strict, bool):
-        raise ConfigError(
-            f"'zones.{zone_name}.strict_sections' must be a boolean"
-            f" (got {type(raw_strict).__name__}){zd_ctx}"
-        )
-    strict_sections = raw_strict
+    lint_sets = _parse_lint_sets(zone_data.get("lint"), f"zones.{zone_name}.lint", zd_ctx)
 
     # Parse and validate processors list
     raw_processors = zone_data.get("processors", [])
@@ -529,7 +548,7 @@ def _parse_zone(
         "always_dry_run",
         "allow_unmanaged",
         "safety",
-        "strict_sections",
+        "lint_sets",
         "zone_id",
         "zone_names",
     }
@@ -545,7 +564,7 @@ def _parse_zone(
         processors=processors,
         always_dry_run=always_dry_run,
         allow_unmanaged=allow_unmanaged,
-        strict_sections=strict_sections,
+        lint_sets=lint_sets,
         delete_threshold=delete_threshold,
         update_threshold=update_threshold,
         min_existing=min_existing,
@@ -578,7 +597,7 @@ class Config:
     zones: dict[str, ZoneConfig] = field(default_factory=dict)
     max_workers: int = 1
     # Escalate skipped zone-file sections from warnings to ConfigError.
-    strict_sections: bool = False
+    lint_sets: frozenset[str] = frozenset(DEFAULT_LINT_SETS)
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     processors: dict[str, ProcessorConfig] = field(default_factory=dict)
     plan_outputs: dict[str, PlanOutput] = field(default_factory=dict)
@@ -594,12 +613,12 @@ class Config:
         if self.lists_dir is None:
             self.lists_dir = Path(self.rules_dir) / "custom_lists"
 
-    def strict_sections_for(self, zone_name: str) -> bool:
-        """Effective ``strict_sections`` for *zone_name* (zone override wins)."""
+    def lint_sets_for(self, zone_name: str) -> frozenset[str]:
+        """Effective enabled lint sets for *zone_name* (zone override wins)."""
         zone = self.zones.get(zone_name)
-        if zone is not None and zone.strict_sections is not None:
-            return zone.strict_sections
-        return self.strict_sections
+        if zone is not None and zone.lint_sets is not None:
+            return zone.lint_sets
+        return self.lint_sets
 
     def expand_templates(self, discovered: dict[str, list[str]]) -> None:
         """Expand zone templates with discovered zone names.
@@ -623,7 +642,7 @@ class Config:
                         processors=list(template.processors),
                         always_dry_run=template.always_dry_run,
                         allow_unmanaged=template.allow_unmanaged,
-                        strict_sections=template.strict_sections,
+                        lint_sets=template.lint_sets,
                         delete_threshold=template.delete_threshold,
                         update_threshold=template.update_threshold,
                         min_existing=template.min_existing,
@@ -909,13 +928,9 @@ class Config:
         if max_workers < 1:
             raise ConfigError(f"'manager.max_workers' must be >= 1{mgr_ctx}")
 
-        raw_strict = manager_section.get("strict_sections", False)
-        if not isinstance(raw_strict, bool):
-            raise ConfigError(
-                f"'manager.strict_sections' must be a boolean"
-                f" (got {type(raw_strict).__name__}){mgr_ctx}"
-            )
-        strict_sections = raw_strict
+        lint_sets = _parse_lint_sets(manager_section.get("lint"), "manager.lint", mgr_ctx)
+        if lint_sets is None:
+            lint_sets = frozenset(DEFAULT_LINT_SETS)
 
         raw_plan_outputs = manager_section.get("plan_outputs")
         if raw_plan_outputs is not None:
@@ -950,7 +965,7 @@ class Config:
             lists_dir=lists_dir,
             zones=zones,
             max_workers=max_workers,
-            strict_sections=strict_sections,
+            lint_sets=lint_sets,
             providers=providers,
             processors=processors,
             plan_outputs=plan_outputs,

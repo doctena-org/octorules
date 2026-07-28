@@ -914,14 +914,14 @@ class TestWarnUnknownPhaseKeysLists:
         """The 'lists' key should be recognized as a non-phase key."""
         rules_data = {"fakeprov.redirect_rules": [], "lists": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "account")
+            check_zone_sections(rules_data, "account", enabled_sets={"default"})
         assert "lists" not in caplog.text
 
     def test_lists_and_custom_rulesets_not_warned(self, caplog):
         """Both 'lists' and 'custom_rulesets' should be recognized."""
         rules_data = {"fakeprov.redirect_rules": [], "lists": [], "custom_rulesets": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "account")
+            check_zone_sections(rules_data, "account", enabled_sets={"default"})
         assert "lists" not in caplog.text
         assert "custom_rulesets" not in caplog.text
 
@@ -929,7 +929,7 @@ class TestWarnUnknownPhaseKeysLists:
         """Unknown keys should still be warned even when 'lists' is present."""
         rules_data = {"lists": [], "bogus_phase": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "account")
+            check_zone_sections(rules_data, "account", enabled_sets={"default"})
         assert "lists" not in caplog.text
         assert "bogus_phase" in caplog.text
 

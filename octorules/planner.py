@@ -365,32 +365,84 @@ def validate_rules(rules: list[RuleDict], phase: Phase) -> None:
         _validate_octorules_meta(rule, ref)
 
 
+#: The lint rule that owns "this section would be silently skipped".  Plan
+#: consults its severity rather than carrying a switch of its own, so the
+#: condition has one definition instead of two kept in step by a comment.
+SKIPPED_SECTION_RULE = "CORE011"
+
+
+def _skipped_section_meta():
+    """Metadata for the skipped-section rule, ensuring core rules are loaded.
+
+    Core rules register lazily, so a planner call that happens before any lint
+    ran would otherwise see no rule and silently report nothing.
+    """
+    from octorules.linter.engine import _register_core_rules
+    from octorules.linter.rules.registry import get_rule_meta
+
+    _register_core_rules()
+    return get_rule_meta(SKIPPED_SECTION_RULE)
+
+
+#: Enabling this set is what makes plan *enforce* the rules in it rather than
+#: merely report them.  A rule can be in `default` too, so lint keeps
+#: reporting it either way.
+STRICT_SET = "strict"
+
+
+def section_skip_is_fatal(enabled_sets: "frozenset[str] | set[str] | None" = None) -> bool:
+    """Whether a skipped section should abort plan, per the rule registry."""
+    from octorules.config import DEFAULT_LINT_SETS
+    from octorules.linter.engine import Severity
+
+    if enabled_sets is None:
+        enabled_sets = frozenset(DEFAULT_LINT_SETS)
+    meta = _skipped_section_meta()
+    if meta is None or STRICT_SET not in set(enabled_sets):
+        return False
+    return meta.default_severity is Severity.ERROR
+
+
 def check_zone_sections(
     rules_data: dict,
     zone_name: str,
     *,
     target_namespaces: frozenset[str] | None = None,
-    strict: bool = False,
+    enabled_sets: "frozenset[str] | set[str] | None" = None,
 ) -> None:
     """Check the top-level sections of a zone rules file.
 
-    Renamed phases get a deprecation warning (they still work via
-    aliases).  Sections that would be skipped at plan time — unknown
-    keys, and sections owned by a provider namespace the zone does not
-    target — are warned about, or raise :class:`ConfigError` when
-    *strict* is true (``strict_sections``).
+    Sections that plan would skip — unknown keys, and sections owned by a
+    provider namespace the zone does not target — are reported at the
+    severity the rule registry gives :data:`SKIPPED_SECTION_RULE`, and
+    abort with :class:`ConfigError` when that severity is ERROR and the
+    rule's set is enabled.  This is the same rule ``octorules lint``
+    reports, so the two cannot disagree about what counts as skipped.
 
     *target_namespaces* is the set of ``NAMESPACE`` values of the
     zone's target providers.  ``None`` disables the namespace-coverage
     check: it means at least one target declares no namespace, and such
     a target sees every section.
     """
-    from octorules.config import ConfigError
+    from octorules.config import DEFAULT_LINT_SETS, ConfigError
+    from octorules.linter.engine import Severity
+
+    if enabled_sets is None:
+        enabled_sets = frozenset(DEFAULT_LINT_SETS)
+    meta = _skipped_section_meta()
+    active = meta is not None and bool(meta.sets & set(enabled_sets))
+    fatal = (
+        active
+        and meta is not None
+        and STRICT_SET in set(enabled_sets)
+        and meta.default_severity is Severity.ERROR
+    )
 
     def _emit(message: str) -> None:
-        if strict:
-            raise ConfigError(f"{message} (strict_sections)")
-        log.warning("%s", message)
+        if fatal:
+            raise ConfigError(f"{message} ({SKIPPED_SECTION_RULE})")
+        if active:
+            log.warning("%s", message)
 
     unknown = set(rules_data.keys()) - PHASE_BY_NAME.keys() - KNOWN_NON_PHASE_KEYS
     for key in sorted(unknown):

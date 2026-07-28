@@ -683,57 +683,60 @@ class TestMaxWorkers:
             Config.from_file(config_file)
 
 
-class TestStrictSections:
-    """Tests for manager.strict_sections and the per-zone override."""
+class TestLintSets:
+    """Tests for manager.lint.sets and the per-zone override."""
 
-    def test_default_false(self, tmp_path):
+    def test_default_enables_default_and_strict(self, tmp_path):
+        """Strict is on out of the box: a silently skipped section should stop
+        a deploy, and opting in to safety is the wrong default here."""
         config_file = tmp_path / "config.yaml"
         config_file.write_text(_cfg())
         config = Config.from_file(config_file)
-        assert config.strict_sections is False
-        assert config.zones["example.com"].strict_sections is None
-        assert config.strict_sections_for("example.com") is False
+        assert config.lint_sets == frozenset({"default", "strict"})
+        assert config.zones["example.com"].lint_sets is None
+        assert config.lint_sets_for("example.com") == frozenset({"default", "strict"})
 
-    def test_manager_true(self, tmp_path):
+    def test_manager_selects_sets(self, tmp_path):
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg() + "manager:\n  strict_sections: true\n")
+        config_file.write_text(_cfg() + "manager:\n  lint:\n    sets: [default]\n")
         config = Config.from_file(config_file)
-        assert config.strict_sections is True
-        assert config.strict_sections_for("example.com") is True
+        assert config.lint_sets == frozenset({"default"})
+        assert config.lint_sets_for("example.com") == frozenset({"default"})
 
-    def test_manager_invalid_type(self, tmp_path):
+    def test_scalar_instead_of_list_is_rejected(self, tmp_path):
+        """A bare string is the mistake a key named `sets` invites."""
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg() + "manager:\n  strict_sections: definitely\n")
-        with pytest.raises(ConfigError, match="strict_sections.*must be a boolean"):
+        config_file.write_text(_cfg() + "manager:\n  lint:\n    sets: strict\n")
+        with pytest.raises(ConfigError, match="must be a list of set names"):
             Config.from_file(config_file)
 
-    def test_zone_override_disables(self, tmp_path):
+    def test_non_mapping_lint_block_is_rejected(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  lint: strict\n")
+        with pytest.raises(ConfigError, match="'manager.lint' must be a mapping"):
+            Config.from_file(config_file)
+
+    def test_zone_override_wins(self, tmp_path):
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
-            _cfg(extra_zone="    strict_sections: false\n") + "manager:\n  strict_sections: true\n"
+            _cfg(extra_zone="    lint:\n      sets: [default]\n")
+            + "manager:\n  lint:\n    sets: [default, strict]\n"
         )
         config = Config.from_file(config_file)
-        assert config.zones["example.com"].strict_sections is False
-        assert config.strict_sections_for("example.com") is False
-
-    def test_zone_override_enables(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_zone="    strict_sections: true\n"))
-        config = Config.from_file(config_file)
-        assert config.strict_sections is False
-        assert config.strict_sections_for("example.com") is True
+        assert config.zones["example.com"].lint_sets == frozenset({"default"})
+        assert config.lint_sets_for("example.com") == frozenset({"default"})
 
     def test_zone_invalid_type(self, tmp_path):
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_zone="    strict_sections: 1\n"))
-        with pytest.raises(ConfigError, match="strict_sections.*must be a boolean"):
+        config_file.write_text(_cfg(extra_zone="    lint:\n      sets: 1\n"))
+        with pytest.raises(ConfigError, match="must be a list of set names"):
             Config.from_file(config_file)
 
     def test_unknown_zone_falls_back_to_manager(self, tmp_path):
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg() + "manager:\n  strict_sections: true\n")
+        config_file.write_text(_cfg() + "manager:\n  lint:\n    sets: [default]\n")
         config = Config.from_file(config_file)
-        assert config.strict_sections_for("nonexistent.example") is True
+        assert config.lint_sets_for("nonexistent.example") == frozenset({"default"})
 
     def test_template_propagates_to_expanded_zones(self, tmp_path):
         rules_dir = tmp_path / "rules"
@@ -743,11 +746,11 @@ class TestStrictSections:
             rules_dir=rules_dir,
             providers={"cloudflare": ProviderConfig(name="cloudflare")},
             zone_templates={
-                "*": ZoneConfig(name="*", targets=["cloudflare"], strict_sections=True)
+                "*": ZoneConfig(name="*", targets=["cloudflare"], lint_sets=frozenset({"default"}))
             },
         )
         config.expand_templates({"cloudflare": ["x.com"]})
-        assert config.zones["x.com"].strict_sections is True
+        assert config.zones["x.com"].lint_sets == frozenset({"default"})
 
 
 class TestMaxRetries:

@@ -146,62 +146,62 @@ class TestCheckZoneSections:
     def test_no_warnings_for_valid_keys(self, caplog):
         rules_data = {"fakeprov.redirect_rules": [], "fakeprov.cache_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com", enabled_sets={"default"})
         assert caplog.text == ""
 
     def test_warns_on_unknown_key(self, caplog):
         rules_data = {"fakeprov.redirect_rules": [], "typo_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com", enabled_sets={"default"})
         assert "typo_rules" in caplog.text
         assert "example.com" in caplog.text
 
     def test_multiple_unknown_keys_sorted(self, caplog):
         rules_data = {"zzz_rules": [], "aaa_rules": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "test.com")
+            check_zone_sections(rules_data, "test.com", enabled_sets={"default"})
         assert caplog.text.index("aaa_rules") < caplog.text.index("zzz_rules")
 
     def test_empty_data(self, caplog):
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections({}, "example.com")
+            check_zone_sections({}, "example.com", enabled_sets={"default"})
         assert caplog.text == ""
 
     def test_close_typo_suggests(self, caplog):
         rules_data = {"redirect_rule": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com", enabled_sets={"default"})
         assert "Did you mean" in caplog.text
         assert "fakeprov.redirect_rules" in caplog.text
 
     def test_no_match_lists_valid(self, caplog):
         rules_data = {"zzz_totally_wrong": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com", enabled_sets={"default"})
         assert "Valid phases:" in caplog.text
 
     def test_provider_id_suggests_friendly_name(self, caplog):
         rules_data = {"fake_http_request_dynamic_redirect": []}
         with caplog.at_level(logging.WARNING, logger="octorules"):
-            check_zone_sections(rules_data, "example.com")
+            check_zone_sections(rules_data, "example.com", enabled_sets={"default"})
         assert "Did you mean" in caplog.text
         assert "fakeprov.redirect_rules" in caplog.text
 
 
 class TestCheckZoneSectionsStrict:
     def test_unknown_key_raises(self):
-        with pytest.raises(ConfigError, match="strict_sections"):
-            check_zone_sections({"typo_rules": []}, "example.com", strict=True)
+        with pytest.raises(ConfigError, match="CORE011"):
+            check_zone_sections({"typo_rules": []}, "example.com", enabled_sets={"strict"})
 
     def test_error_names_the_key(self):
         with pytest.raises(ConfigError, match="typo_rules"):
-            check_zone_sections({"typo_rules": []}, "example.com", strict=True)
+            check_zone_sections({"typo_rules": []}, "example.com", enabled_sets={"strict"})
 
     def test_valid_keys_pass(self):
         check_zone_sections(
             {"fakeprov.redirect_rules": [], "lists": [], "custom_rulesets": []},
             "example.com",
-            strict=True,
+            enabled_sets={"strict"},
         )
 
 
@@ -221,6 +221,7 @@ class TestCheckZoneSectionsNamespaces:
                 {"alphaprov.shield": {}},
                 "example.com",
                 target_namespaces=frozenset({"betaprov"}),
+                enabled_sets={"default"},
             )
         assert "alphaprov" in caplog.text
         assert "will not be managed" in caplog.text
@@ -245,7 +246,7 @@ class TestCheckZoneSectionsNamespaces:
                 {"alphaprov.shield": {}},
                 "example.com",
                 target_namespaces=frozenset({"betaprov"}),
-                strict=True,
+                enabled_sets={"strict"},
             )
 
     def test_scoped_core_section_non_target_warns(self, alpha_namespace, caplog):
@@ -254,6 +255,7 @@ class TestCheckZoneSectionsNamespaces:
                 {"alphaprov.lists": []},
                 "example.com",
                 target_namespaces=frozenset({"betaprov"}),
+                enabled_sets={"default"},
             )
         assert "alphaprov.lists" in caplog.text
         assert "will not be managed" in caplog.text
@@ -264,6 +266,7 @@ class TestCheckZoneSectionsNamespaces:
                 {"alphaprov.lists": []},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
+                enabled_sets={"default"},
             )
         assert caplog.text == ""
 
@@ -274,6 +277,7 @@ class TestCheckZoneSectionsNamespaces:
                 {"alphaprov.weird": []},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
+                enabled_sets={"default"},
             )
         assert "weird" in caplog.text
         assert "alphaprov" in caplog.text
@@ -284,7 +288,7 @@ class TestCheckZoneSectionsNamespaces:
                 {"alphaprov.weird": []},
                 "example.com",
                 target_namespaces=frozenset({"alphaprov"}),
-                strict=True,
+                enabled_sets={"strict"},
             )
 
 
@@ -2485,7 +2489,7 @@ class TestCoreSectionsAreAlwaysKnown:
     Only Cloudflare registered them as non-phase keys, so on aws (which
     registers ``custom_rulesets`` alone), azure, google and bunny a plain
     ``lists:`` section was treated as an unknown phase — a warning at
-    plan time and, under ``strict_sections: true``, a hard abort on a
+    plan time and, under ``lint_sets: true``, a hard abort on a
     perfectly valid file.  Whether a provider can *manage* them is a
     separate question, answered by the SUPPORTS_* capability check.
     """
@@ -2497,10 +2501,12 @@ class TestCoreSectionsAreAlwaysKnown:
 
     def test_strict_mode_does_not_abort_on_plain_core_sections(self):
         # No provider registers plain "lists"; strict must still accept it.
-        check_zone_sections({"lists": [], "custom_rulesets": []}, "example.com", strict=True)
+        check_zone_sections(
+            {"lists": [], "custom_rulesets": []}, "example.com", enabled_sets={"strict"}
+        )
 
     def test_unknown_section_still_aborts_in_strict_mode(self):
         from octorules.config import ConfigError
 
         with pytest.raises(ConfigError):
-            check_zone_sections({"listz": []}, "example.com", strict=True)
+            check_zone_sections({"listz": []}, "example.com", enabled_sets={"strict"})

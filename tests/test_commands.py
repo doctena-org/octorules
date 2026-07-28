@@ -964,7 +964,7 @@ class TestAccountSectionCheckIgnoresPhaseFilter:
     def _config(self, rules):
         cfg = MagicMock()
         cfg.load_account_rules.return_value = rules
-        cfg.strict_sections = True
+        cfg.lint_sets = frozenset({"default", "strict"})
         return cfg
 
     def test_unknown_section_outside_the_filter_still_aborts(self):

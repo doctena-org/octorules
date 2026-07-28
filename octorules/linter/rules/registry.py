@@ -17,6 +17,14 @@ class RuleMeta:
     category: str
     description: str
     default_severity: Severity
+    #: Named sets this rule belongs to.  ``manager.lint.sets`` selects which
+    #: sets are active, so a rule outside every selected set does not run.
+    sets: frozenset[str] = frozenset({"default"})
+    #: Whether an ``octorules:disable=`` directive in a zone file may waive
+    #: this rule.  False for rules that decide whether plan manages a
+    #: section: a comment in a data file must not switch off a deploy-time
+    #: guard, and the exemption belongs in the config instead.
+    suppressible: bool = True
 
 
 RULE_REGISTRY: dict[str, RuleMeta] = {}
@@ -42,3 +50,18 @@ def get_rule_meta(rule_id: str) -> RuleMeta | None:
 def all_rule_ids() -> list[str]:
     """Return all registered rule IDs, sorted."""
     return sorted(RULE_REGISTRY.keys())
+
+
+def active_rule_ids(enabled_sets: "frozenset[str] | set[str]") -> set[str]:
+    """Rule IDs belonging to at least one of *enabled_sets*."""
+    return {rid for rid, meta in RULE_REGISTRY.items() if meta.sets & set(enabled_sets)}
+
+
+def is_suppressible(rule_id: str) -> bool:
+    """Whether a zone-file directive may waive *rule_id*.
+
+    Unknown rules default to suppressible: a provider that has not declared
+    the rule should not have its findings become unwaivable by accident.
+    """
+    meta = RULE_REGISTRY.get(rule_id)
+    return True if meta is None else meta.suppressible

@@ -100,13 +100,13 @@ class TestCustomRulesetsPlanAccount:
 
         config = self._make_config(
             tmp_path,
-            "waf_custom_rules:\n"
-            "- ref: deploy1\n"
-            "  description: Deploy block ruleset\n"
-            "  action: execute\n"
-            "  expression: 'true'\n"
-            "  action_parameters:\n"
-            "    id: rs1\n",
+            "fakeprov:\n  waf_custom_rules:\n"
+            "  - ref: deploy1\n"
+            "    description: Deploy block ruleset\n"
+            "    action: execute\n"
+            "    expression: 'true'\n"
+            "    action_parameters:\n"
+            "      id: rs1\n",
         )
         provider = MagicMock()
         provider.SUPPORTS = frozenset({"lists", "custom_rulesets", "zone_discovery"})

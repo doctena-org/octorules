@@ -93,9 +93,34 @@ class LintContext:
     phase_filter: list[str] | None = None
     rule_filter: list[str] | None = None  # specific rule IDs to check
     suppressions: dict[str, set[str]] = field(default_factory=dict)
+    #: Enabled rule sets.  None means "every rule", which is what a caller
+    #: that has no config (a single-file lint, a provider's own tests) gets.
+    enabled_sets: frozenset[str] | None = None
     results: list[LintResult] = field(default_factory=list)
     suppressed_count: int = 0
+    #: Directives that named a rule but could not waive it, and why —
+    #: reported as CORE012 so a no-op suppression does not sit unnoticed.
+    ineffective_suppressions: list[tuple[str, str]] = field(default_factory=list)
     _current_location: str = ""  # set by linter before processing each rule
+
+    def _rule_is_active(self, rule_id: str) -> bool:
+        """Whether *rule_id* belongs to an enabled set.
+
+        Registers the core rules first: they load lazily, and without them
+        set filtering would silently pass everything through depending on
+        import order.
+        """
+        from octorules.linter.rules.registry import get_rule_meta
+
+        _register_core_rules()
+        meta = get_rule_meta(rule_id)
+        if meta is None:
+            return True  # undeclared rules always run
+        return bool(meta.sets & set(self.enabled_sets or ()))
+
+    def _note_ineffective(self, rule_id: str, reason: str) -> None:
+        if (rule_id, reason) not in self.ineffective_suppressions:
+            self.ineffective_suppressions.append((rule_id, reason))
 
     def set_location(self, rule_or_dict: object) -> None:
         """Set current YAML source location from a ContextDict rule.
@@ -120,9 +145,23 @@ class LintContext:
             return
         if self.phase_filter and result.phase and result.phase not in self.phase_filter:
             return
-        if self.suppressions and is_suppressed(self.suppressions, result.ref, result.rule_id):
-            self.suppressed_count += 1
+        if self.enabled_sets is not None and not self._rule_is_active(result.rule_id):
             return
+        if self.suppressions and is_suppressed(self.suppressions, result.ref, result.rule_id):
+            from octorules.linter.rules.registry import is_suppressible
+
+            if not is_suppressible(result.rule_id):
+                # A directive cannot waive this one; say so rather than
+                # letting the author believe it took effect.
+                self._note_ineffective(
+                    result.rule_id,
+                    f"{result.rule_id} cannot be suppressed in a zone file —"
+                    " it decides whether plan manages this section."
+                    " Exempt the zone in the config instead.",
+                )
+            else:
+                self.suppressed_count += 1
+                return
         # Auto-populate location if the result doesn't have one
         if not result.location and self._current_location:
             result = LintResult(
@@ -217,6 +256,7 @@ CORE_RULE_IDS: frozenset[str] = frozenset(
         "CORE009",
         "CORE010",
         "CORE011",
+        "CORE012",
     }
 )
 
@@ -258,6 +298,27 @@ def _register_core_rules() -> None:
                 "core",
                 "Unknown zone-file section (would not be managed)",
                 Severity.ERROR,
+                # In both sets, for different reasons.  `default` keeps lint
+                # reporting it always; `strict` is what makes *plan* enforce
+                # it — drop strict and an unknown section warns instead of
+                # aborting, which is what the old strict_sections: false did.
+                # Not waivable from a zone file: this rule decides whether
+                # plan manages a section, so a comment in a data file must
+                # not switch off a deploy guard.  Exempt a zone through its
+                # `lint:` config block instead.
+                sets=frozenset({"default", "strict"}),
+                suppressible=False,
+            ),
+            RuleMeta(
+                "CORE012",
+                "core",
+                "Suppression directive has no effect",
+                Severity.WARNING,
+                # In every set: this reports on the user's own directives, and
+                # one reason it fires is "no enabled set contains that rule".
+                # Confining it to a set would let a set selection silence the
+                # diagnostic that explains what that selection turned off.
+                sets=frozenset({"default", "strict"}),
             ),
         ]
     )
@@ -285,6 +346,7 @@ def lint_zone_file(
     rule_filter: list[str] | None = None,
     suppressions: dict[str, set[str]] | None = None,
     target_plugins: set[str] | None = None,
+    enabled_sets: frozenset[str] | None = None,
 ) -> LintContext:
     """Run all lint checks on a zone rules file.
 
@@ -326,6 +388,7 @@ def lint_zone_file(
         phase_filter=phase_filter,
         rule_filter=rule_filter,
         suppressions=suppressions or {},
+        enabled_sets=enabled_sets,
     )
 
     for plugin in get_registered_plugins():

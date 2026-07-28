@@ -65,16 +65,20 @@ def _plan_single_zone(
     # multi-provider zone file each target plans only its own sections.
     all_desired = _helpers_mod._provider_view(config.load_zone_rules(zone_name), provider)
 
-    # Flag unsupported features early (uses already-loaded data)
-    strict = config.strict_sections_for(zone_name)
+    # Flag unsupported features early (uses already-loaded data).  An
+    # unsupported feature is skipped exactly like an unknown section, so it
+    # answers to the same rule rather than a switch of its own.
+    from octorules.planner import SKIPPED_SECTION_RULE, section_skip_is_fatal
+
+    fatal = section_skip_is_fatal(config.lint_sets_for(zone_name))
     for yaml_key, feature in _FEATURE_KEYS.items():
         if yaml_key in all_desired and not provider_supports(provider, feature):
             msg = (
                 f"Zone {zone_name} uses {yaml_key!r} but provider"
                 f" {type(provider).__name__} does not support it"
             )
-            if strict:
-                raise ConfigError(f"{msg} (strict_sections)")
+            if fatal:
+                raise ConfigError(f"{msg} ({SKIPPED_SECTION_RULE})")
             log.warning("%s", msg)
 
     desired = _filter_desired_by_phase(all_desired, phase_filter)
@@ -203,7 +207,7 @@ def _plan_zones(
             config.load_zone_rules(zn),
             zn,
             target_namespaces=_namespace_set(prov for _, prov in target_pairs),
-            strict=config.strict_sections_for(zn),
+            enabled_sets=config.lint_sets_for(zn),
         )
         if len(target_pairs) == 1:
             work_items.append((zn, None, target_pairs[0][0], target_pairs[0][1]))
@@ -276,7 +280,7 @@ def _plan_account(
     # section is a config error whether or not --phase happens to select it.
     # Account rules are already scoped to this provider's view, so only
     # unknown/renamed sections apply (manager-level strict, no zone override).
-    check_zone_sections(all_desired, account_label, strict=config.strict_sections)
+    check_zone_sections(all_desired, account_label, enabled_sets=config.lint_sets)
     provider_ids = _phase_filter_to_provider_ids(phase_filter)
 
     # Determine which secondary fetches are needed before starting phase rules

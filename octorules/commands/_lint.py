@@ -18,6 +18,41 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Core lint rules (provider-agnostic)
 # ---------------------------------------------------------------------------
+
+
+def _report_ineffective_suppressions(ctx: "LintContext") -> None:
+    """CORE012: directives that named a rule but changed nothing.
+
+    Two reasons, one rule: the rule cannot be waived from a zone file (noted
+    by the engine when it declines a suppression), or no enabled set contains
+    it, so there was nothing to waive in the first place.
+    """
+    from octorules.linter.engine import LintResult, Severity
+    from octorules.linter.rules.registry import get_rule_meta
+
+    seen: set[str] = set()
+    for rule_id, reason in ctx.ineffective_suppressions:
+        seen.add(rule_id)
+        ctx.add(LintResult(rule_id="CORE012", severity=Severity.WARNING, message=reason))
+    if ctx.enabled_sets is None:
+        return
+    named = {rid for ids in (ctx.suppressions or {}).values() for rid in ids}
+    for rule_id in sorted(named - seen):
+        meta = get_rule_meta(rule_id)
+        if meta is not None and not (meta.sets & set(ctx.enabled_sets)):
+            ctx.add(
+                LintResult(
+                    rule_id="CORE012",
+                    severity=Severity.WARNING,
+                    message=(
+                        f"Suppression of {rule_id} has no effect — no enabled"
+                        f" validator set contains it (enabled:"
+                        f" {', '.join(sorted(ctx.enabled_sets))})"
+                    ),
+                )
+            )
+
+
 def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
     """Run provider-agnostic lint checks on a single zone's rules.
 
@@ -391,10 +426,12 @@ def cmd_lint(
             rule_filter=lint_rules,
             suppressions=suppressions,
             target_plugins=target_plugins,
+            enabled_sets=config.lint_sets_for(zone_name),
         )
 
         # Core rules (provider-agnostic, run after provider plugins)
         _core_lint_zone(desired, ctx)
+        _report_ineffective_suppressions(ctx)
         log.debug("Linted %s: %d result(s)", zone_name, len(ctx.results))
 
         # Track which plugins were active (produced results or suppressed findings).
@@ -559,6 +596,7 @@ def cmd_lint_file(
 
     # Core rules (provider-agnostic, run after provider plugins)
     _core_lint_zone(desired, ctx)
+    _report_ineffective_suppressions(ctx)
 
     has_errors = False
     has_warnings = False
