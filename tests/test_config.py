@@ -2834,8 +2834,12 @@ class TestSafetyThresholdInheritance:
 class TestUnknownConfigKeyWarnings:
     """Tests for unknown key warnings during config loading."""
 
-    def test_unknown_zone_key_warns(self, tmp_path, caplog):
-        """A typo in zone config (e.g. 'sorces') triggers a warning."""
+    def test_unknown_zone_key_raises(self, tmp_path):
+        """A typo in zone config (e.g. 'sorces') aborts.
+
+        It used to warn and carry on, which meant the zone silently ran with
+        the mistyped setting absent.
+        """
         (tmp_path / "rules").mkdir()
         cfg = tmp_path / "config.yaml"
         cfg.write_text(
@@ -2851,11 +2855,8 @@ class TestUnknownConfigKeyWarnings:
             "    sorces:\n"
             "      - rules\n"
         )
-        import logging
-
-        with caplog.at_level(logging.WARNING, logger="octorules"):
+        with pytest.raises(ConfigError, match="Unknown key\\(s\\) in zones.example.com: sorces"):
             Config.from_file(cfg)
-        assert "Unknown key 'sorces' in zones.example.com" in caplog.text
 
     def test_unknown_top_level_key_warns(self, tmp_path, caplog):
         """A typo at top level (e.g. 'provider' singular) triggers a warning."""
@@ -3001,3 +3002,49 @@ class TestTargetPluginsForZone:
             ),
         )
         assert config.target_plugins_for_zone("example.com") == {"cloudflare"}
+
+
+class TestUnknownConfigKeys:
+    """A stale or mistyped config key must not be silently ignored.
+
+    Ignoring them meant a removed setting kept its meaning in the author's
+    head while doing nothing — the same silent-skip hazard CORE011 exists to
+    stop, one file up. It bit the real consumer during this very migration:
+    `manager.strict_sections` survived in their config and changed nothing.
+    """
+
+    def test_removed_manager_key_is_rejected(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  strict_sections: true\n")
+        with pytest.raises(ConfigError, match="Unknown key\\(s\\) in manager: strict_sections"):
+            Config.from_file(config_file)
+
+    def test_mistyped_manager_key_is_rejected(self, tmp_path):
+        """max_worker was silently ignored before, leaving concurrency at 1."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg() + "manager:\n  max_worker: 4\n")
+        with pytest.raises(ConfigError, match="max_worker"):
+            Config.from_file(config_file)
+
+    def test_valid_manager_keys_are_accepted(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(
+            _cfg() + "manager:\n  max_workers: 4\n  lint:\n    sets: [default]\n"
+        )
+        config = Config.from_file(config_file)
+        assert config.max_workers == 4
+        assert config.lint_sets == frozenset({"default"})
+
+    def test_removed_zone_key_is_rejected(self, tmp_path):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    strict_sections: true\n"))
+        with pytest.raises(ConfigError, match="Unknown key\\(s\\) in zones.example.com"):
+            Config.from_file(config_file)
+
+    def test_zone_lint_override_is_a_known_key(self, tmp_path):
+        """The per-zone override must not be reported as unknown — the key is
+        `lint`, and naming it after the dataclass field would reject it."""
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text(_cfg(extra_zone="    lint:\n      sets: [default]\n"))
+        config = Config.from_file(config_file)
+        assert config.zones["example.com"].lint_sets == frozenset({"default"})

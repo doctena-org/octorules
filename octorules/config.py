@@ -548,13 +548,18 @@ def _parse_zone(
         "always_dry_run",
         "allow_unmanaged",
         "safety",
-        "lint_sets",
+        "lint",
         "zone_id",
         "zone_names",
     }
     unknown_zone_keys = set(zone_data.keys()) - _KNOWN_ZONE_KEYS
-    for key in sorted(unknown_zone_keys):
-        log.warning("Unknown key '%s' in zones.%s (ignored)%s", key, zone_name, zd_ctx)
+    if unknown_zone_keys:
+        # Ignoring these silently is how a removed key keeps its old meaning in
+        # an author's head while doing nothing — the same silent-skip hazard
+        # CORE011 exists to stop, one file up.
+        raise ConfigError(
+            f"Unknown key(s) in zones.{zone_name}: {', '.join(sorted(unknown_zone_keys))}{zd_ctx}"
+        )
 
     return ZoneConfig(
         name=zone_name,
@@ -918,6 +923,14 @@ class Config:
         if not isinstance(manager_section, dict):
             raise ConfigError(f"'manager' must be a mapping{_ctx(manager_section)}")
         mgr_ctx = _ctx(manager_section)
+        _KNOWN_MANAGER_KEYS = {"max_workers", "lint", "plan_outputs"}
+        unknown_manager_keys = set(manager_section.keys()) - _KNOWN_MANAGER_KEYS
+        if unknown_manager_keys:
+            # A stale key here was silently ignored, so a removed setting kept
+            # its meaning in the author's head while doing nothing at all.
+            raise ConfigError(
+                f"Unknown key(s) in manager: {', '.join(sorted(unknown_manager_keys))}{mgr_ctx}"
+            )
         try:
             max_workers = int(manager_section.get("max_workers", 1))
         except (ValueError, TypeError) as exc:
