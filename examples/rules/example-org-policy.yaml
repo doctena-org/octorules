@@ -47,7 +47,8 @@ google:
 
     - ref: "400"
       description: "Block large request bodies"
-      # Cloud Armor accepts deny(403), deny(404), deny(429), deny(502).
+      # A rule action accepts deny(403), deny(404) and deny(502); 429 is
+      # valid only for a rate-limit exceed_action.
       # 413 (Payload Too Large) is not in the allowed set — use 403.
       action: "deny(403)"
       match:
