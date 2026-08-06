@@ -207,7 +207,7 @@ bunny:
   # ---------------------------------------------------------------------------
   shield_config:
     bot_detection:
-      execution_mode: log       # off, log, block
+      execution_mode: log_only  # log_only or challenge
       request_integrity_sensitivity: medium  # off, low, medium, high
       ip_sensitivity: low
       fingerprint_sensitivity: high
