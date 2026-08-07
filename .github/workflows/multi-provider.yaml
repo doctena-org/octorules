@@ -1,9 +1,10 @@
 ---
-# The cross-provider seam is untestable in a single-package venv: core's 23
-# provider-conditional tests skip, and `octorules dump` on a multi-provider
-# zone crashed for a whole release without anything noticing. Two topologies,
-# because they catch different things.
-name: Seam
+# Core and each provider test themselves in isolation, so no single repo's CI
+# ever installs two real providers together: core's 23 provider-conditional
+# tests skip, and `octorules dump` on a multi-provider zone crashed for a
+# whole release without anything noticing. Two topologies, because they catch
+# different things.
+name: Multi-provider
 
 on:
   pull_request:
