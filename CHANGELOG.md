@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `RuleIPInfo.negated_list_refs`: lists a rule references only to exclude. Their
+  IPs are not match targets, but the list still counts as referenced, so it is
+  no longer reported as an unused standalone list.
+
+### Fixed
+- `audit` no longer counts rules with `enabled: false`, which reported overlaps
+  and drift against enforcement that does not happen. Applies to every provider.
+- An `# octorules:accept=` on a stored list now also covers audit findings
+  reported against the rules resolving that list, instead of the same addresses
+  resurfacing under a different anchor.
+
 ## [0.32.0] - 2026-07-26
 
 ### Added

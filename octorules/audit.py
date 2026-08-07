@@ -169,6 +169,12 @@ class RuleIPInfo:
     list_refs: list[str] = field(default_factory=list)
     """List names referenced by this rule (e.g. ``["blocked_ips"]``).
     Resolved to IPs by :func:`audit_zone_rules` using the ``lists`` section."""
+    negated_list_refs: list[str] = field(default_factory=list)
+    """List names this rule references only to EXCLUDE (e.g. inside
+    ``not (ip.src in $trusted)``). Their IPs are not match targets, so they are
+    not resolved into :attr:`ip_ranges` — but the reference exists, so
+    :func:`audit_zone_rules` counts the list as referenced and does not report
+    it as an unused standalone list."""
 
 
 class FindingSeverity(Enum):
@@ -999,9 +1005,24 @@ def audit_zone_rules(
     """
     from octorules.extensions import call_audit_extensions
 
+    # A disabled rule enforces nothing, so its addresses are not match targets:
+    # auditing them reports overlaps and drift against traffic handling that
+    # does not happen. Filtered here rather than in each provider's extractor —
+    # `enabled` is a universal rule field, and no provider was checking it.
+    # Entries without the key (stored lists, custom-ruleset containers) pass
+    # through untouched; a provider that walks nested rules itself filters those.
+    audited_data = {
+        key: (
+            [r for r in value if not (isinstance(r, dict) and r.get("enabled") is False)]
+            if isinstance(value, list)
+            else value
+        )
+        for key, value in rules_data.items()
+    }
+
     all_infos: list[RuleIPInfo] = []
-    for phase_name in rules_data:
-        infos, failed = call_audit_extensions(rules_data, phase_name)
+    for phase_name in audited_data:
+        infos, failed = call_audit_extensions(audited_data, phase_name)
         all_infos.extend(infos)
         for ext_name in failed:
             log.warning(
@@ -1029,6 +1050,11 @@ def audit_zone_rules(
                 for key in by_bare.get(list_name, ()):
                     info.ip_ranges.extend(ip_map[key])
                     referenced_lists.add(key)
+        # A list used only to exempt traffic is still referenced: its IPs are
+        # not match targets (so they are not resolved in), but reporting the
+        # list as unused would be wrong.
+        for list_name in info.negated_list_refs:
+            referenced_lists.update(by_bare.get(list_name, ()))
 
     # Include unreferenced lists as standalone pseudo-rules
     all_infos.extend(_extract_unreferenced_list_ips(ip_map, referenced_lists))
@@ -1044,9 +1070,19 @@ def audit_zone_rules(
 def apply_audit_acceptances(
     findings: list[AuditFinding],
     accepted_by_zone: dict[str, dict[str, set[str]]],
+    rule_lists: dict[tuple[str, str], set[str]] | None = None,
 ) -> tuple[list[AuditFinding], int]:
-    """Drop findings whose zone accepts their check — file-wide (``"*"``) or for
-    the finding's specific rule anchor (``ref``).
+    """Drop findings whose zone accepts their check — file-wide (``"*"``), for
+    the finding's specific rule anchor (``ref``), or for a stored list the
+    finding's rule draws its IPs from.
+
+    *rule_lists* maps ``(zone_name, ref)`` to the list names that rule
+    references. An acceptance anchored on a list (``list:<name>``, the
+    documented placement for list findings) then also covers findings reported
+    against the rules that resolve it — the same addresses reached through a
+    different anchor. Without it, auditing a rule that pulls its IPs from an
+    accepted list resurfaces every one of that list's findings under a new ref,
+    silently orphaning an acceptance the operator already made.
 
     Non-suppressible findings (``suppressible=False``, e.g. own-edge overlaps)
     are NEVER dropped, even when their check is accepted. Returns
@@ -1069,6 +1105,9 @@ def apply_audit_acceptances(
             _, ns, bare = f.ref.split(":", 2)
             if ns in PROVIDER_NAMESPACES:
                 refs.add(f"list:{bare}")
+        for list_name in (rule_lists or {}).get((f.zone_name, f.ref), ()):
+            refs.add(f"list:{list_name}")
+            refs.add(f"list:{list_name.partition(':')[2] or list_name}")
         accepted_here = f.check in acc.get("*", set()) or any(
             f.check in acc.get(r, set()) for r in refs
         )

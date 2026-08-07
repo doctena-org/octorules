@@ -2414,3 +2414,113 @@ class TestAuditPerformance:
         check_zone_drift(rules)
         elapsed = time.monotonic() - t0
         assert elapsed < 5.0, f"zone-drift on 5000 rules took {elapsed:.1f}s (limit 5s)"
+
+
+class TestAcceptanceFollowsListIntoRules:
+    """An acceptance placed on a stored list must also cover findings reported
+    against the rules that resolve it. The same addresses reached through a
+    different anchor are the same operator decision — without this, auditing a
+    rule that draws from an accepted list resurfaces every one of that list's
+    findings under a new ref."""
+
+    @staticmethod
+    def _finding(ref):
+        return AuditFinding(
+            check="cdn-ranges",
+            severity=FindingSeverity.WARNING,
+            message="m",
+            zone_name="z",
+            ref=ref,
+        )
+
+    def test_list_acceptance_covers_the_rule_resolving_it(self):
+        kept, n = apply_audit_acceptances(
+            [self._finding("block-attackers")],
+            {"z": {"list:known_bad": {"cdn-ranges"}}},
+            rule_lists={("z", "block-attackers"): {"known_bad"}},
+        )
+        assert (kept, n) == ([], 1)
+
+    def test_unrelated_rule_is_untouched(self):
+        f = self._finding("some-other-rule")
+        kept, n = apply_audit_acceptances(
+            [f],
+            {"z": {"list:known_bad": {"cdn-ranges"}}},
+            rule_lists={("z", "block-attackers"): {"known_bad"}},
+        )
+        assert (kept, n) == ([f], 0)
+
+    def test_namespaced_list_name_resolves_bare(self):
+        kept, n = apply_audit_acceptances(
+            [self._finding("r")],
+            {"z": {"list:known_bad": {"cdn-ranges"}}},
+            rule_lists={("z", "r"): {"cloudflare:known_bad"}},
+        )
+        assert (kept, n) == ([], 1)
+
+    def test_non_suppressible_finding_is_still_kept(self):
+        f = AuditFinding(
+            check="cdn-ranges",
+            severity=FindingSeverity.ERROR,
+            message="own edge",
+            zone_name="z",
+            ref="r",
+            suppressible=False,
+        )
+        kept, n = apply_audit_acceptances(
+            [f],
+            {"z": {"list:known_bad": {"cdn-ranges"}}},
+            rule_lists={("z", "r"): {"known_bad"}},
+        )
+        assert (kept, n) == ([f], 0)
+
+    def test_omitting_rule_lists_keeps_previous_behaviour(self):
+        f = self._finding("block-attackers")
+        kept, n = apply_audit_acceptances([f], {"z": {"list:known_bad": {"cdn-ranges"}}})
+        assert (kept, n) == ([f], 0)
+
+
+class TestDisabledRulesAreNotAudited:
+    """`enabled` is a universal rule field and no provider extractor was
+    checking it, so a rule left in place but switched off was audited as though
+    it were enforcing — producing overlap and drift findings against traffic
+    handling that does not happen. Filtered centrally so every provider gets it."""
+
+    @staticmethod
+    def _extract(rules):
+        from octorules.extensions import register_audit_extension, unregister_audit_extension
+
+        def ext(rules_data, phase_name):
+            return [
+                RuleIPInfo(
+                    zone_name="",
+                    phase_name=phase_name,
+                    ref=r.get("ref", ""),
+                    action=r.get("action", ""),
+                    ip_ranges=list(r.get("ips", [])),
+                )
+                for r in rules_data.get(phase_name, [])
+            ]
+
+        register_audit_extension("t", ext)
+        try:
+            return audit_zone_rules({"p": rules}, "z")
+        finally:
+            unregister_audit_extension("t")
+
+    def test_disabled_rule_is_skipped(self):
+        infos = self._extract(
+            [
+                {"ref": "live", "enabled": True, "ips": ["203.0.113.0/24"]},
+                {"ref": "off", "enabled": False, "ips": ["198.51.100.0/24"]},
+            ]
+        )
+        assert [i.ref for i in infos] == ["live"]
+
+    def test_absent_enabled_defaults_to_enabled(self):
+        infos = self._extract([{"ref": "implicit", "ips": ["203.0.113.0/24"]}])
+        assert [i.ref for i in infos] == ["implicit"]
+
+    def test_only_false_disables(self):
+        infos = self._extract([{"ref": "null", "enabled": None, "ips": ["203.0.113.0/24"]}])
+        assert [i.ref for i in infos] == ["null"]

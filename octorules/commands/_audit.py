@@ -125,9 +125,18 @@ def cmd_audit(
         active_cdn_providers=active_cdn_providers,
     )
 
+    # Which stored lists each rule draws its IPs from, so an acceptance placed
+    # on a list also covers the rules resolving it.
+    rule_lists: dict[tuple[str, str], set[str]] = {}
+    for info in all_rule_ips:
+        if info.list_refs:
+            rule_lists.setdefault((info.zone_name, info.ref), set()).update(info.list_refs)
+
     # Drop findings whose zone accepts their check. Non-suppressible findings
     # (e.g. own-edge overlaps) are always kept — see apply_audit_acceptances.
-    findings, total_suppressed = apply_audit_acceptances(findings, accepted_by_zone)
+    findings, total_suppressed = apply_audit_acceptances(
+        findings, accepted_by_zone, rule_lists=rule_lists
+    )
 
     # Classify for exit code (based on unsuppressed findings).
     has_errors = any(f.severity == FindingSeverity.ERROR for f in findings)
