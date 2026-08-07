@@ -25,25 +25,31 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           path: octorules
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: doctena-org/octorules-cloudflare
           path: octorules-cloudflare
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: doctena-org/octorules-aws
           path: octorules-aws
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: doctena-org/octorules-azure
           path: octorules-azure
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: doctena-org/octorules-google
           path: octorules-google
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           repository: doctena-org/octorules-bunny
           path: octorules-bunny
       - uses: actions/setup-python@v7
@@ -84,6 +90,8 @@ jobs:
       # Nothing here reads the working tree, but `cache: pip` needs a
       # dependency file to hash for its key.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
