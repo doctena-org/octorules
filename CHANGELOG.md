@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `audit` now covers rules nested in `custom_rulesets`, which a non-phase key had
+  kept out of the cross-rule and cross-zone checks for every provider using the
+  convention. Refs are prefixed with the ruleset name.
 - `RuleIPInfo.negated_list_refs`: lists a rule references only to exclude. Their
   IPs are not match targets, but the list still counts as referenced, so it is
   no longer reported as an unused standalone list.

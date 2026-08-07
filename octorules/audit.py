@@ -992,6 +992,60 @@ def _extract_unreferenced_list_ips(
     return results
 
 
+def _audit_custom_ruleset_rules(rules_data: dict, zone_name: str) -> list[RuleIPInfo]:
+    """Extract IP info from rules nested inside ``custom_rulesets``.
+
+    ``custom_rulesets`` is a non-phase key, so its rules never reached the
+    extension extractors — yet this is where providers keep the bulk of real
+    blocking logic (attacker lists, geo blocking, endpoint blocks), leaving the
+    cross-rule and cross-zone checks blind to most of what actually enforces.
+
+    The shape is a shared convention, not one provider's: an entry carries a
+    ``phase`` naming the provider phase its rules belong to, and a ``rules``
+    list. The phase is resolved against the registry, so this works for any
+    provider using it and needs no per-provider knowledge here.
+
+    Refs are prefixed with the ruleset so a finding names where the rule
+    actually lives, and so two rulesets reusing a ref stay distinguishable.
+    """
+    from octorules.extensions import call_audit_extensions
+    from octorules.phases import PHASE_BY_NAME
+
+    entries = rules_data.get("custom_rulesets")
+    if not isinstance(entries, list):
+        return []
+
+    section_by_provider_phase = {
+        phase.provider_id: name for name, phase in PHASE_BY_NAME.items() if phase.provider_id
+    }
+
+    results: list[RuleIPInfo] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        section = section_by_provider_phase.get(str(entry.get("phase", "")))
+        rules = entry.get("rules")
+        if section is None or not isinstance(rules, list):
+            continue
+        enabled_rules = [
+            r for r in rules if not (isinstance(r, dict) and r.get("enabled") is False)
+        ]
+        label = entry.get("name") or entry.get("id") or "?"
+        infos, failed = call_audit_extensions({section: enabled_rules}, section)
+        for info in infos:
+            info.ref = f"{label}/{info.ref}"
+            results.append(info)
+        for ext_name in failed:
+            log.warning(
+                "Audit extension %r failed for custom ruleset %r in zone %r —"
+                " results may be incomplete",
+                ext_name,
+                label,
+                zone_name,
+            )
+    return results
+
+
 def audit_zone_rules(
     rules_data: dict,
     zone_name: str,
@@ -1031,6 +1085,8 @@ def audit_zone_rules(
                 phase_name,
                 zone_name,
             )
+
+    all_infos.extend(_audit_custom_ruleset_rules(audited_data, zone_name))
 
     # Resolve list_refs → IPs from the lists section
     ip_map = _build_list_ip_map(rules_data)

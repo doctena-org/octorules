@@ -2524,3 +2524,64 @@ class TestDisabledRulesAreNotAudited:
     def test_only_false_disables(self):
         infos = self._extract([{"ref": "null", "enabled": None, "ips": ["203.0.113.0/24"]}])
         assert [i.ref for i in infos] == ["null"]
+
+
+class TestCustomRulesetRulesAreAudited:
+    """`custom_rulesets` is a non-phase key, so its rules never reached the
+    extension extractors — yet that is where providers keep the bulk of real
+    blocking logic, leaving the cross-rule and cross-zone checks blind to most
+    of what actually enforces. The shape (`phase` + `rules`) is a shared
+    convention, so the walk lives here rather than in each provider."""
+
+    @staticmethod
+    def _extract(data):
+        from octorules.extensions import register_audit_extension, unregister_audit_extension
+
+        def ext(rules_data, phase_name):
+            return [
+                RuleIPInfo(
+                    zone_name="",
+                    phase_name=phase_name,
+                    ref=r.get("ref", ""),
+                    action=r.get("action", ""),
+                    ip_ranges=list(r.get("ips", [])),
+                )
+                for r in rules_data.get(phase_name, [])
+                if isinstance(r, dict)
+            ]
+
+        register_audit_extension("t", ext)
+        try:
+            return audit_zone_rules(data, "z")
+        finally:
+            unregister_audit_extension("t")
+
+    def _ruleset(self, rules, phase="bare_custom"):
+        return {"custom_rulesets": [{"name": "RS", "phase": phase, "rules": rules}]}
+
+    def test_nested_rules_are_extracted(self):
+        infos = self._extract(self._ruleset([{"ref": "r", "ips": ["203.0.113.0/24"]}]))
+        assert [i.ip_ranges for i in infos] == [["203.0.113.0/24"]]
+
+    def test_ref_is_prefixed_with_the_ruleset(self):
+        infos = self._extract(self._ruleset([{"ref": "r", "ips": ["203.0.113.0/24"]}]))
+        assert infos[0].ref == "RS/r"
+
+    def test_disabled_nested_rule_is_skipped(self):
+        infos = self._extract(
+            self._ruleset(
+                [
+                    {"ref": "live", "ips": ["203.0.113.0/24"]},
+                    {"ref": "off", "enabled": False, "ips": ["198.51.100.0/24"]},
+                ]
+            )
+        )
+        assert [i.ref for i in infos] == ["RS/live"]
+
+    def test_unknown_phase_is_skipped(self):
+        assert self._extract(self._ruleset([{"ref": "r", "ips": ["10.0.0.0/8"]}], "nope")) == []
+
+    def test_malformed_entries_are_ignored(self):
+        assert self._extract({"custom_rulesets": ["nope", None]}) == []
+        assert self._extract({"custom_rulesets": {"not": "a list"}}) == []
+        assert self._extract({"custom_rulesets": [{"name": "x", "phase": "p"}]}) == []
