@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - `audit` no longer counts rules with `enabled: false`, which reported overlaps
-  and drift against enforcement that does not happen. Applies to every provider.
+  and drift against enforcement that does not happen. Providers whose format
+  spells the switch differently filter it in their extractors.
 - An `# octorules:accept=` on a stored list now also covers audit findings
   reported against the rules resolving that list, instead of the same addresses
   resurfacing under a different anchor.
