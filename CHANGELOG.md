@@ -9,9 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `manager.lint.sets: [default, strict]` — named rule sets select which lint
-  rules run, and `strict` is what makes `plan` enforce CORE011 instead of
-  warning. Any zone overrides with its own `lint: {sets: [...]}` block; unknown
-  set names are rejected.
+  rules run; `strict` makes `plan` enforce CORE011 instead of warning. Any zone
+  overrides with its own `lint: {sets: [...]}` block.
 - **CORE012** (WARNING): a suppression directive with no effect — the rule is
   not suppressible, or no enabled set contains it.
 - `ProviderExtension` — a provider-owned object per feature carrying its
@@ -48,8 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - `audit` no longer counts rules with `enabled: false`, which reported overlaps
-  and drift against enforcement that does not happen. Providers whose format
-  spells the switch differently filter it in their extractors.
+  and drift against enforcement that does not happen.
 - An `# octorules:accept=` on a stored list now also covers audit findings
   reported against the rules resolving that list, instead of the same addresses
   resurfacing under a different anchor.
