@@ -591,3 +591,20 @@ class TestPreserveFilter:
     def test_unknown_change_type_raises(self):
         with pytest.raises(ConfigError, match="unknown change type"):
             PreserveFilter(refs=r"^vendor-", change_types=["BOGUS"])
+
+
+class TestPhaseFilterUnknownNames:
+    """An unknown name used to pass through silently, so a typo in include:
+    quietly dropped that phase from the plan."""
+
+    def test_unknown_include_raises(self):
+        from octorules.config import ConfigError
+
+        with pytest.raises(ConfigError, match="Unknown phase"):
+            PhaseFilter(include=["fakeprov.redirct_rules"])
+
+    def test_unknown_exclude_raises(self):
+        from octorules.config import ConfigError
+
+        with pytest.raises(ConfigError, match="Unknown phase"):
+            PhaseFilter(exclude=["nonsense.phase"])

@@ -1008,3 +1008,23 @@ class TestCleanListItem:
         item = {"comment": "line1\nline2"}
         cleaned = _clean_list_item(item)
         assert isinstance(cleaned["comment"], _LiteralStr)
+
+
+class TestDumpAcrossProviderNamespaces:
+    """A zone targeting two providers dumps one file with both namespace
+    blocks. 0.32.0 crashed on exactly this shape, and no test held it."""
+
+    def test_two_namespace_dump_round_trips(self, tmp_path):
+        rules = {
+            "fake_http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+            "bare_custom": [
+                {"ref": "b1", "expression": "true", "action": "block", "enabled": True}
+            ],
+        }
+        result = dump_zone_rules("example.com", rules, tmp_path)
+        assert result is not None
+        data = normalize_zone_format(yaml.safe_load(result.read_text()))
+        assert "fakeprov.redirect_rules" in data
+        assert any(k.startswith("bareprov.") for k in data)
