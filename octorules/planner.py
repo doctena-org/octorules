@@ -415,8 +415,45 @@ def looks_like_an_uninstalled_namespace(key: str, value: object) -> bool:
     discriminator is shape: a namespace block is a mapping of sections, while
     a mistyped phase key holds a list of rules.  A mistyped phase stays an
     error; an uninstalled provider's block is only a warning.
+
+    A key prefixed by an *installed* namespace and an underscore is carved
+    out: ``cloudflare_bot_management`` is the pre-0.33 flat spelling of
+    ``cloudflare.bot_management``, not a provider called
+    "cloudflare_bot_management" awaiting install — and settings sections are
+    mapping-valued, so without the carve-out a stale flat key would warn and
+    silently unmanage the section on exactly the upgrade that removed the
+    flat spelling.
     """
-    return "." not in key and isinstance(value, dict)
+    if "." in key or not isinstance(value, dict):
+        return False
+    from octorules.phases import PROVIDER_NAMESPACES
+
+    return not any(key.startswith(ns + "_") for ns in PROVIDER_NAMESPACES)
+
+
+def _flat_spelling_hint(key: str) -> str | None:
+    """A pointed message when *key* is the pre-0.33 flat spelling.
+
+    ``cloudflare_bot_management`` is not a typo of a phase name — it is the
+    flat form the nested format replaced, and the closest match inside the
+    namespace is the section the user means. Only fires when the prefix is an
+    installed namespace, so it never guesses about absent providers.
+    """
+    from octorules.phases import suggest_namespace_member
+
+    if "." in key:
+        return None
+    for ns in sorted(PROVIDER_NAMESPACES):
+        if not key.startswith(ns + "_"):
+            continue
+        member = key[len(ns) + 1 :]
+        suggestion = suggest_namespace_member(ns, member)
+        if suggestion:
+            return (
+                f"Section {key!r} is the flat spelling removed in favour of the"
+                f" nested format — write {suggestion!r} under the {ns!r} block"
+            )
+    return None
 
 
 def check_zone_sections(
@@ -485,6 +522,10 @@ def check_zone_sections(
                 f" here. Install octorules-{key} to manage it.",
                 downgrade=True,
             )
+            continue
+        flat = _flat_spelling_hint(key)
+        if flat is not None:
+            _emit(flat + f" in rules for {zone_name}")
             continue
         _emit(f"{unknown_phase_message(key)} in rules for {zone_name}")
 

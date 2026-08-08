@@ -2510,3 +2510,39 @@ class TestCoreSectionsAreAlwaysKnown:
 
         with pytest.raises(ConfigError):
             check_zone_sections({"listz": []}, "example.com", enabled_sets={"strict"})
+
+
+class TestFlatSpellingHint:
+    """A stale pre-0.33 flat key is mapping-valued for settings sections, so
+    without the carve-out it read as an uninstalled provider namespace — a
+    WARNING advising `pip install octorules-cloudflare_bot_management`, with
+    the section silently unmanaged even under strict."""
+
+    def _check(self, key, value):
+        from octorules.config import ConfigError
+        from octorules.planner import check_zone_sections
+
+        doc = {"fakeprov": {"redirect_rules": []}, key: value}
+        try:
+            check_zone_sections(
+                doc,
+                "z",
+                target_namespaces=frozenset({"fakeprov"}),
+                enabled_sets=frozenset({"default", "strict"}),
+            )
+        except ConfigError as e:
+            return str(e)
+        return None
+
+    def test_flat_settings_key_fails_with_the_nested_hint(self):
+        msg = self._check("fakeprov_redirect_rules", {"x": True})
+        assert msg is not None
+        assert "flat spelling" in msg
+        assert "'redirect_rules'" in msg and "'fakeprov'" in msg
+
+    def test_flat_phase_key_fails_too(self):
+        msg = self._check("fakeprov_redirect_rules", [])
+        assert msg is not None
+
+    def test_uninstalled_namespace_still_only_warns(self):
+        assert self._check("someprov", {"rules": []}) is None

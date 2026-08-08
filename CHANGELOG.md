@@ -8,12 +8,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- `manager.lint.sets: [default, strict]` — named rule sets select which lint
+  rules run, and `strict` is what makes `plan` enforce CORE011 instead of
+  warning. Any zone overrides with its own `lint: {sets: [...]}` block; unknown
+  set names are rejected.
+- **CORE012** (WARNING): a suppression directive with no effect — the rule is
+  not suppressible, or no enabled set contains it.
+- `ProviderExtension` — a provider-owned object per feature carrying its
+  prefetch/finalize/apply/dump stages, exposed via `provider.extensions`.
 - `audit` now covers rules nested in `custom_rulesets`, which a non-phase key had
   kept out of the cross-rule and cross-zone checks for every provider using the
   convention. Refs are prefixed with the ruleset name.
 - `RuleIPInfo.negated_list_refs`: lists a rule references only to exclude. Their
   IPs are not match targets, but the list still counts as referenced, so it is
   no longer reported as an unused standalone list.
+
+### Changed
+- Sections are named in the dotted namespace form everywhere output shows them
+  (`cloudflare.waf_custom_rules`). **Every plan checksum changes on the first
+  run after upgrading.**
+- CORE011 (unknown zone-file section) cannot be waived from a zone-file
+  directive; exempt a zone through its `lint:` block. A mapping-shaped block
+  matching an uninstalled provider's namespace warns and names the package
+  instead of failing the zone.
+- `--rule X` runs X even when no enabled set contains it.
+- Unknown keys under `manager:` or a zone entry raise `ConfigError` instead of
+  being silently ignored, as does an unknown phase name in a `PhaseFilter`.
+
+### Removed
+- The flat section spelling (`cloudflare_bot_management:` etc.), deprecated in
+  0.32.0. **Write the nested form before upgrading** — a flat key is now an
+  unknown section, which fails `plan` under the default `strict` set. Dotted
+  keys are display-only and are not accepted as input either.
+- `manager.strict_sections` — the `strict` set replaces it (on by default).
+- The plan/apply/dump extension registries (`register_plan_zone_hook`,
+  `register_apply_extension`, `register_dump_extension`); extensions are
+  provider-owned. Formatter and validator registries stay.
+- `register_phase_alias` and the phase-alias machinery; no aliases existed.
 
 ### Fixed
 - `audit` no longer counts rules with `enabled: false`, which reported overlaps
@@ -22,6 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - An `# octorules:accept=` on a stored list now also covers audit findings
   reported against the rules resolving that list, instead of the same addresses
   resurfacing under a different anchor.
+- `octorules dump` crashed on a zone targeting more than one provider.
+- Nested dumps regained the blank lines between sections.
 
 ## [0.32.0] - 2026-07-26
 
