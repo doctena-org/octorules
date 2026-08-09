@@ -1,0 +1,95 @@
+---
+name: Docker
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/docker.yaml
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/docker.yaml
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      publish:
+        description: Push the image to GHCR after the smoke test
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          load: true
+          tags: octorules:ci
+      - name: Smoke test
+        # The example rules intentionally contain lint findings, so ignore the
+        # exit code; the assertion is the plugins line proving all five
+        # providers are discovered inside the image.
+        run: |
+          docker run --rm octorules:ci --version
+          docker run --rm -v "$PWD/examples:/octorules:ro" octorules:ci \
+            lint --config config.yaml > lint.out 2>&1 || true
+          cat lint.out
+          grep -Eq 'Lint plugins: .*cloudflare.*aws.*google.*azure.*bunny' lint.out
+
+  publish:
+    # Runs on manual dispatch and when the release workflow calls with
+    # publish: true; skipped on plain pushes and PRs. The image version is
+    # read from pyproject.toml, not the git ref, so both paths tag alike.
+    if: github.event_name == 'workflow_dispatch' || inputs.publish
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          test -n "$version"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=latest
+      - name: Push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

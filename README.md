@@ -38,6 +38,32 @@ Core only (offline lint, no provider):
 pip install octorules
 ```
 
+### Docker
+
+Every release also ships as a container image with core and all five providers
+preinstalled — one multi-arch (amd64/arm64) image covers any provider mix,
+including multi-provider configs:
+
+```bash
+docker run --rm -v "$PWD:/octorules" ghcr.io/doctena-org/octorules plan --config config.yaml
+```
+
+The entrypoint is the `octorules` CLI and the working directory is
+`/octorules` — mount the directory containing your config there and pass
+provider credentials as environment variables:
+
+```bash
+docker run --rm -v "$PWD:/octorules" -e CLOUDFLARE_API_TOKEN \
+  ghcr.io/doctena-org/octorules sync --doit --config config.yaml
+```
+
+Images are tagged `latest` and `X.Y.Z`. Core is built from the tagged source;
+providers are bundled at their latest release as of the image build —
+`docker run --rm --entrypoint pip ghcr.io/doctena-org/octorules list` shows
+the exact set. The container runs as uid 1000 — for `dump` (which writes
+files), make the mounted directory writable by that uid or pass
+`--user "$(id -u):$(id -g)"`.
+
 ### Configuration
 
 Create a config file pointing at your zones:

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Official container image: `ghcr.io/doctena-org/octorules` — core plus all
+  five providers preinstalled, multi-arch (amd64/arm64), tagged `latest` and
+  `X.Y.Z`, published on release tags.
+
 ## [0.33.0] - 2026-08-08
 
 ### Added

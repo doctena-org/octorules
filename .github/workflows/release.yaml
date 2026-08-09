@@ -47,3 +47,12 @@ jobs:
           else
             gh release create "$tag" dist/* --generate-notes
           fi
+
+  docker:
+    needs: [publish]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker.yaml
+    with:
+      publish: true
