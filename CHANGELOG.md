@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   five providers preinstalled, multi-arch (amd64/arm64), tagged `latest` and
   `X.Y.Z`, published on release tags.
 
+### Changed
+- A crashed audit extension now produces a non-suppressible ERROR finding
+  (`extension-failure`, "results are incomplete") and a non-zero exit —
+  previously a log warning and a clean exit.
+
 ## [0.33.0] - 2026-08-08
 
 ### Added

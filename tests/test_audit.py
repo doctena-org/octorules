@@ -1587,6 +1587,77 @@ class TestCmdAudit:
 
         assert exit_code == 0  # drift is WARNING, default exit code ignores warnings
 
+    def test_crashing_extension_is_error_finding_and_nonzero_exit(self, tmp_path, capsys):
+        """A crashed extractor fails the audit instead of shrinking it —
+        otherwise a broken extension makes CI go green by doing less."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        def _boom(rules_data, phase_name):
+            raise RuntimeError("boom")
+
+        register_audit_extension("test_boom", _boom)
+        try:
+            config_path = _write_config_and_rules(
+                tmp_path,
+                zone_rules={
+                    "zone-a": {
+                        "fakeprov.waf_custom_rules": [
+                            {
+                                "ref": "r1",
+                                "action": "block",
+                                "expression": "ip.src in {10.0.0.0/24}",
+                            }
+                        ]
+                    },
+                },
+            )
+            config = Config.from_file(str(config_path))
+            with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+                exit_code = cmd_audit(config, zone_filter=None)
+        finally:
+            unregister_audit_extension("test_boom")
+
+        assert exit_code == 1
+        out = capsys.readouterr().out
+        assert "test_boom" in out
+        assert "incomplete" in out
+
+    def test_extension_failure_is_not_suppressible(self, tmp_path, capsys):
+        """A file-wide acceptance cannot silence an extension crash."""
+        from octorules.commands import cmd_audit
+        from octorules.config import Config
+
+        def _boom(rules_data, phase_name):
+            raise RuntimeError("boom")
+
+        register_audit_extension("test_boom", _boom)
+        try:
+            config_path = _write_config_and_rules(
+                tmp_path,
+                zone_rules={
+                    "zone-a": {
+                        "fakeprov.waf_custom_rules": [
+                            {
+                                "ref": "r1",
+                                "action": "block",
+                                "expression": "ip.src in {10.0.0.0/24}",
+                            }
+                        ]
+                    },
+                },
+            )
+            rules_file = tmp_path / "rules" / "zone-a.yaml"
+            rules_file.write_text("# octorules:accept=extension-failure\n" + rules_file.read_text())
+            config = Config.from_file(str(config_path))
+            with patch("octorules.audit.fetch_cdn_ranges", return_value=self._empty_cdn):
+                exit_code = cmd_audit(config, zone_filter=None)
+        finally:
+            unregister_audit_extension("test_boom")
+
+        assert exit_code == 1
+        assert "test_boom" in capsys.readouterr().out
+
     def test_zone_filter_restricts_to_named_files(self, tmp_path):
         """--zone restricts audit to that file only."""
         from octorules.commands import cmd_audit
@@ -2585,3 +2656,52 @@ class TestCustomRulesetRulesAreAudited:
         assert self._extract({"custom_rulesets": ["nope", None]}) == []
         assert self._extract({"custom_rulesets": {"not": "a list"}}) == []
         assert self._extract({"custom_rulesets": [{"name": "x", "phase": "p"}]}) == []
+
+
+class TestAuditZoneRulesFailureCollection:
+    """audit_zone_rules reports crashed extractors via failed_extensions."""
+
+    def test_collects_failures_from_phase_and_ruleset_paths(self):
+        def _boom(rules_data, phase_name):
+            if phase_name == "fakeprov.waf_custom_rules":
+                raise RuntimeError("boom")
+            return []
+
+        register_audit_extension("test_boom", _boom)
+        try:
+            failed: list[str] = []
+            audit_zone_rules(
+                {
+                    "fakeprov.waf_custom_rules": [
+                        {"ref": "r1", "action": "block", "expression": "true"}
+                    ],
+                    "custom_rulesets": [
+                        {
+                            "name": "cs1",
+                            "phase": "fake_http_request_firewall_custom",
+                            "rules": [{"ref": "n1", "action": "block", "expression": "true"}],
+                        }
+                    ],
+                },
+                "zone-a",
+                failed_extensions=failed,
+            )
+        finally:
+            unregister_audit_extension("test_boom")
+
+        # Once for the zone-level phase, once for the custom-ruleset entry.
+        assert failed.count("test_boom") == 2
+
+    def test_omitting_the_accumulator_keeps_old_behavior(self):
+        def _boom(rules_data, phase_name):
+            raise RuntimeError("boom")
+
+        register_audit_extension("test_boom", _boom)
+        try:
+            infos = audit_zone_rules(
+                {"fakeprov.waf_custom_rules": [{"ref": "r1", "expression": "true"}]},
+                "zone-a",
+            )
+        finally:
+            unregister_audit_extension("test_boom")
+        assert infos == []

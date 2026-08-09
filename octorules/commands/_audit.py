@@ -40,6 +40,7 @@ def cmd_audit(
         _SEVERITY_RANK,
         ALL_CHECKS,
         AUDIT_FORMATTERS,
+        AuditFinding,
         FindingSeverity,
         RuleIPInfo,
         apply_audit_acceptances,
@@ -95,6 +96,7 @@ def cmd_audit(
             log.info("  %s: accepted audit checks: %s", stem, ", ".join(checks_accepted))
 
     log.debug("Auditing %d zone(s)", len(file_stems))
+    failure_findings: list[AuditFinding] = []
     for stem in file_stems:
         rules_data = config.load_rules_by_stem(stem)
         desired = _filter_desired_by_phase(rules_data, phase_filter)
@@ -102,11 +104,29 @@ def cmd_audit(
             log.info("  %s: no rules (skipped)", stem)
             continue
 
-        infos = audit_zone_rules(desired, stem)
+        zone_failed: list[str] = []
+        infos = audit_zone_rules(desired, stem, failed_extensions=zone_failed)
         all_rule_ips.extend(infos)
         log.info("  %s: extracted %d rule(s) with IP ranges", stem, len(infos))
+        # A crashed extractor means the zone's IP info is incomplete: every
+        # downstream check would silently under-report. Surface it as a
+        # non-suppressible ERROR so --exit-code CI runs go red instead of
+        # green-by-doing-less.
+        failure_findings.extend(
+            AuditFinding(
+                check="extension-failure",
+                severity=FindingSeverity.ERROR,
+                message=(
+                    f"Audit extension {ext_name!r} crashed while extracting"
+                    f" from zone {stem!r} — audit results are incomplete"
+                ),
+                zone_name=stem,
+                suppressible=False,
+            )
+            for ext_name in dict.fromkeys(zone_failed)
+        )
 
-    if not all_rule_ips:
+    if not all_rule_ips and not failure_findings:
         log.info("No IP ranges found in any rules — nothing to audit.")
         return 0
 
@@ -116,14 +136,19 @@ def cmd_audit(
         _OWN_EDGE_CDN_NAMES[p] for p in config.providers if p in _OWN_EDGE_CDN_NAMES
     }
 
-    findings = run_audit(
-        all_rule_ips,
-        phase_order,
-        checks=selected_checks,
-        cdn_timeout=cdn_timeout,
-        cdn_stale_days=cdn_stale_days,
-        active_cdn_providers=active_cdn_providers,
+    findings = (
+        run_audit(
+            all_rule_ips,
+            phase_order,
+            checks=selected_checks,
+            cdn_timeout=cdn_timeout,
+            cdn_stale_days=cdn_stale_days,
+            active_cdn_providers=active_cdn_providers,
+        )
+        if all_rule_ips
+        else []
     )
+    findings = failure_findings + findings
 
     # Which stored lists each rule draws its IPs from, so an acceptance placed
     # on a list also covers the rules resolving it.

@@ -862,7 +862,12 @@ def format_findings(
     for f in filtered:
         by_check.setdefault(f.check, []).append(f)
 
-    for check in ("ip-overlap", "ip-shadow", "cdn-ranges", "zone-drift"):
+    # Incompleteness first, then the standard checks, then anything else —
+    # a hardcoded tuple here would silently drop findings with other check
+    # names from text output.
+    display_order = ["extension-failure", "ip-overlap", "ip-shadow", "cdn-ranges", "zone-drift"]
+    display_order += sorted(k for k in by_check if k not in display_order)
+    for check in display_order:
         check_findings = by_check.get(check, [])
         if not check_findings:
             continue
@@ -992,7 +997,11 @@ def _extract_unreferenced_list_ips(
     return results
 
 
-def _audit_custom_ruleset_rules(rules_data: dict, zone_name: str) -> list[RuleIPInfo]:
+def _audit_custom_ruleset_rules(
+    rules_data: dict,
+    zone_name: str,
+    failed_extensions: list[str] | None = None,
+) -> list[RuleIPInfo]:
     """Extract IP info from rules nested inside ``custom_rulesets``.
 
     ``custom_rulesets`` is a non-phase key, so its rules never reached the
@@ -1043,12 +1052,16 @@ def _audit_custom_ruleset_rules(rules_data: dict, zone_name: str) -> list[RuleIP
                 label,
                 zone_name,
             )
+        if failed_extensions is not None:
+            failed_extensions.extend(failed)
     return results
 
 
 def audit_zone_rules(
     rules_data: dict,
     zone_name: str,
+    *,
+    failed_extensions: list[str] | None = None,
 ) -> list[RuleIPInfo]:
     """Extract IP info from a zone's rules using registered audit extensions.
 
@@ -1056,6 +1069,11 @@ def audit_zone_rules(
     audit extension extractors for each.  Then resolves ``list_refs``
     populated by provider extractors into actual IPs from the ``lists``
     section.  Unreferenced IP lists are included as standalone pseudo-rules.
+
+    When *failed_extensions* is given, the names of extensions that raised
+    are appended to it — a crashed extractor means the returned IP info is
+    incomplete, and callers that report or gate on audit results must not
+    treat the extraction as clean.
     """
     from octorules.extensions import call_audit_extensions
 
@@ -1085,8 +1103,10 @@ def audit_zone_rules(
                 phase_name,
                 zone_name,
             )
+        if failed_extensions is not None:
+            failed_extensions.extend(failed)
 
-    all_infos.extend(_audit_custom_ruleset_rules(audited_data, zone_name))
+    all_infos.extend(_audit_custom_ruleset_rules(audited_data, zone_name, failed_extensions))
 
     # Resolve list_refs → IPs from the lists section
     ip_map = _build_list_ip_map(rules_data)
