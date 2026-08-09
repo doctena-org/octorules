@@ -102,6 +102,7 @@ jobs:
           pip install octorules-cloudflare octorules-aws \
                       octorules-azure octorules-google octorules-bunny
       - name: Every namespace registers together
+        working-directory: ${{ runner.temp }}
         run: |
           python -c "
           import octorules_cloudflare, octorules_aws, octorules_azure
@@ -113,6 +114,9 @@ jobs:
           print('namespaces:', got)
           "
       - name: Test helpers must not be importable from a wheel
+        # From a neutral directory: the checkout's own tests/ directory is
+        # importable from the repo root, which is not the leak this checks.
+        working-directory: ${{ runner.temp }}
         run: |
           python - <<'PY'
           import importlib.util
