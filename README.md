@@ -15,8 +15,8 @@ octorules is provider-agnostic. Each provider is a separate package:
 | [octorules-cloudflare](https://github.com/doctena-org/octorules-cloudflare) | Cloudflare Rules (23 phases) | Stable |
 | [octorules-aws](https://github.com/doctena-org/octorules-aws) | AWS WAF v2 (4 phases) | Beta |
 | [octorules-google](https://github.com/doctena-org/octorules-google) | Google Cloud Armor (4 phases) | Beta |
-| [octorules-azure](https://github.com/doctena-org/octorules-azure) | Azure WAF — Front Door & App Gateway (3 phases) | Alpha |
-| [octorules-bunny](https://github.com/doctena-org/octorules-bunny) | Bunny.net Shield WAF (4 phases) | Alpha |
+| [octorules-azure](https://github.com/doctena-org/octorules-azure) | Azure WAF — Front Door & App Gateway (3 phases) | Beta |
+| [octorules-bunny](https://github.com/doctena-org/octorules-bunny) | Bunny.net Shield WAF (4 phases) | Stable |
 
 ## Getting started
 
@@ -566,6 +566,10 @@ items: [...]
 `accept=cdn-ranges` silences ordinary CDN-range warnings, but **not** own-edge
 findings (an active provider's own edge ranges) — those are errors by design
 and can only be resolved by removing the offending IP.
+
+If a provider's audit extractor crashes, the audit reports a non-suppressible
+`extension-failure` error for the affected zone (results are incomplete) and
+exits non-zero rather than silently under-reporting.
 
 ### `octorules versions`
 
