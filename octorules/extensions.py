@@ -294,8 +294,6 @@ def call_validate_extensions(
 def call_audit_extensions(
     rules_data: dict,
     phase_name: str,
-    *,
-    strict: bool = False,
 ) -> tuple[list["RuleIPInfo"], list[str]]:
     """Call all registered audit extractors for a phase.
 
@@ -308,9 +306,9 @@ def call_audit_extensions(
     - **Plan/sync hooks** (prefetch, finalize, apply): errors are always
       **fatal** — the operation aborts immediately.  This guarantees
       planning and syncing never proceed with incomplete data.
-    - **Audit hooks**: errors are **best-effort** by default — partial
-      results are returned and the failed extension is recorded.  Set
-      *strict=True* to make audit errors fatal (raises immediately).
+    - **Audit hooks**: errors are **best-effort** — partial results are
+      returned and the failed extension is recorded; the audit command
+      reports each failure as a non-suppressible ERROR finding.
     """
     with _REGISTRY_LOCK:
         extensions = dict(_audit_extensions)
@@ -321,8 +319,6 @@ def call_audit_extensions(
             results.extend(fn(rules_data, phase_name))
         except Exception:
             log.exception("Error in audit extension %s for phase %s", name, phase_name)
-            if strict:
-                raise
             failed.append(name)
     return results, failed
 

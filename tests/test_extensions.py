@@ -240,10 +240,10 @@ class TestHookSignatureValidation:
 
 
 class TestAuditExtensionErrorHandling:
-    """Tests for audit extension error handling (strict vs best-effort)."""
+    """Tests for audit extension error handling (best-effort with recording)."""
 
     def test_audit_best_effort_returns_partial(self):
-        """Default (non-strict): failing extension is recorded but doesn't abort."""
+        """A failing extension is recorded but doesn't abort the others."""
         from octorules.audit import RuleIPInfo
 
         def good_audit(rules_data, phase_name):
@@ -271,32 +271,19 @@ class TestAuditExtensionErrorHandling:
             unregister_audit_extension("good")
             unregister_audit_extension("bad")
 
-    def test_audit_strict_raises(self):
-        """strict=True: failing extension raises immediately."""
-
-        def bad_audit(rules_data, phase_name):
-            raise RuntimeError("strict boom")
-
-        register_audit_extension("strict_bad", bad_audit)
-        try:
-            with pytest.raises(RuntimeError, match="strict boom"):
-                call_audit_extensions({"waf": []}, "waf", strict=True)
-        finally:
-            unregister_audit_extension("strict_bad")
-
-    def test_audit_strict_false_is_default(self):
-        """Explicit strict=False matches default behavior."""
+    def test_audit_failure_is_recorded_not_raised(self):
+        """A failing extension is recorded in ``failed`` and never propagates."""
 
         def bad_audit(rules_data, phase_name):
             raise ValueError("non-fatal")
 
-        register_audit_extension("strict_false", bad_audit)
+        register_audit_extension("recorded_bad", bad_audit)
         try:
-            results, failed = call_audit_extensions({"waf": []}, "waf", strict=False)
+            results, failed = call_audit_extensions({"waf": []}, "waf")
             assert results == []
-            assert "strict_false" in failed
+            assert "recorded_bad" in failed
         finally:
-            unregister_audit_extension("strict_false")
+            unregister_audit_extension("recorded_bad")
 
 
 class TestRegistrySnapshotSafety:

@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `_HTML_TABLE_HEADER` (`octorules.formatter`), `_normalize_value`,
   `_make_synthetic_phase` (`octorules.planner`), and `_apply_parallel`
   (`octorules.commands`). Use the public names.
+- The `strict` keyword of `call_audit_extensions()` — a crashed extension
+  is reported as a non-suppressible `extension-failure` finding instead of
+  optionally raising.
 
 ## [0.33.0] - 2026-08-08
 
