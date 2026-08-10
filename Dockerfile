@@ -21,6 +21,9 @@ RUN python -m venv /opt/octorules \
 
 FROM python:3.14-slim
 
+# GitHub links the GHCR package to this repository via this label.
+LABEL org.opencontainers.image.source="https://github.com/doctena-org/octorules"
+
 COPY --from=build /opt/octorules /opt/octorules
 
 ENV PATH="/opt/octorules/bin:$PATH" \

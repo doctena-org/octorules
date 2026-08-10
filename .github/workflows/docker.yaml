@@ -52,21 +52,76 @@ jobs:
 
   publish:
     # Runs on manual dispatch and when the release workflow calls with
-    # publish: true; skipped on plain pushes and PRs. The image version is
-    # read from pyproject.toml, not the git ref, so both paths tag alike.
+    # publish: true; skipped on plain pushes and PRs. Each architecture
+    # builds on its own native runner (no QEMU — emulated arm64 took the
+    # provider-SDK pip install from ~75s to 7+ minutes) and pushes by
+    # digest; merge stitches the multi-arch manifest.
     if: github.event_name == 'workflow_dispatch' || inputs.publish
     needs: [build]
     permissions:
       contents: read
       packages: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    strategy:
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push by digest
+        id: digest-build
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.digest-build.outputs.digest }}
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    # The image version is read from pyproject.toml, not the git ref, so
+    # the dispatch and release paths tag alike.
+    if: github.event_name == 'workflow_dispatch' || inputs.publish
+    needs: [publish]
+    permissions:
+      contents: read
+      packages: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -84,12 +139,20 @@ jobs:
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
-      - name: Push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          provenance: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Create the multi-arch manifest
+        working-directory: /tmp/digests
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          tags="$(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON")"
+          refs=""
+          for digest in *; do
+            refs="$refs $IMAGE@sha256:$digest"
+          done
+          # shellcheck disable=SC2086  # word splitting is the point
+          docker buildx imagetools create $tags $refs
+      - name: Verify
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE:${{ steps.version.outputs.version }}"
