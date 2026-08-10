@@ -268,12 +268,6 @@ def _map_ordered(
         return _run(ex)
 
 
-# Deprecated alias — apply_parallel moved to octorules.provider.utils
-# (beside fetch_parallel); kept importable from here so released provider
-# versions keep working until their adopted releases land.
-_apply_parallel = apply_parallel
-
-
 def _run_staged_tasks(
     stages: list[tuple[bool, _TaskList | Callable[[], _TaskList]]],
     max_workers: int,
@@ -286,7 +280,7 @@ def _run_staged_tasks(
     stage, e.g. IDs assigned during creates).
 
     Each task list contains ``(label, fn)`` tuples executed via
-    :func:`_apply_parallel`.  Stages run in order; within each stage tasks
+    :func:`apply_parallel`.  Stages run in order; within each stage tasks
     are parallelised.
 
     When *collect* is True the stage's successful labels are included in the
@@ -301,7 +295,7 @@ def _run_staged_tasks(
         tasks = tasks_or_builder() if callable(tasks_or_builder) else tasks_or_builder
         if not tasks:
             continue
-        stage_synced, error = _apply_parallel(tasks, max_workers)
+        stage_synced, error = apply_parallel(tasks, max_workers)
         if collect:
             synced.extend(stage_synced)
         if error:

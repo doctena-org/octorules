@@ -429,9 +429,10 @@ class TestApplyCustomRulesets:
 
     def test_apply_success(self):
         from octorules.commands import _apply_custom_rulesets
-        from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.extensions import make_synthetic_phase
+        from octorules.planner import CustomRulesetPlan
 
-        phase = _make_synthetic_phase(
+        phase = make_synthetic_phase(
             "custom_ruleset",
             "Block attackers",
             "fake_http_request_firewall_custom",
@@ -456,10 +457,11 @@ class TestApplyCustomRulesets:
 
     def test_apply_api_error(self):
         from octorules.commands import _apply_custom_rulesets
-        from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.extensions import make_synthetic_phase
+        from octorules.planner import CustomRulesetPlan
         from octorules.provider.exceptions import ProviderError
 
-        phase = _make_synthetic_phase(
+        phase = make_synthetic_phase(
             "custom_ruleset",
             "Block attackers",
             "fake_http_request_firewall_custom",
@@ -483,9 +485,10 @@ class TestApplyCustomRulesets:
 
     def test_apply_skips_no_prepared_rules(self, caplog):
         from octorules.commands import _apply_custom_rulesets
-        from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.extensions import make_synthetic_phase
+        from octorules.planner import CustomRulesetPlan
 
-        phase = _make_synthetic_phase(
+        phase = make_synthetic_phase(
             "custom_ruleset",
             "Block attackers",
             "fake_http_request_firewall_custom",
@@ -532,10 +535,11 @@ class TestApplyCustomRulesets:
     def test_sync_create_succeeds_put_fails(self):
         """When create_custom_ruleset succeeds but put_custom_ruleset fails, error is returned."""
         from octorules.commands import _apply_custom_rulesets
-        from octorules.planner import CustomRulesetPlan, _make_synthetic_phase
+        from octorules.extensions import make_synthetic_phase
+        from octorules.planner import CustomRulesetPlan
         from octorules.provider.exceptions import ProviderError
 
-        phase = _make_synthetic_phase(
+        phase = make_synthetic_phase(
             "custom_ruleset",
             "New RS",
             "fake_http_request_firewall_custom",

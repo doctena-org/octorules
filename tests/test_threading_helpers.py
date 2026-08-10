@@ -1,4 +1,4 @@
-"""Tests for _map_ordered, _run_staged_tasks, and _apply_parallel threading helpers."""
+"""Tests for _map_ordered, _run_staged_tasks, and apply_parallel threading helpers."""
 
 import threading
 import time
@@ -6,8 +6,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from octorules.commands._helpers import _apply_parallel, _map_ordered, _run_staged_tasks
+from octorules.commands._helpers import _map_ordered, _run_staged_tasks
 from octorules.provider.exceptions import ProviderAuthError, ProviderError
+from octorules.provider.utils import apply_parallel
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +174,7 @@ class TestRunStagedTasks:
 
 
 # ---------------------------------------------------------------------------
-# _apply_parallel additional edge cases
+# apply_parallel additional edge cases
 # ---------------------------------------------------------------------------
 class TestApplyParallelEdgeCases:
     def test_parallel_collects_successes_on_error(self):
@@ -188,7 +189,7 @@ class TestApplyParallelEdgeCases:
             raise ProviderError("boom")
 
         tasks = [("ok", succeed), ("fail", fail)]
-        synced, error = _apply_parallel(tasks, max_workers=2)
+        synced, error = apply_parallel(tasks, max_workers=2)
         assert "ok" in synced
         assert error is not None
         assert "fail" in error
@@ -203,7 +204,7 @@ class TestApplyParallelEdgeCases:
             raise ProviderError("boom")
 
         tasks = [("a", succeed), ("b", fail), ("c", succeed)]
-        synced, error = _apply_parallel(tasks, max_workers=1)
+        synced, error = apply_parallel(tasks, max_workers=1)
         assert synced == ["a"]
         assert error is not None
         assert results == ["ok"]  # "c" never ran

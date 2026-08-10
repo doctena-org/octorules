@@ -5,8 +5,8 @@ import json
 
 from octorules._color import _GREEN, _RESET, Pen, supports_color
 from octorules.formatter import (
-    _change_to_dict,
     _rule_detail_pairs,
+    change_to_dict,
     format_change,
     format_phase_plan,
     format_plan_html,
@@ -1198,7 +1198,7 @@ class TestChangeToDictHelper:
             current={"expression": "old", "action": "redirect"},
             desired={"expression": "new", "action": "redirect"},
         )
-        d = _change_to_dict(change)
+        d = change_to_dict(change)
         assert d["type"] == "modify"
         assert d["ref"] == "r1"
         assert "current" in d
@@ -1211,7 +1211,7 @@ class TestChangeToDictHelper:
             REDIRECT_PHASE,
             desired={"expression": "true", "action": "redirect"},
         )
-        d = _change_to_dict(change)
+        d = change_to_dict(change)
         assert d["type"] == "add"
         assert d["ref"] == "r1"
         assert "desired" in d

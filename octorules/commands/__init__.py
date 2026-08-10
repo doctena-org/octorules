@@ -7,7 +7,6 @@ All public and internal symbols are re-exported here so that existing
 from octorules.commands._audit import cmd_audit
 from octorules.commands._dump import cmd_dump
 from octorules.commands._helpers import (
-    _apply_parallel,
     _emit_plan_outputs,
     _filter_current_by_phase,
     _filter_desired_by_phase,
@@ -69,7 +68,6 @@ __all__ = [
     "_TaskList",
     "_apply_custom_rulesets",
     "_apply_lists",
-    "_apply_parallel",
     "_apply_single_zone",
     "_apply_zone_changes",
     "_check_safety_violations",

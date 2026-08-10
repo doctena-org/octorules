@@ -423,11 +423,9 @@ class TestCheckSafetyWithCustomRulesets:
 
     def test_custom_ruleset_deletes_counted(self):
         """Custom ruleset REMOVE changes should be counted in safety checks."""
-        from octorules.planner import _make_synthetic_phase
+        from octorules.extensions import make_synthetic_phase
 
-        phase = _make_synthetic_phase(
-            "custom_ruleset", "Block", "fake_http_request_firewall_custom"
-        )
+        phase = make_synthetic_phase("custom_ruleset", "Block", "fake_http_request_firewall_custom")
         changes = [RuleChange(ChangeType.REMOVE, f"r{i}", phase) for i in range(4)]
         crp = CustomRulesetPlan(
             ruleset_id="rs1",

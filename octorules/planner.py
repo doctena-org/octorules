@@ -10,11 +10,7 @@ from operator import itemgetter
 from typing import TYPE_CHECKING, Any
 
 from octorules.expression import normalize_expression
-
-# Deprecated alias — make_synthetic_phase moved to octorules.extensions;
-# kept importable from here so released provider versions keep working
-# until their adopted releases land.
-from octorules.extensions import make_synthetic_phase as _make_synthetic_phase
+from octorules.extensions import make_synthetic_phase
 from octorules.phases import (
     KNOWN_NON_PHASE_KEYS,
     NAMESPACE_CORE_SECTIONS,
@@ -232,10 +228,6 @@ def normalize_value(v: object, *, key: str = "") -> object:
     if key in _NORMALIZE_KEYS and isinstance(v, str):
         return normalize_expression(v)
     return v
-
-
-# Deprecated alias for the public name above.
-_normalize_value = normalize_value
 
 
 def normalize_rule(rule: RuleDict) -> RuleDict:
@@ -817,7 +809,7 @@ def diff_custom_ruleset(
         prepared.append(rule)
     plan.prepared_rules = prepared
 
-    synthetic_phase = _make_synthetic_phase("custom_ruleset", ruleset_name, phase)
+    synthetic_phase = make_synthetic_phase("custom_ruleset", ruleset_name, phase)
     plan.changes = _diff_rules(synthetic_phase, plan.prepared_rules, current_rules)
     return plan
 
@@ -1160,7 +1152,7 @@ def _list_item_remove_change(ref: str, item: RuleDict, phase: Phase) -> RuleChan
 
 def _make_list_phase(list_name: str) -> Phase:
     """Create a synthetic Phase for list item changes."""
-    return _make_synthetic_phase("list", list_name, "account_lists")
+    return make_synthetic_phase("list", list_name, "account_lists")
 
 
 def validate_list_entry(entry: dict, index: int) -> None:

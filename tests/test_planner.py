@@ -2236,9 +2236,10 @@ class TestChecksumDeterminism:
             ],
         )
 
-        from octorules.planner import CustomRulesetPlan, ListPlan, _make_synthetic_phase
+        from octorules.extensions import make_synthetic_phase
+        from octorules.planner import CustomRulesetPlan, ListPlan
 
-        cr_phase = _make_synthetic_phase(
+        cr_phase = make_synthetic_phase(
             "custom_ruleset", "MyRS", "fake_http_request_firewall_custom"
         )
         crp = CustomRulesetPlan(

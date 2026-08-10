@@ -12,7 +12,6 @@ from pathlib import Path
 import octorules.commands._helpers as _helpers_mod
 import octorules.commands._providers as _providers_mod
 from octorules.commands._helpers import (
-    _apply_parallel,
     _emit_plan_outputs,
     _format_api_error,
     _run_staged_tasks,
@@ -33,6 +32,7 @@ from octorules.provider.base import BaseProvider, Scope
 from octorules.provider.exceptions import (
     ProviderAuthError,
 )
+from octorules.provider.utils import apply_parallel
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ def _apply_custom_rulesets(
     """Apply custom ruleset changes. Returns (synced_labels, error_msg).
 
     Order: creates first, then rule updates, then deletes.
-    Each stage is parallelised via ``_apply_parallel``; stages run sequentially
+    Each stage is parallelised via ``apply_parallel``; stages run sequentially
     so that creates complete before rule updates read ``ruleset_id``.
     """
     # Stage 1: Creates (not collected -- setup only)
@@ -194,7 +194,7 @@ def _apply_lists(
     """Apply list changes. Returns (synced_labels, error_msg).
 
     Order: creates first, then item updates, then description updates, then deletes.
-    Each stage is parallelised via ``_apply_parallel``; stages run sequentially
+    Each stage is parallelised via ``apply_parallel``; stages run sequentially
     so that creates complete before item updates read ``list_id``.
     """
     # Stage 1: Creates (not collected -- setup only)
@@ -366,7 +366,7 @@ def _apply_single_zone(
 
         tasks.append((full_label, fn))
 
-    phase_synced, phase_error = _apply_parallel(tasks, max_w)
+    phase_synced, phase_error = apply_parallel(tasks, max_w)
     all_synced.extend(phase_synced)
     return zp.zone_name, all_synced, phase_error
 

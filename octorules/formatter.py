@@ -271,10 +271,6 @@ def change_to_dict(c: RuleChange) -> dict:
     return d
 
 
-# Deprecated alias for the public name above.
-_change_to_dict = change_to_dict
-
-
 def format_plan_json(zone_plans: list[ZonePlan]) -> str:
     """Format the plan as structured JSON.
 
@@ -349,10 +345,6 @@ def md_escape(text: str) -> str:
     return str(text).replace("|", "\\|")
 
 
-# Deprecated alias for the public name above.
-_md_escape = md_escape
-
-
 def md_change_row(
     c: RuleChange,
     phase_label: str,
@@ -382,10 +374,6 @@ def md_change_row(
         else:
             details = ""
     return f"| {op} | {escaped_phase} | {ref} | {details} |"
-
-
-# Deprecated alias for the public name above.
-_md_change_row = md_change_row
 
 
 def _md_diff_value(key: str, val: object, prefix: str) -> list[str]:
@@ -678,10 +666,6 @@ def html_render_changes(
     return creates, removes, modifies, reorders
 
 
-# Deprecated alias for the public name above.
-_html_render_changes = html_render_changes
-
-
 def html_summary_row(creates: int, removes: int, modifies: int, reorders: int) -> list[str]:
     """Build the summary <tr> lines for an HTML table."""
     parts = []
@@ -701,10 +685,6 @@ def html_summary_row(creates: int, removes: int, modifies: int, reorders: int) -
     ]
 
 
-# Deprecated alias for the public name above.
-_html_summary_row = html_summary_row
-
-
 HTML_TABLE_HEADER = [
     "<table>",
     "  <tr>",
@@ -713,9 +693,6 @@ HTML_TABLE_HEADER = [
     "    <th>Details</th>",
     "  </tr>",
 ]
-
-# Deprecated alias for the public name above.
-_HTML_TABLE_HEADER = HTML_TABLE_HEADER
 
 
 def format_plan_html(zone_plans: list[ZonePlan]) -> str:

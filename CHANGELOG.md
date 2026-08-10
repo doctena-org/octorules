@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (`extension-failure`, "results are incomplete") and a non-zero exit —
   previously a log warning and a clean exit.
 
+### Removed
+- The deprecated underscore aliases: `_change_to_dict`, `_md_escape`,
+  `_md_change_row`, `_html_render_changes`, `_html_summary_row`,
+  `_HTML_TABLE_HEADER` (`octorules.formatter`), `_normalize_value`,
+  `_make_synthetic_phase` (`octorules.planner`), and `_apply_parallel`
+  (`octorules.commands`). Use the public names.
+
 ## [0.33.0] - 2026-08-08
 
 ### Added

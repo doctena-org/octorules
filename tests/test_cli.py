@@ -2743,55 +2743,55 @@ class TestParallelPhaseApply:
 
 
 class TestApplyParallel:
-    """Direct unit tests for the _apply_parallel helper."""
+    """Direct unit tests for the apply_parallel helper."""
 
     def test_empty_task_list(self):
-        from octorules.commands import _apply_parallel
+        from octorules.provider.utils import apply_parallel
 
-        successes, error = _apply_parallel([], max_workers=4)
+        successes, error = apply_parallel([], max_workers=4)
         assert successes == []
         assert error is None
 
     def test_single_task_success(self):
-        from octorules.commands import _apply_parallel
+        from octorules.provider.utils import apply_parallel
 
         called = []
         tasks = [("task-a", lambda: called.append("a"))]
-        successes, error = _apply_parallel(tasks, max_workers=1)
+        successes, error = apply_parallel(tasks, max_workers=1)
         assert successes == ["task-a"]
         assert error is None
         assert called == ["a"]
 
     def test_single_task_api_error(self):
-        from octorules.commands import _apply_parallel
         from octorules.provider.exceptions import ProviderError
+        from octorules.provider.utils import apply_parallel
 
         def fail():
             raise ProviderError("boom")
 
         tasks = [("task-a", fail)]
-        successes, error = _apply_parallel(tasks, max_workers=1)
+        successes, error = apply_parallel(tasks, max_workers=1)
         assert successes == []
         assert error is not None
         assert "task-a" in error
         assert "boom" in error
 
     def test_single_task_timeout_error(self):
-        from octorules.commands import _apply_parallel
+        from octorules.provider.utils import apply_parallel
 
         def fail():
             raise TimeoutError("timed out")
 
         tasks = [("task-a", fail)]
-        successes, error = _apply_parallel(tasks, max_workers=1)
+        successes, error = apply_parallel(tasks, max_workers=1)
         assert successes == []
         assert error is not None
         assert "task-a" in error
         assert "timed out" in error
 
     def test_sequential_stops_on_first_error(self):
-        from octorules.commands import _apply_parallel
         from octorules.provider.exceptions import ProviderError
+        from octorules.provider.utils import apply_parallel
 
         called = []
 
@@ -2805,40 +2805,40 @@ class TestApplyParallel:
             called.append("never")
 
         tasks = [("a", ok), ("b", fail), ("c", never)]
-        successes, error = _apply_parallel(tasks, max_workers=1)
+        successes, error = apply_parallel(tasks, max_workers=1)
         assert successes == ["a"]
         assert error is not None
         assert "b" in error
         assert "never" not in called
 
     def test_auth_error_propagates_sequential(self):
-        from octorules.commands import _apply_parallel
         from octorules.provider.exceptions import ProviderAuthError
+        from octorules.provider.utils import apply_parallel
 
         def fail():
             raise ProviderAuthError("bad token")
 
         tasks = [("task-a", fail)]
         with pytest.raises(ProviderAuthError):
-            _apply_parallel(tasks, max_workers=1)
+            apply_parallel(tasks, max_workers=1)
 
     def test_auth_error_propagates_parallel(self):
-        from octorules.commands import _apply_parallel
         from octorules.provider.exceptions import ProviderAuthError
+        from octorules.provider.utils import apply_parallel
 
         def fail():
             raise ProviderAuthError("bad token")
 
         tasks = [("task-a", fail), ("task-b", lambda: None)]
         with pytest.raises(ProviderAuthError):
-            _apply_parallel(tasks, max_workers=4)
+            apply_parallel(tasks, max_workers=4)
 
     def test_parallel_collects_successes_on_error(self):
         """Parallel path: successful tasks collected even when one fails."""
         import threading
 
-        from octorules.commands import _apply_parallel
         from octorules.provider.exceptions import ProviderError
+        from octorules.provider.utils import apply_parallel
 
         barrier = threading.Barrier(3, timeout=5)
 
@@ -2853,7 +2853,7 @@ class TestApplyParallel:
             raise ProviderError("fail")
 
         tasks = [("a", ok1), ("b", fail), ("c", ok2)]
-        successes, error = _apply_parallel(tasks, max_workers=4)
+        successes, error = apply_parallel(tasks, max_workers=4)
         assert error is not None
         assert "b" in error
         # Both successful tasks should be collected
@@ -2861,11 +2861,11 @@ class TestApplyParallel:
 
     def test_non_int_max_workers_uses_sequential(self):
         """MagicMock or other non-int max_workers falls back to sequential."""
-        from octorules.commands import _apply_parallel
+        from octorules.provider.utils import apply_parallel
 
         called = []
         tasks = [("a", lambda: called.append("a")), ("b", lambda: called.append("b"))]
-        successes, error = _apply_parallel(tasks, max_workers=MagicMock())
+        successes, error = apply_parallel(tasks, max_workers=MagicMock())
         assert successes == ["a", "b"]
         assert error is None
         assert called == ["a", "b"]  # sequential order preserved

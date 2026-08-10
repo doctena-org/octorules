@@ -179,56 +179,18 @@ class TestLiteralize:
         assert "value: |-" in text
 
 
-class TestPublicAliases:
-    """The publicized helpers and their deprecated underscore aliases are
-    the same objects — imports through either name keep working."""
+class TestPublicHelpers:
+    """The publicized helpers are importable and behave correctly."""
 
     def test_normalize_value(self):
-        from octorules.planner import _normalize_value, normalize_value
+        from octorules.planner import normalize_value
 
-        assert _normalize_value is normalize_value
         assert normalize_value("ip.src  eq 1.2.3.4", key="expression") == "ip.src eq 1.2.3.4"
         assert normalize_value("a  b", key="description") == "a  b"
 
-    def test_make_synthetic_phase_alias(self):
-        from octorules.extensions import make_synthetic_phase
-        from octorules.planner import _make_synthetic_phase
+    def test_formatter_helpers(self):
+        from octorules.formatter import HTML_TABLE_HEADER, md_escape
 
-        assert _make_synthetic_phase is make_synthetic_phase
-
-    def test_apply_parallel_alias(self):
-        from octorules.commands._helpers import _apply_parallel
-        from octorules.provider.utils import apply_parallel
-
-        assert _apply_parallel is apply_parallel
-
-    def test_formatter_aliases(self):
-        from octorules.formatter import (
-            _change_to_dict,
-            _md_change_row,
-            change_to_dict,
-            md_change_row,
-        )
-
-        assert _change_to_dict is change_to_dict
-        assert _md_change_row is md_change_row
-
-    def test_formatter_markdown_html_aliases(self):
-        from octorules.formatter import (
-            _HTML_TABLE_HEADER,
-            HTML_TABLE_HEADER,
-            _html_render_changes,
-            _html_summary_row,
-            _md_escape,
-            html_render_changes,
-            html_summary_row,
-            md_escape,
-        )
-
-        assert _md_escape is md_escape
-        assert _html_render_changes is html_render_changes
-        assert _html_summary_row is html_summary_row
-        assert _HTML_TABLE_HEADER is HTML_TABLE_HEADER
         assert md_escape("a|b") == "a\\|b"
         assert HTML_TABLE_HEADER[0] == "<table>"
 
