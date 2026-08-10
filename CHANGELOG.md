@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `X.Y.Z`, published on release tags.
 
 ### Changed
+- Development status classifier: Beta → Production/Stable.
 - A crashed audit extension now produces a non-suppressible ERROR finding
   (`extension-failure`, "results are incomplete") and a non-zero exit —
   previously a log warning and a clean exit.
