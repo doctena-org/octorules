@@ -1,5 +1,5 @@
 {
-  "_comment": "Single source of truth for the octorules family's CI matrix. Provider repos fetch this from a release tag, never from main: a bad commit here must not break every repo's CI at once. Each repo also keeps a checked-in fallback copy, because octodns's equivalent has no --fail, no retry and no fallback, so a raw.githubusercontent blip blocks every PR in every provider repo. Keys live here only once a workflow reads them.",
+  "_comment": "Single source of truth for the octorules family's CI matrix. Provider repos fetch this at the ci-config/v1 tag, never from main: a bad commit here must not reach any provider until that tag is moved on purpose. The tag is moved rather than named per release, because a per-release ref is not self-policing - forget to bump it in all six repos and nothing breaks, the fleet just keeps testing against whatever the named tag froze. Each repo also keeps a checked-in fallback copy, because octodns's equivalent has no --fail, no retry and no fallback, so a raw.githubusercontent blip blocks every PR in every provider repo. Keys live here only once a workflow reads them.",
   "python_versions_active": [
     "3.10",
     "3.11",
