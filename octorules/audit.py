@@ -12,7 +12,7 @@ import ipaddress
 import json as _json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Container, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -175,6 +175,38 @@ class RuleIPInfo:
     not resolved into :attr:`ip_ranges` — but the reference exists, so
     :func:`audit_zone_rules` counts the list as referenced and does not report
     it as an unused standalone list."""
+
+
+def iter_audit_rules(
+    rules_data: dict,
+    phase_name: str,
+    provider_phase_names: Container[str],
+) -> Iterator[dict]:
+    """Yield the rule dicts an audit extension should inspect for *phase_name*.
+
+    Every provider's ``_extract_ips`` opened with the same three guards — the
+    phase belongs to this provider, core knows it, and the section really is a
+    list — followed by a per-rule ``isinstance`` check. Five identical copies of
+    framework logic, in the one place a provider has nothing provider-specific
+    to say.
+
+    Yields nothing (rather than raising) when the phase is not this provider's
+    or the section is malformed: an audit extension is called for every phase in
+    the file, most of which belong to someone else, so "not mine" is the common
+    case and not an error.
+    """
+    from octorules.phases import PHASE_BY_NAME
+
+    if phase_name not in provider_phase_names:
+        return
+    if phase_name not in PHASE_BY_NAME:
+        return
+    rules = rules_data.get(phase_name)
+    if not isinstance(rules, list):
+        return
+    for rule in rules:
+        if isinstance(rule, dict):
+            yield rule
 
 
 class FindingSeverity(Enum):

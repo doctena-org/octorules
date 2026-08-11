@@ -2705,3 +2705,53 @@ class TestAuditZoneRulesFailureCollection:
         finally:
             unregister_audit_extension("test_boom")
         assert infos == []
+
+
+class TestIterAuditRules:
+    """The guard block every provider's _extract_ips used to hand-write.
+
+    An audit extension is called for every phase in the file, most of which
+    belong to some other provider, so "not mine" is the common case and must be
+    an empty result rather than an error.
+    """
+
+    PHASE = "fakeprov.redirect_rules"
+
+    def test_yields_the_dict_rules_of_a_claimed_phase(self):
+        from octorules.audit import iter_audit_rules
+
+        data = {self.PHASE: [{"ref": "a"}, {"ref": "b"}]}
+        got = list(iter_audit_rules(data, self.PHASE, {self.PHASE}))
+        assert got == [{"ref": "a"}, {"ref": "b"}]
+
+    def test_phase_not_claimed_by_this_provider_yields_nothing(self):
+        from octorules.audit import iter_audit_rules
+
+        data = {self.PHASE: [{"ref": "a"}]}
+        assert list(iter_audit_rules(data, self.PHASE, frozenset())) == []
+
+    def test_phase_unknown_to_core_yields_nothing(self):
+        """Claimed by the provider but absent from PHASE_BY_NAME."""
+        from octorules.audit import iter_audit_rules
+
+        data = {"made.up_phase": [{"ref": "a"}]}
+        assert list(iter_audit_rules(data, "made.up_phase", {"made.up_phase"})) == []
+
+    def test_missing_section_yields_nothing(self):
+        from octorules.audit import iter_audit_rules
+
+        assert list(iter_audit_rules({}, self.PHASE, {self.PHASE})) == []
+
+    def test_non_list_section_yields_nothing(self):
+        """A mapping where a list belongs must not raise from an audit hook."""
+        from octorules.audit import iter_audit_rules
+
+        data = {self.PHASE: {"not": "a list"}}
+        assert list(iter_audit_rules(data, self.PHASE, {self.PHASE})) == []
+
+    def test_non_dict_entries_are_skipped_not_fatal(self):
+        from octorules.audit import iter_audit_rules
+
+        data = {self.PHASE: [{"ref": "a"}, "junk", None, {"ref": "b"}]}
+        got = list(iter_audit_rules(data, self.PHASE, {self.PHASE}))
+        assert got == [{"ref": "a"}, {"ref": "b"}]
