@@ -162,9 +162,7 @@ class BaseProvider(Protocol):
 
     def put_list_items(self, scope: Scope, list_id: str, items: list[dict]) -> str: ...
 
-    def poll_bulk_operation(
-        self, scope: Scope, operation_id: str, *, timeout: float = 120.0
-    ) -> str: ...
+    def poll_bulk_operation(self, scope: Scope, operation_id: str) -> str: ...
 
     def get_all_lists(
         self, scope: Scope, *, list_names: list[str] | None = None

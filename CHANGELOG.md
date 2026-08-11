@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `octorules.cli.__all__` and `octorules.commands.__all__` no longer advertise
   39 underscore-prefixed internals. The names stay importable; they are simply
   not part of the supported surface.
+- `sync` reports the rule count per phase, and warns when a provider applies a
+  different number than was sent.
+- **`BaseProvider.poll_bulk_operation()` drops its `timeout` keyword.** Third-party
+  providers implementing it should remove the parameter; the polling ceiling is
+  the provider's own concern.
 
 ### Fixed
 - A secret handler without a callable `fetch()` now fails at config-resolve

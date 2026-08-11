@@ -361,8 +361,32 @@ def _apply_single_zone(
                 kw[scope_key],
                 len(_payload),
             )
-            provider.put_phase_rules(scope, _phase.provider_id, _payload)
-            log.info("  %s/%s: done", zp.zone_name, _label, extra={"color": "success"})
+            applied = provider.put_phase_rules(scope, _phase.provider_id, _payload)
+            sent = len(_payload)
+            if isinstance(applied, int) and applied != sent:
+                # A phase update replaces the whole ruleset in one call, so a
+                # response carrying a different number of rules than was sent
+                # means the result is not what the plan described. Reporting it
+                # at the sync line puts it where the operator is already looking;
+                # it is deliberately not fatal, because no case of this firing
+                # against a real provider has been observed and turning an
+                # unverified condition into a failed deploy is the worse risk.
+                log.warning(
+                    "  %s/%s: applied %d of %d rule(s) -- verify the phase",
+                    zp.zone_name,
+                    _label,
+                    applied,
+                    sent,
+                    extra={"color": "warning"},
+                )
+            else:
+                log.info(
+                    "  %s/%s: done (%d rule(s))",
+                    zp.zone_name,
+                    _label,
+                    sent,
+                    extra={"color": "success"},
+                )
 
         tasks.append((full_label, fn))
 

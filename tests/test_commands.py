@@ -982,3 +982,46 @@ class TestAccountSectionCheckIgnoresPhaseFilter:
 
         cfg = self._config({"fakeprov.redirect_rules": [], "fakeprov.cache_rules": []})
         _plan_account(cfg, self._provider(), ["fakeprov.redirect_rules"])
+
+
+class TestPhaseRuleCountReporting:
+    """The count put_phase_rules returns reaches the operator.
+
+    A phase update replaces the whole ruleset in one call, so a response
+    carrying a different count than was sent means the applied state is not what
+    the plan described. It is reported, not raised: no case of this firing
+    against a real provider has been observed, and turning an unverified
+    condition into a failed deploy is the worse risk.
+    """
+
+    @staticmethod
+    def _apply(returned_count, caplog):
+        import logging
+
+        from octorules.commands import _apply_single_zone
+
+        prov = _make_mock_provider()
+        prov.max_workers = 1
+        prov.put_phase_rules.return_value = returned_count
+        zp = _make_zone_plan("example.com", with_changes=True)
+        desired = {_REDIRECT_PHASE.friendly_name: [{"ref": "r1", "expression": "true"}]}
+        with caplog.at_level(logging.INFO):
+            _apply_single_zone(zp, desired, Scope(zone_id="z1", label="example.com"), prov)
+        return caplog.records
+
+    def test_matching_count_reports_the_number(self, caplog):
+        records = self._apply(1, caplog)
+        assert any("done (1 rule(s))" in r.getMessage() for r in records), [
+            r.getMessage() for r in records
+        ]
+
+    def test_short_count_warns_and_names_both_numbers(self, caplog):
+        records = self._apply(0, caplog)
+        warnings = [r for r in records if r.levelname == "WARNING"]
+        assert warnings, "a count mismatch must be visible, not swallowed"
+        assert any("applied 0 of 1" in r.getMessage() for r in warnings)
+
+    def test_mismatch_does_not_raise(self, caplog):
+        """Non-fatal by design — the condition is unverified against real APIs."""
+        records = self._apply(99, caplog)
+        assert any("applied 99 of 1" in r.getMessage() for r in records)
