@@ -6,24 +6,60 @@ import sys
 
 from octorules import __version__
 from octorules.commands import (
-    _CHECKSUM_RE,
-    _apply_custom_rulesets,
-    _apply_lists,
-    _discover_provider_modules,
-    _emit_plan_outputs,
-    _ensure_provider_loaded,
-    _filter_current_by_phase,
-    _filter_desired_by_phase,
-    _format_api_error,
-    _get_zones,
-    _init_providers,
-    _map_ordered,
-    _plan_account,
-    _plan_single_zone,
-    _plan_single_zone_safe,
-    _plan_zones,
-    _validate_phases,
-    _write_output_file,
+    _CHECKSUM_RE as _CHECKSUM_RE,
+)
+from octorules.commands import (
+    _apply_custom_rulesets as _apply_custom_rulesets,
+)
+from octorules.commands import (
+    _apply_lists as _apply_lists,
+)
+from octorules.commands import (
+    _discover_provider_modules as _discover_provider_modules,
+)
+from octorules.commands import (
+    _emit_plan_outputs as _emit_plan_outputs,
+)
+from octorules.commands import (
+    _ensure_provider_loaded as _ensure_provider_loaded,
+)
+from octorules.commands import (
+    _filter_current_by_phase as _filter_current_by_phase,
+)
+from octorules.commands import (
+    _filter_desired_by_phase as _filter_desired_by_phase,
+)
+from octorules.commands import (
+    _format_api_error as _format_api_error,
+)
+from octorules.commands import (
+    _get_zones as _get_zones,
+)
+from octorules.commands import (
+    _init_providers as _init_providers,
+)
+from octorules.commands import (
+    _map_ordered as _map_ordered,
+)
+from octorules.commands import (
+    _plan_account as _plan_account,
+)
+from octorules.commands import (
+    _plan_single_zone as _plan_single_zone,
+)
+from octorules.commands import (
+    _plan_single_zone_safe as _plan_single_zone_safe,
+)
+from octorules.commands import (
+    _plan_zones as _plan_zones,
+)
+from octorules.commands import (
+    _validate_phases as _validate_phases,
+)
+from octorules.commands import (
+    _write_output_file as _write_output_file,
+)
+from octorules.commands import (
     cmd_audit,
     cmd_dump,
     cmd_lint,
@@ -38,27 +74,11 @@ from octorules.provider.exceptions import (
 
 log = logging.getLogger(__name__)
 
-# Re-export everything from commands so that existing imports from octorules.cli
-# continue to work (e.g. ``from octorules.cli import cmd_plan``).
+# Re-export from commands so that existing imports from octorules.cli continue
+# to work (e.g. ``from octorules.cli import cmd_plan``). ``__all__`` names only
+# the supported surface; underscore-prefixed helpers stay importable but are not
+# part of it.
 __all__ = [
-    "_CHECKSUM_RE",
-    "_apply_custom_rulesets",
-    "_apply_lists",
-    "_discover_provider_modules",
-    "_emit_plan_outputs",
-    "_ensure_provider_loaded",
-    "_filter_current_by_phase",
-    "_filter_desired_by_phase",
-    "_format_api_error",
-    "_get_zones",
-    "_init_providers",
-    "_map_ordered",
-    "_plan_account",
-    "_plan_single_zone",
-    "_plan_single_zone_safe",
-    "_plan_zones",
-    "_validate_phases",
-    "_write_output_file",
     "build_parser",
     "cmd_audit",
     "cmd_dump",

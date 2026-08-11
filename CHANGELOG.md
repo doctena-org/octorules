@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- `octorules.cli.__all__` and `octorules.commands.__all__` no longer advertise
+  39 underscore-prefixed internals. The names stay importable; they are simply
+  not part of the supported surface.
+
 ## [0.34.0] - 2026-08-10
 
 ### Added
