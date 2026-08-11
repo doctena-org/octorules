@@ -286,6 +286,63 @@ class TestAuditExtensionErrorHandling:
             unregister_audit_extension("recorded_bad")
 
 
+class TestFormatExtensionInterface:
+    """register_format_extension checks the protocol's four methods.
+
+    A formatter missing one registers fine and then fails inside plan
+    rendering, for only the output mode that needs the missing method — so
+    text output can look healthy while ``--format html`` crashes.
+    """
+
+    class _Complete:
+        def format_text(self, plans, use_color):
+            return []
+
+        def format_json(self, plans):
+            return []
+
+        def format_markdown(self, plans, pending_diffs):
+            return []
+
+        def format_html(self, plans, lines):
+            return (0, 0, 0, 0)
+
+    def test_complete_formatter_registers(self):
+        name = "_iface_complete"
+        try:
+            register_format_extension(name, self._Complete())
+            assert name in get_format_extensions()
+        finally:
+            unregister_format_extension(name)
+
+    def test_missing_one_method_is_rejected(self):
+        class _NoHtml(TestFormatExtensionInterface._Complete):
+            format_html = None
+
+        with pytest.raises(TypeError) as exc:
+            register_format_extension("_iface_no_html", _NoHtml())
+        assert "format_html" in str(exc.value)
+        assert "_iface_no_html" in str(exc.value)
+        assert "_iface_no_html" not in get_format_extensions()
+
+    def test_message_lists_every_missing_method(self):
+        class _Empty:
+            pass
+
+        with pytest.raises(TypeError) as exc:
+            register_format_extension("_iface_empty", _Empty())
+        msg = str(exc.value)
+        for m in ("format_text", "format_json", "format_markdown", "format_html"):
+            assert m in msg
+
+    def test_non_callable_attribute_is_not_a_method(self):
+        class _Attr(TestFormatExtensionInterface._Complete):
+            format_json = "not callable"
+
+        with pytest.raises(TypeError):
+            register_format_extension("_iface_attr", _Attr())
+
+
 class TestRegistrySnapshotSafety:
     """Tests that call_* functions snapshot registries before iterating.
 

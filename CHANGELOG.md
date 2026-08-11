@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   as a `ConfigError` naming the file, instead of a `RecursionError` traceback.
 - Unhandled errors and Ctrl-C no longer end a run with a raw traceback; the
   traceback moves behind `--debug`, and Ctrl-C exits 130.
+- `register_format_extension()` rejects a formatter missing any of the four
+  `FormatExtension` methods, instead of failing later inside plan rendering for
+  only the output mode that needed the missing one.
 
 ## [0.34.0] - 2026-08-10
 

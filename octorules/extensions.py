@@ -134,13 +134,26 @@ _audit_extensions: dict[str, AuditExtensionFn] = {}
 # ---------------------------------------------------------------------------
 # Registration functions
 # ---------------------------------------------------------------------------
+_FORMAT_METHODS = ("format_text", "format_json", "format_markdown", "format_html")
+
+
 def register_format_extension(name: str, fmt: FormatExtension) -> None:
     """Register a formatter for extension *name*.
 
-    No signature validation is performed — ``FormatExtension`` is a
-    structural (duck-typed) protocol and is validated by the caller at
-    use time.
+    ``FormatExtension`` is a structural protocol, so *fmt* is checked for the
+    four methods rather than for a signature. Without the check a formatter
+    missing one of them registers cleanly and fails much later, inside plan
+    rendering, as an ``AttributeError`` naming neither the extension nor the
+    output mode that asked for it — and only for the one mode that is missing,
+    so text output can look fine while ``--format html`` crashes.
     """
+    missing = [m for m in _FORMAT_METHODS if not callable(getattr(fmt, m, None))]
+    if missing:
+        raise TypeError(
+            f"format extension {name!r} ({type(fmt).__module__}.{type(fmt).__name__})"
+            f" is missing {', '.join(missing)}; a FormatExtension must implement"
+            f" {', '.join(_FORMAT_METHODS)}"
+        )
     with _REGISTRY_LOCK:
         _format_extensions[name] = fmt
 
