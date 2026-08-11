@@ -248,12 +248,27 @@ def format_zone_plan(zone_plan: ZonePlan, use_color: bool = True) -> str:
     for lp in zone_plan.list_plans:
         lines.extend(format_list_plan(lp, use_color))
 
+    for _name, fmt, plans in _iter_extension_plans(zone_plan):
+        lines.extend(fmt.format_text(plans, use_color))
+
+    return "\n".join(lines)
+
+
+def _iter_extension_plans(zone_plan: ZonePlan):
+    """Yield ``(name, formatter, plans)`` for extensions with plans on this zone.
+
+    Each output mode renders extension plans differently, but all four asked the
+    same question first — which registered extensions have anything to show for
+    this zone — and re-derived it as a registry walk, a ``get`` with a default
+    and a truthiness check. Four copies of a predicate is four places to edit if
+    "has anything to show" ever stops meaning "the list is non-empty".
+
+    The rendering stays with each formatter; only the selection is shared.
+    """
     for name, fmt in get_format_extensions().items():
         plans = zone_plan.extension_plans.get(name, [])
         if plans:
-            lines.extend(fmt.format_text(plans, use_color))
-
-    return "\n".join(lines)
+            yield name, fmt, plans
 
 
 def _total_changes(zone_plans: list[ZonePlan]) -> int:
@@ -327,10 +342,8 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
             zone_entry["custom_ruleset_plans"] = cr_plans
         if lp_plans:
             zone_entry["list_plans"] = lp_plans
-        for ext_name, fmt in get_format_extensions().items():
-            ext_plans = zp.extension_plans.get(ext_name, [])
-            if ext_plans:
-                zone_entry[f"{ext_name}_policy_plans"] = fmt.format_json(ext_plans)
+        for ext_name, fmt, ext_plans in _iter_extension_plans(zp):
+            zone_entry[f"{ext_name}_policy_plans"] = fmt.format_json(ext_plans)
         zones.append(zone_entry)
     result = {
         "zones": zones,
@@ -448,10 +461,8 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 pending_diffs.append([("description", old_desc, new_desc)])
             for c in lp.changes:
                 lines.append(md_change_row(c, phase_label, pending_diffs, has_reorder=False))
-        for ext_name, fmt in get_format_extensions().items():
-            ext_plans = zp.extension_plans.get(ext_name, [])
-            if ext_plans:
-                lines.extend(fmt.format_markdown(ext_plans, pending_diffs))
+        for _ext_name, fmt, ext_plans in _iter_extension_plans(zp):
+            lines.extend(fmt.format_markdown(ext_plans, pending_diffs))
         for diff_group in pending_diffs:
             lines.append("")
             lines.append("```diff")
@@ -794,10 +805,8 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
             lines.extend(html_summary_row(lp_creates, lp_removes, lp_modifies, 0))
             lines.append("</table>")
 
-        for ext_name, fmt in get_format_extensions().items():
-            ext_plans = zp.extension_plans.get(ext_name, [])
-            if ext_plans:
-                fmt.format_html(ext_plans, lines)
+        for _ext_name, fmt, ext_plans in _iter_extension_plans(zp):
+            fmt.format_html(ext_plans, lines)
 
     if not any(zp.has_changes for zp in zone_plans):
         lines.append("<b>No changes were planned</b>")
