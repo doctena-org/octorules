@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   39 underscore-prefixed internals. The names stay importable; they are simply
   not part of the supported surface.
 
+### Fixed
+- A secret handler without a callable `fetch()` now fails at config-resolve
+  time with a `ConfigError` naming it, instead of an `AttributeError` part-way
+  through a run.
+- A YAML file nested deeply enough to exhaust the interpreter stack now reports
+  as a `ConfigError` naming the file, instead of a `RecursionError` traceback.
+- Unhandled errors and Ctrl-C no longer end a run with a raw traceback; the
+  traceback moves behind `--debug`, and Ctrl-C exits 130.
+
 ## [0.34.0] - 2026-08-10
 
 ### Added

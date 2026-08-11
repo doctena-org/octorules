@@ -708,3 +708,18 @@ def main(argv: list[str] | None = None) -> None:
         log.error("Authentication failed: %s", _format_api_error(e))
         log.error("Check that your API credentials are configured correctly.")
         _exit(command, 1, time.monotonic() - t0)
+    except KeyboardInterrupt:
+        # Ctrl-C is a user action, not a crash. Do not print a traceback for it.
+        log.error("Interrupted")
+        _exit(command, 130, time.monotonic() - t0)
+    except Exception:
+        # Anything reaching here is a bug rather than a handled condition. Print
+        # the traceback under --debug (where it is what the user asked for) and a
+        # single actionable line otherwise, instead of ending a CLI run with a
+        # raw stack trace as its final word.
+        log.error(
+            "Unexpected error during %r. Re-run with --debug for the full traceback.",
+            command,
+        )
+        log.debug("Traceback for %r:", command, exc_info=True)
+        _exit(command, 1, time.monotonic() - t0)

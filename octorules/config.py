@@ -118,6 +118,15 @@ def _yaml_load(path: Path, visited: set[Path] | None = None) -> object:
                 loader.dispose()
     except yaml.YAMLError as e:
         raise ConfigError(f"Invalid YAML in {path}: {e}") from e
+    except RecursionError as e:
+        # PyYAML composes nested collections recursively and imposes no depth
+        # limit, so a deeply nested document exhausts the interpreter stack.
+        # RecursionError is not a YAMLError, so without this it escapes as a
+        # raw traceback naming neither the file nor the cause.
+        raise ConfigError(
+            f"YAML in {path} is nested too deeply to parse"
+            " (exhausted the interpreter stack while composing it)"
+        ) from e
 
 
 #: Sets enabled when ``manager.lint`` says nothing.  Strict is on by default:
@@ -289,6 +298,24 @@ def _default_handlers() -> dict[str, object]:
     from octorules.secret.environ import EnvironSecrets
 
     return {"env": EnvironSecrets("env")}
+
+
+def _check_secret_handler(handler: object, name: str, source: str) -> None:
+    """Reject a secret handler that cannot satisfy the interface.
+
+    Handlers are duck-typed rather than required to subclass ``BaseSecrets``,
+    which keeps third-party handlers simple. The cost is that a class which
+    imports and constructs cleanly but has no ``fetch()`` is not discovered at
+    load time — it surfaces much later, part-way through a run, as a bare
+    ``AttributeError`` that names neither the handler nor the plugin it came
+    from. Checking here turns that into a ``ConfigError`` naming both.
+    """
+    if not callable(getattr(handler, "fetch", None)):
+        raise ConfigError(
+            f"{source} {name!r} ({type(handler).__module__}.{type(handler).__name__})"
+            " has no callable fetch() method; a secret handler must implement"
+            " fetch(ref, source)"
+        )
 
 
 def resolve_value(value: str) -> str:
@@ -684,9 +711,11 @@ class Config:
             if ep.name not in handlers:
                 try:
                     cls = ep.load()
-                    handlers[ep.name] = cls(ep.name)
+                    handler = cls(ep.name)
                 except (ImportError, AttributeError, ModuleNotFoundError) as e:
                     raise ConfigError(f"Failed to load secret handler {ep.name!r}: {e}") from e
+                _check_secret_handler(handler, ep.name, "secret handler entry point")
+                handlers[ep.name] = handler
 
         # Config-declared handlers
         for sh_name, sh_data in self._secret_handlers_raw.items():
@@ -698,7 +727,9 @@ class Config:
                 for k, v in sh_data.items()
                 if k != "class"
             }
-            handlers[sh_name] = sh_class(sh_name, **sh_kwargs)
+            handler = sh_class(sh_name, **sh_kwargs)
+            _check_secret_handler(handler, sh_name, "secret_handlers entry")
+            handlers[sh_name] = handler
 
         # Resolve provider kwargs
         for pc in self.providers.values():
