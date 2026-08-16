@@ -64,6 +64,8 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
     CORE009: Malformed ``custom_rulesets`` entry.
     CORE010: An extension section fails its registered validation hook.
     CORE011: A section plan/sync would skip entirely.
+    CORE013: An extension section is legal but has a security consequence
+        that is easy to miss (warning).
     """
     import copy
 
@@ -260,10 +262,22 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
             )
         )
 
-    # CORE010: registered validate-extension hooks (e.g. Page Shield).
+    # CORE010 / CORE013: registered validate-extension hooks (e.g. Page Shield).
+    #
+    # A hook reports through two channels. Anything appended to *errors* is a
+    # configuration that cannot do what it claims and surfaces as CORE010, an
+    # error. Anything appended to *warnings* is legal and deployable but has a
+    # security consequence that is easy to miss — an SSL mode that leaves the
+    # origin leg in plaintext, say — and surfaces as CORE013.
+    #
+    # The fourth argument was previously passed as a throwaway list and
+    # discarded, so a hook had no way to say anything short of "this is an
+    # error". Every existing hook writes only to *errors*, so consuming the
+    # second channel changes nothing until a hook opts in.
     ext_errors: list[str] = []
+    ext_warnings: list[str] = []
     try:
-        call_validate_extensions(desired, ctx.zone_name, ext_errors, [])
+        call_validate_extensions(desired, ctx.zone_name, ext_errors, ext_warnings)
     except Exception as e:
         ext_errors.append(f"validate extension raised: {e!r}")
     for err in ext_errors:
@@ -272,6 +286,14 @@ def _core_lint_zone(desired: dict, ctx: LintContext) -> None:
                 rule_id="CORE010",
                 severity=Severity.ERROR,
                 message=err.strip(),
+            )
+        )
+    for warning in ext_warnings:
+        ctx.add(
+            LintResult(
+                rule_id="CORE013",
+                severity=Severity.WARNING,
+                message=warning.strip(),
             )
         )
 

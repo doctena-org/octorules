@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `octorules.audit.iter_audit_rules()` — yields the rule dicts an audit
   extension should inspect, replacing the guard block each provider
   hand-wrote. Provider packages require this version.
+- **CORE013** (WARNING): a validate-extension hook can now report a setting
+  that is legal but weakens security. Hooks report warnings through the
+  fourth argument of the validate hook, which lint previously discarded — a
+  hook that used it for progress messages must move those to the log.
 
 ### Changed
 - `octorules.cli.__all__` and `octorules.commands.__all__` no longer advertise

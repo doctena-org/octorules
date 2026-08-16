@@ -297,7 +297,19 @@ def call_apply_extensions(
 def call_validate_extensions(
     desired: dict, zone_name: str, errors: list[str], lines: list[str]
 ) -> None:
-    """Call all registered validation hooks."""
+    """Call all registered validation hooks.
+
+    A hook reports through two lists. *errors* collects configurations that
+    cannot do what they claim; lint reports them as CORE010 errors. *lines*
+    collects warnings — settings that are legal and deployable but carry a
+    security consequence that is easy to miss — and lint reports them as
+    CORE013 warnings.
+
+    *lines* was previously passed by the lint command as a throwaway list and
+    discarded, so anything a hook put there had no effect. It is a real channel
+    now, which means a hook must not use it for progress or success messages;
+    those belong in the log.
+    """
     with _REGISTRY_LOCK:
         hooks = list(_validate_extensions)
     for fn in hooks:

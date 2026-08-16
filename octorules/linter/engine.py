@@ -264,6 +264,7 @@ CORE_RULE_IDS: frozenset[str] = frozenset(
         "CORE010",
         "CORE011",
         "CORE012",
+        "CORE013",
     }
 )
 
@@ -315,6 +316,12 @@ def _register_core_rules() -> None:
                 # `lint:` config block instead.
                 sets=frozenset({"default", "strict"}),
                 suppressible=False,
+            ),
+            RuleMeta(
+                "CORE013",
+                "core",
+                "Extension section is legal but weakens security",
+                Severity.WARNING,
             ),
             RuleMeta(
                 "CORE012",
