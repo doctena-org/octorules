@@ -802,6 +802,8 @@ Extension hooks (plan, apply, format, validate, dump, audit) registered via `oct
 
 Settings-style extensions — provider sections that diff a flat `{field: value}` dict of desired YAML settings against live zone configuration — can build on the shared data model and plan-output formatter in `octorules.extensions`: `SettingsChange`, `SettingsPlan`, and `SettingsFormatter` (text, JSON, markdown, HTML, and report output). All bundled providers' settings sections use it. `make_synthetic_phase()` supports extensions that plan non-standard rulesets.
 
+An extension declares the scope it plans at via the `zone_level`/`account_level` class attributes (zone-only by default, which matches every settings-style extension). An account-scoped extension reads its section from the account rules file and runs through the same prefetch/finalize pipeline as zone planning; a section declared at the wrong scope level is skipped with a warning naming the rules file it belongs in.
+
 ## CI/CD integration
 
 For GitHub Actions, see [octorules-sync](https://github.com/doctena-org/octorules-sync) — a ready-made action that runs plan on PRs and sync on merge to main.

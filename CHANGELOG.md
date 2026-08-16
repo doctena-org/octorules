@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- Account planning (`_plan_account`) runs extension prefetch/finalize, so an
+  account-scoped extension section plans, syncs, and dumps like any other.
+- `ProviderExtension.zone_level`/`account_level` declare planning scope
+  (zone-only default); a wrong-scope section is skipped with a warning.
+
 ## [0.35.0] - 2026-08-16
 
 ### Added

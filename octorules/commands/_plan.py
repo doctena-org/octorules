@@ -312,6 +312,11 @@ def _plan_account(
         if lists_desired is not None:
             lists_future = bg.submit(provider.get_all_lists, scope)
 
+    # Start extension prefetch, mirroring the zone path. Zone-only extensions
+    # skip themselves on an account scope; account-scoped ones (e.g. alerting
+    # policies) do their fetching here.
+    ext_contexts = call_plan_zone_prefetch(all_desired, scope, provider)
+
     try:
         try:
             current = provider.get_all_phase_rules(scope, provider_ids=provider_ids)
@@ -325,7 +330,7 @@ def _plan_account(
             )
             return None, {}, {}
 
-        if not desired and not current:
+        if not desired and not current and not any(ctx is not None for _, ctx in ext_contexts):
             log.debug("No account rules to manage for %s", provider.account_name)
             return None, {}, {}
 
@@ -372,6 +377,10 @@ def _plan_account(
             for lp in list_plans:
                 if lp.has_changes:
                     zp.list_plans.append(lp)
+
+        # Finalize extension hooks (join prefetched data, compute diffs),
+        # mirroring the zone path.
+        call_plan_zone_finalize(zp, all_desired, scope, provider, ext_contexts)
 
         return zp, desired, current
     finally:

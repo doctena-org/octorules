@@ -624,6 +624,100 @@ class TestSupportsGuards:
         prov.get_all_custom_rulesets.assert_called_once()
         prov.get_all_lists.assert_called_once()
 
+    def test_plan_account_runs_extension_hooks(self, tmp_path):
+        """The account path runs extension prefetch/finalize like the zone path.
+
+        Account-scoped extensions (e.g. notification policies) plan through
+        the same hooks as zone extensions; before this wiring existed,
+        ``_plan_account`` silently skipped them.
+        """
+        from octorules.commands import _plan_account
+        from octorules.extensions import ProviderExtension
+        from octorules.phases import register_non_phase_key, unregister_non_phase_key
+
+        calls: list[str] = []
+
+        class _AccountExt(ProviderExtension):
+            section = "someprov.account_thing"
+            zone_level = False
+            account_level = True
+
+            def prefetch(self, desired, scope, provider):
+                calls.append("prefetch")
+                assert scope.account_id == "acct-1"
+                return ("ctx",)
+
+            def finalize(self, zp, desired, scope, provider, ctx):
+                calls.append("finalize")
+                assert ctx == ("ctx",)
+                zp.extension_plans.setdefault("account_thing", []).append(object())
+
+        prov = self._make_limited_provider(frozenset())
+        prov.extensions = [_AccountExt()]
+        cfg = MagicMock()
+        cfg.load_account_rules.return_value = {"someprov.account_thing": {"a": 1}}
+
+        register_non_phase_key("someprov.account_thing")
+        try:
+            zp, _, _ = _plan_account(cfg, prov, None)
+        finally:
+            unregister_non_phase_key("someprov.account_thing")
+
+        assert calls == ["prefetch", "finalize"]
+        assert zp is not None
+        assert "account_thing" in zp.extension_plans
+
+    def test_plan_account_skips_zone_scoped_extensions(self, tmp_path, caplog):
+        """A zone-only extension is never prefetched with an account scope.
+
+        Every pre-existing extension calls provider getters that need
+        ``scope.zone_id``; handing them an account scope would make provider
+        calls with a None zone id. The declared-but-wrong-scope case is
+        warned about instead of silently ignored.
+        """
+        from octorules.commands import _plan_account
+        from octorules.extensions import ProviderExtension
+        from octorules.phases import register_non_phase_key, unregister_non_phase_key
+
+        class _ZoneExt(ProviderExtension):
+            section = "someprov.zone_thing"  # zone_level=True by default
+
+            def prefetch(self, desired, scope, provider):
+                raise AssertionError("zone-only extension prefetched on account scope")
+
+        prov = self._make_limited_provider(frozenset())
+        prov.extensions = [_ZoneExt()]
+        cfg = MagicMock()
+        cfg.load_account_rules.return_value = {"someprov.zone_thing": {"a": 1}}
+
+        register_non_phase_key("someprov.zone_thing")
+        try:
+            with caplog.at_level("WARNING"):
+                _plan_account(cfg, prov, None)
+        finally:
+            unregister_non_phase_key("someprov.zone_thing")
+
+        assert any("zone-scoped" in r.getMessage() for r in caplog.records)
+
+    def test_zone_plan_skips_account_scoped_extensions(self):
+        """An account-only extension is never prefetched with a zone scope."""
+        from octorules.extensions import ProviderExtension, call_plan_zone_prefetch
+        from octorules.provider.base import Scope
+
+        class _AcctExt(ProviderExtension):
+            section = "someprov.account_thing"
+            zone_level = False
+            account_level = True
+
+            def prefetch(self, desired, scope, provider):
+                raise AssertionError("account-only extension prefetched on zone scope")
+
+        prov = MagicMock(spec=BaseProvider)
+        prov.extensions = [_AcctExt()]
+        scope = Scope(zone_id="zone-1", label="example.com")
+        pairs = call_plan_zone_prefetch({"someprov.account_thing": []}, scope, prov)
+        assert pairs == []
+
     def test_no_supports_fetches_nothing(self, tmp_path):
         """Provider without SUPPORTS gets no optional feature fetched.
 

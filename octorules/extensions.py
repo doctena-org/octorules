@@ -224,7 +224,25 @@ def call_plan_zone_prefetch(
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    exts = applicable_extensions(provider, all_desired)
+    exts = []
+    for ext in applicable_extensions(provider, all_desired):
+        if ext.applies_to(scope):
+            exts.append(ext)
+        elif ext.section:
+            # The section is declared at the wrong scope level.  Planning it
+            # here would hand the extension a scope its provider calls cannot
+            # serve; ignoring it silently would be the silent-unmanage trap.
+            wanted = "account" if ext.account_level else "zone"
+            have = "account" if scope.is_account else "zone"
+            log.warning(
+                "Section %r is %s-scoped but appears in the %s rules for %s"
+                " -- ignored (move it to the %s rules file)",
+                ext.section,
+                wanted,
+                have,
+                scope.label,
+                wanted,
+            )
     log.debug("Prefetching %d extension(s)", len(exts))
     if not exts:
         return []
@@ -412,11 +430,22 @@ class ProviderExtension:
     #: Key for this extension's plans in ``ZonePlan.extension_plans``.
     #: Defaults to :attr:`section` when left empty.
     name: ClassVar[str] = ""
+    #: Scopes this extension plans at, mirroring :class:`Phase`'s vocabulary.
+    #: Zone-only by default -- most extension hooks call provider getters
+    #: that need ``scope.zone_id``, so handing them an account scope is
+    #: never right.  An account-scoped extension (e.g. notification
+    #: policies) overrides both.
+    zone_level: ClassVar[bool] = True
+    account_level: ClassVar[bool] = False
 
     @classmethod
     def plan_key(cls) -> str:
         """Key under which this extension's plans are stored."""
         return cls.name or cls.section
+
+    def applies_to(self, scope: "Scope") -> bool:
+        """Does this extension plan at *scope*'s level?"""
+        return self.account_level if scope.is_account else self.zone_level
 
     def prefetch(self, desired: object, scope: "Scope", provider: "BaseProvider") -> object:
         """Start background work for this section. Returns an opaque context."""
