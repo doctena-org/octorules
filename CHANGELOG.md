@@ -5,7 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.36.0] - 2026-09-03
+
+### Fixed
+- `dump` emits phase sections in a stable order (registration order, which
+  is execution order). They previously followed phase-fetch completion
+  order, so re-dumping an unchanged zone reordered its sections.
 
 ### Added
 - Account planning (`_plan_account`) runs extension prefetch/finalize, so an
