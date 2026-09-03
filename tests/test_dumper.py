@@ -1028,3 +1028,40 @@ class TestDumpAcrossProviderNamespaces:
         data = normalize_zone_format(yaml.safe_load(result.read_text()))
         assert "fakeprov.redirect_rules" in data
         assert any(k.startswith("bareprov.") for k in data)
+
+
+class TestPhaseSectionOrdering:
+    """Phase sections are emitted in registration (execution) order.
+
+    ``rules_by_provider_id`` arrives from parallel phase fetches, so its own
+    key order is thread-completion order. Iterating it directly made two
+    dumps of an unchanged zone differ in section order, which churns a
+    committed dump on every re-dump and hides real drift in the noise.
+    """
+
+    def _sections(self, tmp_path, provider_ids):
+        from octorules.phases import PHASE_BY_PROVIDER_ID
+
+        rules = {
+            pid: [{"ref": f"r-{pid}", "expression": "true", "action": "block"}]
+            for pid in provider_ids
+        }
+        path = dump_zone_rules("example.com", rules, tmp_path)
+        text = path.read_text()
+        names = [PHASE_BY_PROVIDER_ID[pid].friendly_name.split(".")[-1] for pid in provider_ids]
+        return [n for n in sorted(names, key=lambda n: text.index(f"{n}:")) if f"{n}:" in text]
+
+    def test_completion_order_does_not_leak_into_the_file(self, tmp_path):
+        from octorules.phases import ALL_PROVIDER_IDS
+
+        ids = ALL_PROVIDER_IDS[:4]
+        forward = self._sections(tmp_path / "a", ids)
+        reversed_ = self._sections(tmp_path / "b", list(reversed(ids)))
+        assert forward == reversed_
+
+    def test_sections_follow_registration_order(self, tmp_path):
+        from octorules.phases import ALL_PROVIDER_IDS, PHASE_BY_PROVIDER_ID
+
+        ids = ALL_PROVIDER_IDS[:4]
+        expected = [PHASE_BY_PROVIDER_ID[p].friendly_name.split(".")[-1] for p in ids]
+        assert self._sections(tmp_path / "c", list(reversed(ids))) == expected

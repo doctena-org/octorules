@@ -7,6 +7,7 @@ import yaml
 
 from octorules.pathutil import validate_path_within
 from octorules.phases import (
+    ALL_PROVIDER_IDS,
     NAMESPACE_CORE_SECTIONS,
     NAMESPACE_OF_KEY,
     PHASE_BY_PROVIDER_ID,
@@ -105,7 +106,19 @@ def dump_zone_rules(
         lists_dir = output_dir / "custom_lists"
     output: dict[str, list[dict]] = {}
 
-    for provider_id, rules in rules_by_provider_id.items():
+    # Emit phases in registration order, which for every provider is also
+    # execution order. The mapping arrives from parallel fetches, so its own
+    # key order is thread-completion order: iterating it directly made the
+    # dump non-deterministic, and a committed dump then churned its section
+    # order on every re-dump, hiding real drift in the noise.
+    def _phase_order(provider_id: str) -> tuple[int, str]:
+        try:
+            return (ALL_PROVIDER_IDS.index(provider_id), "")
+        except ValueError:
+            return (len(ALL_PROVIDER_IDS), provider_id)
+
+    for provider_id in sorted(rules_by_provider_id, key=_phase_order):
+        rules = rules_by_provider_id[provider_id]
         if provider_id not in PHASE_BY_PROVIDER_ID:
             log.warning(
                 "Skipping unknown provider phase %r during dump (%d rules)",
