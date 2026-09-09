@@ -68,6 +68,7 @@ from octorules.commands import (
     cmd_versions,
 )
 from octorules.config import Config, ConfigError
+from octorules.planner import RuleValidationError
 from octorules.provider.exceptions import (
     ProviderAuthError,
 )
@@ -506,6 +507,24 @@ _EXIT_MESSAGES: dict[str, dict[int, str]] = {
 }
 
 
+def _crash_location(exc: BaseException) -> str:
+    """Return " at <pkg>/<mod>.py:<line> in <func>()" for the frame that raised.
+
+    An unexpected exception's own message is often shapeless on its own
+    ("'NoneType' object is not iterable"), so the innermost frame is the part
+    that makes it actionable without re-running under ``--debug``.
+    """
+    import traceback
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return ""
+    frame = frames[-1]
+    parts = frame.filename.replace("\\", "/").split("/")
+    location = "/".join(parts[-2:]) if len(parts) > 1 else frame.filename
+    return f" at {location}:{frame.lineno} in {frame.name}()"
+
+
 def _exit(command: str, code: int, elapsed: float | None = None) -> None:
     """Print exit summary to stderr and exit.
 
@@ -712,14 +731,24 @@ def main(argv: list[str] | None = None) -> None:
         # Ctrl-C is a user action, not a crash. Do not print a traceback for it.
         log.error("Interrupted")
         _exit(command, 130, time.monotonic() - t0)
-    except Exception:
-        # Anything reaching here is a bug rather than a handled condition. Print
-        # the traceback under --debug (where it is what the user asked for) and a
-        # single actionable line otherwise, instead of ending a CLI run with a
-        # raw stack trace as its final word.
+    except RuleValidationError as e:
+        # A malformed rule, list or custom ruleset. The message already names
+        # the section and the offending entry, so this is an operator-facing
+        # error and not a crash.
+        log.error("Invalid rule: %s", e)
+        _exit(command, 1, time.monotonic() - t0)
+    except Exception as e:
+        # Anything reaching here is a bug rather than a handled condition. Name
+        # the exception and the frame that raised it, then point at --debug for
+        # the rest: ending a CLI run on a raw stack trace is still wrong, but so
+        # is ending it on a line that says only that something went wrong.
         log.error(
-            "Unexpected error during %r. Re-run with --debug for the full traceback.",
+            "Unexpected %s during %r%s: %s",
+            type(e).__name__,
             command,
+            _crash_location(e),
+            e,
         )
+        log.error("Re-run with --debug for the full traceback.")
         log.debug("Traceback for %r:", command, exc_info=True)
         _exit(command, 1, time.monotonic() - t0)

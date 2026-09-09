@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- An unexpected error now names its exception type, message and the frame
+  that raised it, instead of only "Unexpected error during 'plan'". The
+  detail previously required re-running with `--debug`, which is no use for
+  a failure that does not reproduce.
+- A malformed rule, list or custom ruleset reports as `Invalid rule: <what>`
+  rather than as an internal crash.
+
 ## [0.36.0] - 2026-09-03
 
 ### Fixed

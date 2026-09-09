@@ -102,10 +102,8 @@ class TestDeeplyNestedYaml:
 
 
 class TestCliTopLevelHandler:
-    def test_unexpected_exception_exits_1_without_traceback(self, tmp_path, monkeypatch, caplog):
-        """A bug in a command must not end the run with a raw stack trace."""
-        from octorules import cli
-
+    @staticmethod
+    def _minimal_config(tmp_path):
         (tmp_path / "rules").mkdir()
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
@@ -116,6 +114,19 @@ class TestCliTopLevelHandler:
             "    directory: ./rules\n"
             "zones: {}\n"
         )
+        return config_file
+
+    def test_unexpected_exception_names_type_message_and_frame(self, tmp_path, monkeypatch, caplog):
+        """A bug must name itself: exception type, message, and raising frame.
+
+        A line saying only that something went wrong is not actionable, and a
+        message like "'NoneType' object is not iterable" is shapeless without
+        the location. Both have to survive without ``--debug``, because CI runs
+        at INFO and the failing run is rarely reproducible afterwards.
+        """
+        from octorules import cli
+
+        config_file = self._minimal_config(tmp_path)
 
         def _boom(*a, **kw):
             raise RuntimeError("something internal broke")
@@ -126,8 +137,36 @@ class TestCliTopLevelHandler:
             cli.main(["--config", str(config_file), "lint"])
 
         assert exc.value.code == 1
-        assert any("Unexpected error" in r.message for r in caplog.records)
-        assert any("--debug" in r.message for r in caplog.records)
+        logged = " ".join(r.message for r in caplog.records)
+        assert "Unexpected RuntimeError during 'lint'" in logged
+        assert "something internal broke" in logged
+        assert "tests/test_resilience.py:" in logged
+        assert "in _boom()" in logged
+        assert "--debug" in logged
+
+    def test_rule_validation_error_is_not_reported_as_a_crash(self, tmp_path, monkeypatch, caplog):
+        """A malformed rule is the operator's problem, not an internal bug.
+
+        Its message already names the section and the offending entry, so it
+        must be surfaced verbatim rather than swallowed by the catch-all.
+        """
+        from octorules import cli
+        from octorules.planner import RuleValidationError
+
+        config_file = self._minimal_config(tmp_path)
+
+        def _boom(*a, **kw):
+            raise RuleValidationError("Duplicate ref 'block-ru' in 'Custom Rules'")
+
+        monkeypatch.setattr(cli, "cmd_lint", _boom)
+
+        with caplog.at_level(logging.ERROR), pytest.raises(SystemExit) as exc:
+            cli.main(["--config", str(config_file), "lint"])
+
+        assert exc.value.code == 1
+        logged = " ".join(r.message for r in caplog.records)
+        assert "Invalid rule: Duplicate ref 'block-ru' in 'Custom Rules'" in logged
+        assert "Unexpected" not in logged
 
     def test_keyboard_interrupt_exits_130(self, tmp_path, monkeypatch, caplog):
         """Ctrl-C is a user action; 130 is the conventional shell code for it."""
