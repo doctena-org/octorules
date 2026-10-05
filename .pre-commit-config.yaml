@@ -17,9 +17,11 @@ repos:
         files: ^\.github/workflows/.*\.ya?ml$
   - repo: local
     hooks:
+      # Only a release commit (a staged `version` change) must ship fresh CDN
+      # data; the release run of lint.yaml re-checks it before publishing.
       - id: cdn-ranges-fresh
-        name: CDN ranges staleness check
-        entry: .venv/bin/python scripts/sync_cdn_ranges.py --check
+        name: CDN ranges fresh enough to release
+        entry: .venv/bin/python scripts/sync_cdn_ranges.py --release-commit
         language: system
         pass_filenames: false
-        always_run: true
+        files: ^pyproject\.toml$

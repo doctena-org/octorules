@@ -11,6 +11,8 @@ permissions:
 jobs:
   lint:
     uses: ./.github/workflows/lint.yaml
+    with:
+      release: true
 
   test:
     uses: ./.github/workflows/test.yaml

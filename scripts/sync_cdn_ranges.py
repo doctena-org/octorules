@@ -12,12 +12,15 @@ raise-on-error HTTP wrappers (so failures are loud) and per-provider
 version-metadata extraction (so file diffs are stable across runs).
 
 Usage:
-    python scripts/sync_cdn_ranges.py              # Fetch and write
-    python scripts/sync_cdn_ranges.py --check      # Exit 1 if data is stale
-    python scripts/sync_cdn_ranges.py --check 30   # Custom staleness in days
+    python scripts/sync_cdn_ranges.py                   # Fetch and write
+    python scripts/sync_cdn_ranges.py --check           # Exit 1 if too old to release
+    python scripts/sync_cdn_ranges.py --check 30        # Custom staleness in days
+    python scripts/sync_cdn_ranges.py --release-commit  # --check, if the staged version changed
 """
 
 import json
+import re
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -38,7 +41,14 @@ from octorules._cdn_sources import (
     google_front_end_cidrs,
 )
 
-_DATA_DIR = Path(__file__).resolve().parent.parent / "octorules" / "data" / "cdn_ranges"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DATA_DIR = _REPO_ROOT / "octorules" / "data" / "cdn_ranges"
+
+# Release freshness bar, not the runtime one: a wheel's data should stay
+# usable offline for most of audit's 60-day ``cdn_stale_days`` window.
+_MAX_AGE_DAYS = 7
+
+_VERSION_RE = re.compile(r'^version\s*=\s*"([^"]*)"', re.MULTILINE)
 
 # (filename, provider label, source descriptor, format)
 # - "json"        — descriptor is a single URL, parser receives dict
@@ -184,7 +194,7 @@ def sync() -> bool:
     return ok
 
 
-def check(max_age_days: int = 60) -> bool:
+def check(max_age_days: int = _MAX_AGE_DAYS) -> bool:
     """Check if baked-in data is stale. Returns True if fresh."""
     now = datetime.now(timezone.utc)
     ok = True
@@ -225,9 +235,30 @@ def check(max_age_days: int = 60) -> bool:
     return ok
 
 
+def _git_show(spec: str) -> str | None:
+    """Return ``git show <spec>`` output, or None if git cannot resolve it."""
+    result = subprocess.run(
+        ["git", "show", spec], cwd=_REPO_ROOT, capture_output=True, text=True, check=False
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+def _version(pyproject: str | None) -> str | None:
+    match = _VERSION_RE.search(pyproject or "")
+    return match.group(1) if match else None
+
+
+def _staged_version_changed() -> bool:
+    """True if the staged pyproject.toml carries a different version than HEAD."""
+    return _version(_git_show(":pyproject.toml")) != _version(_git_show("HEAD:pyproject.toml"))
+
+
 def main() -> None:
-    if len(sys.argv) >= 2 and sys.argv[1] == "--check":
-        max_age = int(sys.argv[2]) if len(sys.argv) >= 3 else 60
+    if len(sys.argv) >= 2 and sys.argv[1] == "--release-commit":
+        if _staged_version_changed() and not check():
+            sys.exit(1)
+    elif len(sys.argv) >= 2 and sys.argv[1] == "--check":
+        max_age = int(sys.argv[2]) if len(sys.argv) >= 3 else _MAX_AGE_DAYS
         if not check(max_age):
             sys.exit(1)
     else:

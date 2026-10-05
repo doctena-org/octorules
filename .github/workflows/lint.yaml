@@ -7,6 +7,11 @@ on:
   pull_request:
     branches: [main]
   workflow_call:
+    inputs:
+      release:
+        description: Also require the bundled CDN data to be fresh enough to publish.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -26,3 +31,6 @@ jobs:
       - run: python -m venv .venv
       - run: .venv/bin/pip install -e ".[dev]"
       - run: .venv/bin/pre-commit run --all-files
+      - name: CDN data fresh enough to release
+        if: inputs.release
+        run: .venv/bin/python scripts/sync_cdn_ranges.py --check
