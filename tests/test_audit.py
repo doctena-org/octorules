@@ -715,15 +715,23 @@ class TestFetchCDNRanges:
 
     def test_fresh_baked_in_skips_api(self):
         """When baked-in data is fresh, API is not called."""
+        from datetime import datetime, timezone
+
+        # Stamped now: the committed files go stale 60 days after each sync.
+        fresh = CdnRangeResult(
+            ranges={"Cloudflare": ["1.0.0.0/24"]},
+            source="baked-in",
+            generated_at=datetime.now(timezone.utc),
+        )
         with (
+            patch("octorules.audit._load_baked_in_ranges", return_value=fresh),
             patch("octorules.audit._fetch_json") as mock_fetch,
             patch("octorules.audit._fetch_text") as mock_fetch_text,
         ):
             result = fetch_cdn_ranges()
         mock_fetch.assert_not_called()
         mock_fetch_text.assert_not_called()
-        assert result.source == "baked-in"
-        assert len(result.ranges) > 0
+        assert result is fresh
 
     def test_fetch_failure_falls_back_to_baked_in(self):
         """When all CDN APIs fail and baked-in is stale, falls back to stale baked-in."""
@@ -765,6 +773,7 @@ class TestFetchCDNRanges:
         with (
             patch("octorules.audit._load_baked_in_ranges", return_value=stale),
             patch("octorules.audit._fetch_json", side_effect=mock_fetch),
+            patch("octorules.audit._fetch_text", return_value=None),
         ):
             result = fetch_cdn_ranges()
         assert result.source == "api"
