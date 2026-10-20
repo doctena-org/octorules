@@ -125,7 +125,9 @@ class ChangeTypeFilter:
     Removes changes of the specified types from all plan components
     (phase plans, custom ruleset plans, list plans, extension plans).
     Extension changes without a ``change_type`` attribute (settings
-    extensions use plain field changes) are never filtered.
+    extensions use plain field changes) are never filtered.  A rule phase or
+    custom ruleset is written as a whole list, so blocking a change there
+    makes sync refuse the zone instead of making the change unseen.
 
     Args:
         exclude: Change types to block (e.g. ["REMOVE", "REORDER"]).

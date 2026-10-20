@@ -190,7 +190,7 @@ bunny:
         ignored: true
 ```
 
-Ignored rules are still validated and linted (catch errors before un-ignoring), but are invisible to the planner on both sides — they produce no ADD/MODIFY/REMOVE changes, and if the rule exists upstream it will not be deleted or overwritten. This matches the octodns convention: the rule can be edited manually on the provider without octorules interfering.
+Ignored rules are still validated and linted (catch errors before un-ignoring), but produce no changes of their own: octorules never modifies or removes them. A phase is written as a whole, so when sync writes the phase it sends the live rule back unchanged, at the position the YAML gives it. This matches the octodns convention: the rule can be edited manually on the provider without octorules interfering. A manual edit made while a sync of that phase is running can still be overwritten. An ignored rule that does not exist upstream is skipped with a warning.
 
 **Targeting providers** — in multi-provider or multi-target setups, restrict a rule to specific targets:
 
@@ -370,6 +370,8 @@ still cleaned up, but spare rules whose `ref` matches a pattern (e.g. rules a
 security vendor or another team injects out-of-band) from deletion and
 reordering. It reads only `ref` and `change_type`, so it works across every
 provider.
+
+A rule phase or custom ruleset is written as one list, so a change `ChangeTypeFilter` blocks there would still happen on sync. Sync refuses such a zone instead (see [How it works](#how-it-works)); for lists and policies, which are written change by change, the blocked change is simply skipped.
 
 See [`examples/config.yaml`](examples/config.yaml) for working examples of all four.
 
@@ -733,7 +735,7 @@ All methods accept the same options as the CLI (`zones`, `phases`, `scope`, etc.
 ## How it works
 
 1. **Plan** — Reads your YAML rules, fetches current rules from the provider, computes a diff by matching rules on `ref` (phases), `name` (lists), or `description` (policies). Processors transform desired rules before diffing and filter changes after.
-2. **Sync** — Executes the plan in order: lists, policies, custom rulesets, then phases. Each phase uses an atomic PUT (full replacement of the phase ruleset). Fail-fast on errors.
+2. **Sync** — Executes the plan in order: lists, policies, custom rulesets, then phases. Each phase uses an atomic PUT (full replacement of the phase ruleset). Before writing anything for a zone, sync checks that each phase and custom ruleset write does exactly what the plan shows, and refuses the zone otherwise. Fail-fast on errors.
 3. **Dump** — Fetches all rules from the provider and writes them to YAML files, stripping API-only fields (`id`, `version`, `last_updated`, etc.).
 
 Performance (all parallelism controlled via `manager.max_workers`, default: 1):
@@ -749,6 +751,7 @@ Performance (all parallelism controlled via `manager.max_workers`, default: 1):
 Safety features:
 - **`--doit` flag** — sync requires explicit confirmation.
 - **Delete thresholds** — blocks mass deletions above a configurable percentage.
+- **Writes match the plan** — sync refuses a zone whose phase or custom ruleset writes would add, remove, change or reorder a rule the plan does not show.
 - **Checksum verification** — `plan --checksum` produces a hash; `sync --checksum HASH` verifies the plan hasn't changed.
 - **Auth error propagation** — authentication and permission errors fail immediately instead of being silently swallowed.
 - **Failed phase filtering** — phases that can't be fetched are excluded from planning to prevent accidental mass deletions.
@@ -764,6 +767,7 @@ Safety thresholds prevent accidental mass changes. When a plan would delete or u
 |-------|-------|----------|
 | `ProviderAuthError` | Invalid or expired API token | Check token permissions and expiry |
 | `delete_threshold exceeded` | Plan would delete too many rules | Review the plan; raise `delete_threshold` or use `--force` |
+| `refusing to sync … which the plan does not show` | A processor (for example `ChangeTypeFilter`) hid a change the phase write would still make | Stop filtering that change for the phase, or change the YAML so the plan shows it |
 | `HTTP 429 Too Many Requests` | Provider API rate limit hit | Wait and retry; reduce `max_workers` |
 | Partial zone failure | One zone failed, others succeeded | Re-run for the failed zone only (`--zone <name>`) |
 | `Checksum mismatch` | State changed between plan and sync | Re-run `plan` to get a fresh checksum |

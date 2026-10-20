@@ -1119,3 +1119,89 @@ class TestPhaseRuleCountReporting:
         """Non-fatal by design — the condition is unverified against real APIs."""
         records = self._apply(99, caplog)
         assert any("applied 99 of 1" in r.getMessage() for r in records)
+
+
+class TestSyncRefusesWhatThePlanHides:
+    """A phase write replaces the whole rule list, so sync refuses a zone whose
+    writes would do anything its (possibly filtered) plan does not show."""
+
+    _LIVE = [
+        {"ref": "a", "expression": "true", "action": "redirect", "enabled": True},
+        {"ref": "b", "expression": "true", "action": "redirect", "enabled": True},
+    ]
+
+    def _plan(self, desired):
+        from octorules.planner import plan_zone
+
+        return plan_zone(
+            "example.com",
+            {_REDIRECT_PHASE.friendly_name: desired},
+            {_REDIRECT_PHASE.provider_id: self._LIVE},
+        )
+
+    def _sync(self, zp):
+        from octorules.commands import _apply_single_zone
+
+        prov = _make_mock_provider()
+        prov.max_workers = 1
+        prov.put_phase_rules.side_effect = lambda scope, pid, rules: len(rules)
+        result = _apply_single_zone(zp, {}, Scope(zone_id="z1", label="example.com"), prov)
+        return result, prov
+
+    def test_consistent_plan_syncs(self):
+        (_zone, _synced, error), prov = self._sync(self._plan([{"ref": "a", "expression": "true"}]))
+        assert error is None
+        prov.put_phase_rules.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("blocked", "desired", "hidden"),
+        [
+            ("REMOVE", [{"ref": "a", "expression": "true"}], "delete b"),
+            (
+                "ADD",
+                [
+                    {"ref": "a", "expression": "true"},
+                    {"ref": "b", "expression": "true"},
+                    {"ref": "c", "expression": "true"},
+                ],
+                "create c",
+            ),
+            (
+                "MODIFY",
+                [{"ref": "a", "expression": "changed"}, {"ref": "b", "expression": "true"}],
+                "change a",
+            ),
+            (
+                "REORDER",
+                [{"ref": "b", "expression": "true"}, {"ref": "a", "expression": "true"}],
+                "reorder rules",
+            ),
+        ],
+    )
+    def test_filtered_change_is_refused_before_any_write(self, blocked, desired, hidden):
+        from octorules.processor.filters import ChangeTypeFilter
+
+        zp = self._plan(desired)
+        ChangeTypeFilter(exclude=[blocked]).process_changes("example.com", zp, None)
+        (_zone, synced, error), prov = self._sync(zp)
+        assert error == (
+            f"refusing to sync example.com: the writes would also"
+            f" fakeprov.redirect_rules: {hidden}, which the plan does not show"
+        )
+        assert synced == []
+        prov.put_phase_rules.assert_not_called()
+
+    def test_regression_ignored_rule_reaches_the_write(self):
+        """April 2026: changing another rule wrote the phase without the
+        ignored one, deleting it with nothing in the plan."""
+        zp = self._plan(
+            [
+                {"ref": "a", "expression": "changed"},
+                {"ref": "b", "expression": "true", "octorules": {"ignored": True}},
+            ]
+        )
+        (_zone, _synced, error), prov = self._sync(zp)
+        assert error is None
+        sent = prov.put_phase_rules.call_args.args[2]
+        assert [r["ref"] for r in sent] == ["a", "b"]
+        assert sent[1]["expression"] == "true"

@@ -100,6 +100,9 @@ class PhasePlan:
     phase: Phase
     changes: list[RuleChange] = field(default_factory=list)
     prepared_rules: list[RuleDict] | None = field(default=None, repr=False, compare=False)
+    #: The live rules the plan was made against; sync checks its payload
+    #: against them (``unplanned_changes``).  None when unknown.
+    current_rules: list[RuleDict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def has_changes(self) -> bool:
@@ -116,6 +119,7 @@ class CustomRulesetPlan:
     capacity: int | None = None  # required for CREATE (AWS WAF)
     changes: list[RuleChange] = field(default_factory=list)
     prepared_rules: list[RuleDict] | None = field(default=None, repr=False, compare=False)
+    current_rules: list[RuleDict] | None = field(default=None, repr=False, compare=False)
 
     @property
     def has_changes(self) -> bool:
@@ -230,9 +234,8 @@ def normalize_value(v: object, *, key: str = "") -> object:
     return v
 
 
-def normalize_rule(rule: RuleDict) -> RuleDict:
-    """Strip API-only fields, the ``octorules:`` metadata key, and normalize expression values."""
-    excluded = _api_only_fields() | {_OCTORULES_KEY}
+def _without_api_fields(rule: RuleDict, excluded: frozenset[str]) -> RuleDict:
+    """*rule* without the *excluded* keys and the API-only action_parameters keys."""
     ap_excluded = get_api_fields("action_parameters")
     result: RuleDict = {}
     for k, v in rule.items():
@@ -240,8 +243,14 @@ def normalize_rule(rule: RuleDict) -> RuleDict:
             continue
         if k == "action_parameters" and isinstance(v, dict) and ap_excluded:
             v = {ak: av for ak, av in v.items() if ak not in ap_excluded}
-        result[k] = normalize_value(v, key=k)
+        result[k] = v
     return result
+
+
+def normalize_rule(rule: RuleDict) -> RuleDict:
+    """Strip API-only fields, the ``octorules:`` metadata key, and normalize expression values."""
+    stripped = _without_api_fields(rule, _api_only_fields() | {_OCTORULES_KEY})
+    return {k: normalize_value(v, key=k) for k, v in stripped.items()}
 
 
 def _is_ignored(rule: dict) -> bool:
@@ -583,18 +592,95 @@ def prepare_desired_rules(rules: list[RuleDict], phase: Phase) -> list[RuleDict]
     return prepared
 
 
+def _shared_order_differs(desired_order: list[str], current_order: list[str]) -> bool:
+    desired_set, current_set = set(desired_order), set(current_order)
+    shared_desired = [r for r in desired_order if r in current_set]
+    shared_current = [r for r in current_order if r in desired_set]
+    return shared_desired != shared_current
+
+
+def unplanned_changes(
+    changes: list[RuleChange], payload: list[RuleDict], current_rules: list[RuleDict]
+) -> list[str]:
+    """What writing *payload* over *current_rules* would do that *changes* do not show.
+
+    A phase write replaces the whole rule list, so anything the plan hides
+    (a filtered change, an unkept rule) still happens.  Empty means the write
+    does exactly what the plan says.
+    """
+    planned = {(c.change_type, c.ref) for c in changes}
+    sent = {r["ref"]: r for r in payload if r.get("ref")}
+    live = {r["ref"]: r for r in current_rules if r.get("ref")}
+    problems = [
+        f"delete {ref}"
+        for ref in sorted(live.keys() - sent.keys())
+        if (ChangeType.REMOVE, ref) not in planned
+    ]
+    problems += [
+        f"create {ref}"
+        for ref in sorted(sent.keys() - live.keys())
+        if (ChangeType.ADD, ref) not in planned
+    ]
+    problems += [
+        f"change {ref}"
+        for ref in sorted(sent.keys() & live.keys())
+        if (ChangeType.MODIFY, ref) not in planned
+        and normalize_rule(sent[ref]) != normalize_rule(live[ref])
+    ]
+    if (ChangeType.REORDER, "*") not in planned and _shared_order_differs(
+        _ref_order(payload), _ref_order(current_rules)
+    ):
+        problems.append("reorder rules")
+    return problems
+
+
+def _live_rule_payload(rule: RuleDict, phase: Phase | None) -> RuleDict:
+    """A live rule in the form sync sends, as if the file had declared it."""
+    payload = _without_api_fields(rule, get_api_fields("rule") | {_OCTORULES_KEY})
+    if phase is not None and phase.prepare_rule is not None:
+        payload = phase.prepare_rule(payload, phase)
+    return payload
+
+
+def _payload_keeping_ignored(
+    desired_rules: list[RuleDict],
+    prepared: list[RuleDict],
+    current_rules: list[RuleDict],
+    phase: Phase | None,
+    label: str,
+) -> list[RuleDict]:
+    """The rules sync sends: *prepared*, with each ignored rule's live copy at
+    its position in the file, so the write keeps it.
+
+    *prepared* holds the non-ignored *desired_rules*, in order.
+    """
+    live_by_ref = {r["ref"]: r for r in current_rules if r.get("ref")}
+    managed = iter(prepared)
+    payload: list[RuleDict] = []
+    for rule in desired_rules:
+        if not _is_ignored(rule):
+            payload.append(next(managed))
+        elif (live := live_by_ref.get(rule.get("ref"))) is not None:
+            payload.append(_live_rule_payload(live, phase))
+        else:
+            log.warning("%s: ignored rule %r is not live; nothing to keep", label, rule.get("ref"))
+    return payload
+
+
 def _diff_rules(
     phase: Phase,
     desired_rules: list[RuleDict],
     current_rules: list[RuleDict],
     *,
     allow_unmanaged: bool = False,
+    order: tuple[list[str], list[str]] | None = None,
 ) -> list[RuleChange]:
     """Compute add/remove/modify/reorder changes between desired and current rules.
 
     Works for both real phases and synthetic phases (custom rulesets). When
-    allow_unmanaged=True, REMOVE changes are suppressed and reorder detection
-    is scoped to the managed (desired) refs only.
+    allow_unmanaged=True, REMOVE changes are suppressed.  *order* overrides
+    the ``(desired, current)`` ref sequences the reorder check compares, so
+    ignored rules count by their position.
     """
     changes: list[RuleChange] = []
     desired_by_ref = _rules_by_ref(desired_rules)
@@ -643,13 +729,9 @@ def _diff_rules(
             change.__dict__["normalized_desired"] = norm_desired
             changes.append(change)
 
-    # Reorder detection (same set of refs, but different order).
-    # When allow_unmanaged=True, filter current to only managed refs.
-    desired_order = _ref_order(desired_rules)
-    current_order = _ref_order(current_rules)
-    if allow_unmanaged:
-        current_order = [r for r in current_order if r in desired_refs]
-    if set(desired_order) == set(current_order) and desired_order != current_order:
+    # Reorder: the refs both sides share are in a different order.
+    desired_order, current_order = order or (_ref_order(desired_rules), _ref_order(current_rules))
+    if _shared_order_differs(desired_order, current_order):
         changes.append(
             RuleChange(
                 change_type=ChangeType.REORDER,
@@ -661,23 +743,37 @@ def _diff_rules(
     return changes
 
 
+def _ignored_refs(rules: list[RuleDict]) -> set[str]:
+    return {r.get("ref") for r in rules if _is_ignored(r)} - {None}
+
+
 def diff_phase(
     phase: Phase,
     desired_rules: list[RuleDict],
     current_rules: list[RuleDict],
     *,
     allow_unmanaged: bool = False,
+    label: str | None = None,
 ) -> PhasePlan:
-    """Compute the diff for a single phase."""
-    plan = PhasePlan(phase=phase)
-    # Collect refs of ignored rules BEFORE filtering, so we can exclude them
-    # from current too.  octodns convention: ignored means invisible on both sides.
-    ignored_refs = {r.get("ref") for r in desired_rules if _is_ignored(r)} - {None}
+    """Compute the diff for a single phase.
+
+    An ignored rule produces no change of its own; sync carries its live copy
+    over at the rule's position in the file (see ``_payload_keeping_ignored``).
+    """
+    plan = PhasePlan(phase=phase, current_rules=current_rules)
+    ignored_refs = _ignored_refs(desired_rules)
     desired = prepare_desired_rules(desired_rules, phase)
-    plan.prepared_rules = desired
-    if ignored_refs:
-        current_rules = [r for r in current_rules if r.get("ref") not in ignored_refs]
-    plan.changes = _diff_rules(phase, desired, current_rules, allow_unmanaged=allow_unmanaged)
+    plan.prepared_rules = _payload_keeping_ignored(
+        desired_rules, desired, current_rules, phase, label or phase.friendly_name
+    )
+    managed_current = [r for r in current_rules if r.get("ref") not in ignored_refs]
+    plan.changes = _diff_rules(
+        phase,
+        desired,
+        managed_current,
+        allow_unmanaged=allow_unmanaged,
+        order=(_ref_order(plan.prepared_rules), _ref_order(current_rules)),
+    )
     return plan
 
 
@@ -700,7 +796,11 @@ def plan_zone(
         processed_provider_ids.add(phase.provider_id)
         current_rules = current_rules_by_provider_id.get(phase.provider_id, [])
         phase_plan = diff_phase(
-            phase, desired_rules, current_rules, allow_unmanaged=allow_unmanaged
+            phase,
+            desired_rules,
+            current_rules,
+            allow_unmanaged=allow_unmanaged,
+            label=f"{zone_name}/{friendly_name}",
         )
         if phase_plan.has_changes:
             zone_plan.phase_plans.append(phase_plan)
@@ -787,12 +887,10 @@ def diff_custom_ruleset(
         ruleset_name=ruleset_name,
         phase=phase,
         ruleset_id=ruleset_id,
+        current_rules=current_rules,
     )
 
-    ignored_refs = {r.get("ref") for r in desired_rules if _is_ignored(r)} - {None}
-    desired_rules = [r for r in desired_rules if not _is_ignored(r)]
-    if ignored_refs:
-        current_rules = [r for r in current_rules if r.get("ref") not in ignored_refs]
+    ignored_refs = _ignored_refs(desired_rules)
     # Resolve the Phase object for the prepare_rule hook.
     # Custom rulesets pass the provider_id string (looked up in PHASE_BY_PROVIDER_ID).
     phase_obj = (
@@ -802,15 +900,25 @@ def diff_custom_ruleset(
     )
     prepared = []
     for rule in desired_rules:
+        if _is_ignored(rule):
+            continue
         rule = rule.copy()
         rule.pop(_OCTORULES_KEY, None)
         if phase_obj is not None and phase_obj.prepare_rule is not None:
             rule = phase_obj.prepare_rule(rule, phase_obj)
         prepared.append(rule)
-    plan.prepared_rules = prepared
+    plan.prepared_rules = _payload_keeping_ignored(
+        desired_rules, prepared, current_rules, phase_obj, f"custom_ruleset:{ruleset_name}"
+    )
 
     synthetic_phase = make_synthetic_phase("custom_ruleset", ruleset_name, phase)
-    plan.changes = _diff_rules(synthetic_phase, plan.prepared_rules, current_rules)
+    managed_current = [r for r in current_rules if r.get("ref") not in ignored_refs]
+    plan.changes = _diff_rules(
+        synthetic_phase,
+        prepared,
+        managed_current,
+        order=(_ref_order(plan.prepared_rules), _ref_order(current_rules)),
+    )
     return plan
 
 

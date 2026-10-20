@@ -26,6 +26,7 @@ from octorules.planner import (
     check_safety,
     compute_checksum,
     prepare_desired_rules,
+    unplanned_changes,
 )
 from octorules.processor import BaseProcessor
 from octorules.provider.base import BaseProvider, Scope
@@ -100,6 +101,26 @@ def _log_safety_violations(violations: list) -> None:
             v.threshold,
             phases_str,
         )
+
+
+def _unplanned_writes(zp: ZonePlan) -> str | None:
+    """Why *zp* must not sync: its whole-list writes would do what its plan hides."""
+    problems = []
+    for pp in zp.phase_plans:
+        if pp.prepared_rules is not None and pp.current_rules is not None:
+            if found := unplanned_changes(pp.changes, pp.prepared_rules, pp.current_rules):
+                problems.append(f"{pp.phase.friendly_name}: {', '.join(found)}")
+    for crp in zp.custom_ruleset_plans:
+        if crp.delete or crp.prepared_rules is None or crp.current_rules is None:
+            continue
+        if found := unplanned_changes(crp.changes, crp.prepared_rules, crp.current_rules):
+            problems.append(f"custom_ruleset:{crp.ruleset_name}: {', '.join(found)}")
+    if not problems:
+        return None
+    return (
+        f"refusing to sync {zp.zone_name}: the writes would also"
+        f" {'; '.join(problems)}, which the plan does not show"
+    )
 
 
 def _apply_custom_rulesets(
@@ -307,6 +328,10 @@ def _apply_single_zone(
     ProviderAuthError propagates immediately.
     """
     log.info("Syncing %s", zp.zone_name, extra={"color": "header"})
+
+    # Before any write: a refused zone must not be left half-applied.
+    if refusal := _unplanned_writes(zp):
+        return zp.zone_name, [], refusal
 
     # Apply lists first (rules reference lists via $list_name)
     all_synced: list[str] = []

@@ -32,6 +32,7 @@ from octorules.planner import (
     normalize_rule,
     plan_zone,
     prepare_desired_rules,
+    unplanned_changes,
     validate_custom_ruleset,
     validate_rules,
 )
@@ -776,6 +777,120 @@ class TestAllowUnmanaged:
         zp = plan_zone("example.com", desired, current, allow_unmanaged=False)
         assert zp.has_changes
         assert zp.total_changes == 1
+
+
+class TestIgnoredRulesKept:
+    """An ignored rule produces no change, and sync carries its live copy over
+    at the rule's position in the file instead of dropping it."""
+
+    def _ignored(self, ref):
+        return {"ref": ref, "expression": "true", "octorules": {"ignored": True}}
+
+    def test_payload_keeps_the_live_copy_in_file_position(self):
+        desired = [
+            {"ref": "a", "expression": "true"},
+            self._ignored("hand-edited"),
+            {"ref": "b", "expression": "true"},
+        ]
+        current = [
+            {"ref": "a", "expression": "true", "action": "redirect", "enabled": True},
+            {
+                "ref": "hand-edited",
+                "expression": 'http.host  eq  "x"',
+                "action": "redirect",
+                "enabled": False,
+                "id": "abc",
+                "version": "3",
+                "last_updated": "2026-04-23",
+            },
+            {"ref": "b", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert plan.changes == []
+        assert [r["ref"] for r in plan.prepared_rules] == ["a", "hand-edited", "b"]
+        kept = plan.prepared_rules[1]
+        assert kept["enabled"] is False
+        assert kept["expression"] == 'http.host eq "x"'
+        assert not {"id", "version", "last_updated"} & kept.keys()
+
+    def test_regression_other_change_in_the_phase_does_not_drop_it(self):
+        """April 2026: a change to another rule in the phase wrote the phase
+        without the ignored rule, deleting it while the plan showed one change."""
+        desired = [
+            {"ref": "a", "expression": "changed"},
+            self._ignored("hand-edited"),
+        ]
+        current = [
+            {"ref": "a", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "hand-edited", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert [(c.change_type, c.ref) for c in plan.changes] == [(ChangeType.MODIFY, "a")]
+        assert [r["ref"] for r in plan.prepared_rules] == ["a", "hand-edited"]
+        assert unplanned_changes(plan.changes, plan.prepared_rules, current) == []
+
+    def test_ignored_rule_not_live_is_skipped_with_a_warning(self, caplog):
+        desired = [{"ref": "a", "expression": "true"}, self._ignored("ghost")]
+        current = [{"ref": "a", "expression": "true", "action": "redirect", "enabled": True}]
+        with caplog.at_level(logging.WARNING, logger="octorules.planner"):
+            plan = diff_phase(REDIRECT_PHASE, desired, current, label="example.com/redirects")
+        assert [r["ref"] for r in plan.prepared_rules] == ["a"]
+        assert "example.com/redirects: ignored rule 'ghost' is not live" in caplog.text
+
+    def test_moving_an_ignored_rule_is_a_reorder(self):
+        desired = [self._ignored("kept"), {"ref": "a", "expression": "true"}]
+        current = [
+            {"ref": "a", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "kept", "expression": "true", "action": "redirect", "enabled": True},
+        ]
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert [c.change_type for c in plan.changes] == [ChangeType.REORDER]
+
+    def test_custom_ruleset_keeps_ignored_rules(self):
+        desired = [self._ignored("kept"), {"ref": "a", "expression": "changed", "action": "block"}]
+        current = [
+            {"ref": "kept", "expression": "true", "action": "block", "enabled": True},
+            {"ref": "a", "expression": "true", "action": "block", "enabled": True},
+        ]
+        crp = diff_custom_ruleset(
+            "rs1", "group", "fake_http_request_firewall_custom", desired, current
+        )
+        assert [r["ref"] for r in crp.prepared_rules] == ["kept", "a"]
+        assert unplanned_changes(crp.changes, crp.prepared_rules, current) == []
+
+
+class TestUnplannedChanges:
+    """What a whole-list write would do that the plan does not show."""
+
+    _LIVE = [
+        {"ref": "a", "expression": "true", "action": "redirect", "enabled": True},
+        {"ref": "b", "expression": "true", "action": "redirect", "enabled": True},
+    ]
+
+    def _plan(self, desired):
+        return diff_phase(REDIRECT_PHASE, desired, self._LIVE)
+
+    def test_consistent_plan_has_none(self):
+        plan = self._plan([{"ref": "b", "expression": "x"}, {"ref": "c", "expression": "true"}])
+        assert unplanned_changes(plan.changes, plan.prepared_rules, self._LIVE) == []
+
+    @pytest.mark.parametrize(
+        ("dropped", "expected"),
+        [
+            (ChangeType.REMOVE, ["delete a"]),
+            (ChangeType.ADD, ["create c"]),
+            (ChangeType.MODIFY, ["change b"]),
+        ],
+    )
+    def test_each_hidden_change_is_named(self, dropped, expected):
+        plan = self._plan([{"ref": "b", "expression": "x"}, {"ref": "c", "expression": "true"}])
+        kept = [c for c in plan.changes if c.change_type is not dropped]
+        assert unplanned_changes(kept, plan.prepared_rules, self._LIVE) == expected
+
+    def test_hidden_reorder_is_named(self):
+        plan = self._plan([{"ref": "b", "expression": "true"}, {"ref": "a", "expression": "true"}])
+        assert [c.change_type for c in plan.changes] == [ChangeType.REORDER]
+        assert unplanned_changes([], plan.prepared_rules, self._LIVE) == ["reorder rules"]
 
 
 class TestBuildPhasePayload:
@@ -1657,6 +1772,23 @@ class TestDiffRulesHelper:
         ]
         changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
         assert not any(c.change_type == ChangeType.REORDER for c in changes)
+
+    def test_reorder_of_shared_rules_alongside_an_add(self):
+        """Live [r2, r1], file [r1, r2, r3]: the write adds r3 and swaps r1/r2."""
+        phase = get_phase("fakeprov.redirect_rules")
+        rule = {"expression": "true", "action": "redirect", "enabled": True}
+        desired = [{"ref": r, **rule} for r in ("r1", "r2", "r3")]
+        current = [{"ref": r, **rule} for r in ("r2", "r1")]
+        types = {c.change_type for c in _diff_rules(phase, desired, current)}
+        assert types == {ChangeType.ADD, ChangeType.REORDER}
+
+    def test_no_reorder_when_shared_rules_keep_their_order(self):
+        phase = get_phase("fakeprov.redirect_rules")
+        rule = {"expression": "true", "action": "redirect", "enabled": True}
+        desired = [{"ref": r, **rule} for r in ("r1", "r2")]
+        current = [{"ref": r, **rule} for r in ("r1", "gone", "r2")]
+        types = {c.change_type for c in _diff_rules(phase, desired, current)}
+        assert types == {ChangeType.REMOVE}
 
 
 class TestRulesByRef:
