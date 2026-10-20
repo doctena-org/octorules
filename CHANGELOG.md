@@ -17,9 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 - **A phase your rules file does not declare is left alone** instead of
   having its rules removed. Declare it as `phase_name: []` to remove them.
-- Refreshed the bundled CDN range snapshots (AWS CloudFront 241→243,
-  Azure Front Door 465→476, Bunny 984→909, Google Cloud 1047→1107,
-  Google Front End 348→401 CIDRs). All but Google Cloud are own-edge
+- Refreshed the bundled CDN range snapshots (AWS CloudFront 241→248,
+  Azure Front Door 465→478, Bunny 984→907, Google Cloud 1047→1128,
+  Google Front End 348→394 CIDRs). All but Google Cloud are own-edge
   sets: `audit` may report a new non-suppressible `cdn-ranges` error on
   an unchanged rule.
 
