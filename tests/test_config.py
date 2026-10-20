@@ -786,31 +786,15 @@ class TestTimeout:
         assert "timeout" not in config.providers["cloudflare"].kwargs
 
 
-class TestAllowUnmanaged:
-    """Tests for allow_unmanaged zone config."""
+class TestAllowUnmanagedRemoved:
+    """A phase the rules file omits is always left alone now, so the key has
+    nothing to switch; setting it to anything fails loudly."""
 
-    def test_default_false(self, tmp_path):
+    @pytest.mark.parametrize("value", ["true", "false", '"yes"'])
+    def test_any_value_is_rejected(self, tmp_path, value):
         config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg())
-        config = Config.from_file(config_file)
-        assert config.zones["example.com"].allow_unmanaged is False
-
-    def test_allow_unmanaged_true(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_zone="    allow_unmanaged: true\n"))
-        config = Config.from_file(config_file)
-        assert config.zones["example.com"].allow_unmanaged is True
-
-    def test_allow_unmanaged_false(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_zone="    allow_unmanaged: false\n"))
-        config = Config.from_file(config_file)
-        assert config.zones["example.com"].allow_unmanaged is False
-
-    def test_allow_unmanaged_string_raises(self, tmp_path):
-        config_file = tmp_path / "config.yaml"
-        config_file.write_text(_cfg(extra_zone='    allow_unmanaged: "yes"\n'))
-        with pytest.raises(ConfigError, match="allow_unmanaged.*must be a boolean"):
+        config_file.write_text(_cfg(extra_zone=f"    allow_unmanaged: {value}\n"))
+        with pytest.raises(ConfigError, match=r"allow_unmanaged' has been removed"):
             Config.from_file(config_file)
 
 

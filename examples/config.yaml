@@ -123,8 +123,7 @@ processors:
     exclude: "^test-"
 
   # Protect externally-managed rules (whose ref starts with "vendor-") from
-  # deletion or reordering, while still cleaning up other drift. A scoped
-  # alternative to the all-or-nothing allow_unmanaged flag.
+  # deletion or reordering, while still cleaning up other drift.
   preserve_external_rules:
     class: octorules.processor.filters.PreserveFilter
     refs: "^vendor-"
@@ -254,7 +253,6 @@ zones:
       - rules
     targets:
       - cloudflare      # zones list pulled from Cloudflare's API
-    allow_unmanaged: false
 
 # ---------------------------------------------------------------------------
 # YAML includes — split large configs with !include directives

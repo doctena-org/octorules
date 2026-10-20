@@ -358,18 +358,10 @@ octorules ships four ready-to-use processors in `octorules.processor.filters`:
 
 | Filter | Description |
 |--------|-------------|
-| **PhaseFilter** | Include or exclude phases by name (`include`/`exclude` lists) |
+| **PhaseFilter** | Include or exclude phases by name (`include`/`exclude` lists); an excluded phase is left alone |
 | **RefFilter** | Include or exclude rules by regex on the `ref` field |
 | **ChangeTypeFilter** | Block specific change types: `ADD`, `REMOVE`, `MODIFY`, `REORDER` |
 | **PreserveFilter** | Protect rules whose `ref` matches a regex from `REMOVE`/`REORDER` changes |
-
-`allow_unmanaged` is all-or-nothing: off, every live rule absent from your YAML
-is planned for removal; on, nothing unmanaged is ever removed. **PreserveFilter**
-is the scoped middle ground — keep `allow_unmanaged` off so genuine drift is
-still cleaned up, but spare rules whose `ref` matches a pattern (e.g. rules a
-security vendor or another team injects out-of-band) from deletion and
-reordering. It reads only `ref` and `change_type`, so it works across every
-provider.
 
 A rule phase or custom ruleset is written as one list, so a change `ChangeTypeFilter` blocks there would still happen on sync. Sync refuses such a zone instead (see [How it works](#how-it-works)); for lists and policies, which are written change by change, the blocked change is simply skipped.
 
@@ -445,7 +437,7 @@ These checks run at config load time and emit log warnings or raise errors. They
 
 ### `octorules plan`
 
-Dry-run: shows what would change without touching the provider. Exit code 2 when changes are detected (with `--exit-code`). Output format and destination are controlled via `manager.plan_outputs` in the config file (defaults to text on stdout).
+Dry-run: shows what would change without touching the provider. Exit code 2 when changes are detected (with `--exit-code`). Output format and destination are controlled via `manager.plan_outputs` in the config file (defaults to text on stdout). Live phases your rules files do not declare are listed after the changes; they are never changed.
 
 ```bash
 octorules plan [--zone example.com] [--phase cloudflare.redirect_rules] [--checksum] [--exit-code]
@@ -676,7 +668,6 @@ zones:
       - my_provider
     processors:
       - my_proc
-    allow_unmanaged: false           # Keep rules not in YAML (default: false)
     always_dry_run: true             # Never apply changes (default: false)
     lint:                            # Per-zone override of manager.lint
       sets: [default]                # e.g. warn instead of abort here
@@ -734,7 +725,7 @@ All methods accept the same options as the CLI (`zones`, `phases`, `scope`, etc.
 
 ## How it works
 
-1. **Plan** — Reads your YAML rules, fetches current rules from the provider, computes a diff by matching rules on `ref` (phases), `name` (lists), or `description` (policies). Processors transform desired rules before diffing and filter changes after.
+1. **Plan** — Reads your YAML rules, fetches current rules from the provider, computes a diff by matching rules on `ref` (phases), `name` (lists), or `description` (policies). Processors transform desired rules before diffing and filter changes after. A phase your YAML declares is owned outright: a live rule missing from it is planned for removal, and `phase_name: []` removes every rule. A live phase your YAML does not declare is left alone and listed at the end of the plan under "Not managed by your files".
 2. **Sync** — Executes the plan in order: lists, policies, custom rulesets, then phases. Each phase uses an atomic PUT (full replacement of the phase ruleset). Before writing anything for a zone, sync checks that each phase and custom ruleset write does exactly what the plan shows, and refuses the zone otherwise. Fail-fast on errors.
 3. **Dump** — Fetches all rules from the provider and writes them to YAML files, stripping API-only fields (`id`, `version`, `last_updated`, etc.).
 

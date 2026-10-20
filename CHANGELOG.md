@@ -8,11 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Plans list live phases your rules file does not declare under "Not
+  managed by your files" (`unmanaged` in JSON output).
 - Sync refuses a zone whose phase or custom ruleset writes would add,
   remove, change or reorder a rule the plan does not show, such as a
   change blocked by `ChangeTypeFilter`.
 
 ### Changed
+- **A phase your rules file does not declare is left alone** instead of
+  having its rules removed. Declare it as `phase_name: []` to remove them.
 - Refreshed the bundled CDN range snapshots (AWS CloudFront 241→243,
   Azure Front Door 465→476, Bunny 984→909, Google Cloud 1047→1107,
   Google Front End 348→401 CIDRs). All but Google Cloud are own-edge
@@ -22,8 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 - Rules marked `octorules: {ignored: true}` are kept when their phase is
   written; a change to another rule in the phase used to delete them.
+- Account plans show live rules missing from a declared phase as
+  removals; sync already deleted them without the plan saying so.
 - A reorder of the rules file and provider share is reported alongside
   added or removed rules; sync made it without the plan saying so.
+
+### Removed
+- The `allow_unmanaged` zone option. **Remove it from your config**; a
+  config that sets it no longer loads.
 
 ## [0.36.1] - 2026-09-09
 

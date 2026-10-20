@@ -394,7 +394,6 @@ class ZoneConfig:
     targets: list[str] = field(default_factory=list)
     processors: list[str] = field(default_factory=list)
     always_dry_run: bool = False
-    allow_unmanaged: bool = False
     # Per-zone override of manager.lint.sets; None inherits.
     lint_sets: frozenset[str] | None = None
     delete_threshold: float = 30.0
@@ -509,13 +508,12 @@ def _parse_zone(
         )
     always_dry_run = raw_dry_run
 
-    raw_unmanaged = zone_data.get("allow_unmanaged", False)
-    if not isinstance(raw_unmanaged, bool):
+    if "allow_unmanaged" in zone_data:
         raise ConfigError(
-            f"'zones.{zone_name}.allow_unmanaged' must be a boolean"
-            f" (got {type(raw_unmanaged).__name__}){zd_ctx}"
+            f"'zones.{zone_name}.allow_unmanaged' has been removed: a phase the rules file"
+            f" does not declare is always left alone and listed in the plan as not managed."
+            f" Remove the key{zd_ctx}"
         )
-    allow_unmanaged = raw_unmanaged
 
     lint_sets = _parse_lint_sets(zone_data.get("lint"), f"zones.{zone_name}.lint", zd_ctx)
 
@@ -581,7 +579,6 @@ def _parse_zone(
         "targets",
         "processors",
         "always_dry_run",
-        "allow_unmanaged",
         "safety",
         "lint",
         "zone_id",
@@ -603,7 +600,6 @@ def _parse_zone(
         targets=targets,
         processors=processors,
         always_dry_run=always_dry_run,
-        allow_unmanaged=allow_unmanaged,
         lint_sets=lint_sets,
         delete_threshold=delete_threshold,
         update_threshold=update_threshold,
@@ -681,7 +677,6 @@ class Config:
                         targets=list(template.targets),
                         processors=list(template.processors),
                         always_dry_run=template.always_dry_run,
-                        allow_unmanaged=template.allow_unmanaged,
                         lint_sets=template.lint_sets,
                         delete_threshold=template.delete_threshold,
                         update_threshold=template.update_threshold,

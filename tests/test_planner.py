@@ -664,15 +664,17 @@ class TestPlanZone:
         assert zone_plan.has_changes
         assert zone_plan.total_changes == 1
 
-    def test_removes_existing_phase(self):
+    def test_undeclared_phase_is_left_alone_and_reported(self):
         current = {
             "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect"}
             ],
         }
         zone_plan = plan_zone("example.com", {}, current)
-        assert zone_plan.has_changes
-        assert zone_plan.total_changes == 1
+        assert not zone_plan.has_changes
+        assert [(u.phase.friendly_name, u.refs) for u in zone_plan.unmanaged_phases] == [
+            ("fakeprov.redirect_rules", ["r1"])
+        ]
 
     def test_multiple_phases(self):
         desired = {
@@ -713,11 +715,11 @@ class TestPlanZone:
         assert zone_plan.total_changes == 0
 
 
-class TestAllowUnmanaged:
-    """Tests for allow_unmanaged behavior in diff/plan."""
+class TestOwnershipRule:
+    """A phase the file declares is owned outright; one it does not is left
+    alone and reported."""
 
-    def test_diff_phase_removes_unmanaged_by_default(self):
-        """By default, rules in current but not desired are REMOVE'd."""
+    def test_declared_phase_removes_live_only_rules(self):
         desired = [{"ref": "r1", "expression": "true"}]
         current = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
@@ -725,58 +727,54 @@ class TestAllowUnmanaged:
         ]
         plan = diff_phase(REDIRECT_PHASE, desired, current)
         removes = [c for c in plan.changes if c.change_type == ChangeType.REMOVE]
-        assert len(removes) == 1
-        assert removes[0].ref == "r2"
+        assert [c.ref for c in removes] == ["r2"]
 
-    def test_diff_phase_keeps_unmanaged(self):
-        """With allow_unmanaged, rules in current but not desired are kept."""
+    def test_disabled_live_only_rule_is_removed_too(self):
         desired = [{"ref": "r1", "expression": "true"}]
         current = [
             {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+            {"ref": "r9", "expression": "true", "action": "redirect", "enabled": False},
         ]
-        plan = diff_phase(REDIRECT_PHASE, desired, current, allow_unmanaged=True)
-        removes = [c for c in plan.changes if c.change_type == ChangeType.REMOVE]
-        assert len(removes) == 0
+        plan = diff_phase(REDIRECT_PHASE, desired, current)
+        assert [(c.change_type, c.ref) for c in plan.changes] == [(ChangeType.REMOVE, "r9")]
 
-    def test_diff_phase_still_adds_and_modifies(self):
-        """allow_unmanaged should not affect ADD or MODIFY."""
-        desired = [
-            {"ref": "r1", "expression": "changed", "action": "redirect", "enabled": True},
-            {"ref": "r3", "expression": "true"},
-        ]
-        current = [
-            {"ref": "r1", "expression": "original", "action": "redirect", "enabled": True},
-            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
-        ]
-        plan = diff_phase(REDIRECT_PHASE, desired, current, allow_unmanaged=True)
-        types = {c.change_type for c in plan.changes}
-        assert ChangeType.ADD in types
-        assert ChangeType.MODIFY in types
-        assert ChangeType.REMOVE not in types
-
-    def test_plan_zone_skips_full_phase_removal(self):
-        """With allow_unmanaged, phases in current but not desired are not removed."""
-        desired = {}  # no desired rules
+    def test_declared_empty_phase_removes_every_live_rule(self):
         current = {
             "fake_http_request_dynamic_redirect": [
-                {"ref": "r1", "expression": "true", "action": "redirect"}
+                {"ref": "r1", "expression": "true", "action": "redirect"},
+                {"ref": "r2", "expression": "true", "action": "redirect"},
             ],
         }
-        zp = plan_zone("example.com", desired, current, allow_unmanaged=True)
+        zp = plan_zone("example.com", {"fakeprov.redirect_rules": []}, current)
+        assert zp.total_changes == 2
+        assert not zp.unmanaged_phases
+
+    def test_undeclared_phase_next_to_a_declared_one(self):
+        desired = {"fakeprov.redirect_rules": [{"ref": "r1", "expression": "true"}]}
+        current = {
+            "fake_http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True}
+            ],
+            "fake_http_request_cache_settings": [
+                {"ref": "c1", "expression": "true"},
+                {"ref": "c2", "expression": "true"},
+            ],
+        }
+        zp = plan_zone("example.com", desired, current)
         assert not zp.has_changes
+        assert [(u.phase.friendly_name, u.refs) for u in zp.unmanaged_phases] == [
+            ("fakeprov.cache_rules", ["c1", "c2"])
+        ]
 
-    def test_plan_zone_removes_phase_by_default(self):
-        """Without allow_unmanaged, phases in current but not desired are removed."""
-        desired = {}
-        current = {
-            "fake_http_request_dynamic_redirect": [
-                {"ref": "r1", "expression": "true", "action": "redirect"}
-            ],
-        }
-        zp = plan_zone("example.com", desired, current, allow_unmanaged=False)
-        assert zp.has_changes
-        assert zp.total_changes == 1
+    def test_empty_live_phase_is_not_reported(self):
+        zp = plan_zone("example.com", {}, {"fake_http_request_dynamic_redirect": []})
+        assert not zp.unmanaged_phases
+
+    def test_unmanaged_phases_do_not_count_as_changes(self):
+        current = {"fake_http_request_dynamic_redirect": [{"ref": "r1", "expression": "true"}]}
+        zp = plan_zone("example.com", {}, current)
+        assert zp.total_changes == 0
+        assert compute_checksum([zp]) == compute_checksum([plan_zone("example.com", {}, {})])
 
 
 class TestIgnoredRulesKept:
@@ -1718,18 +1716,6 @@ class TestDiffRulesHelper:
         assert refs_by_type[ChangeType.REMOVE] == "r2"
         assert refs_by_type[ChangeType.MODIFY] == "r1"
 
-    def test_allow_unmanaged_skips_remove(self):
-        phase = get_phase("fakeprov.redirect_rules")
-        desired = [
-            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-        ]
-        current = [
-            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-            {"ref": "r2", "expression": "unmanaged", "action": "redirect", "enabled": True},
-        ]
-        changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
-        assert not any(c.change_type == ChangeType.REMOVE for c in changes)
-
     def test_reorder_detection(self):
         phase = get_phase("fakeprov.redirect_rules")
         desired = [
@@ -1742,36 +1728,6 @@ class TestDiffRulesHelper:
         ]
         changes = _diff_rules(phase, desired, current)
         assert any(c.change_type == ChangeType.REORDER for c in changes)
-
-    def test_allow_unmanaged_reorder_detected_for_managed_subset(self):
-        """Reorder among managed refs is detected even with allow_unmanaged."""
-        phase = get_phase("fakeprov.redirect_rules")
-        desired = [
-            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
-        ]
-        current = [
-            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
-            {"ref": "unmanaged", "expression": "x", "action": "redirect", "enabled": True},
-            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-        ]
-        changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
-        assert any(c.change_type == ChangeType.REORDER for c in changes)
-
-    def test_allow_unmanaged_no_false_reorder(self):
-        """No reorder when managed refs are in the same order but unmanaged refs differ."""
-        phase = get_phase("fakeprov.redirect_rules")
-        desired = [
-            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
-        ]
-        current = [
-            {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-            {"ref": "unmanaged", "expression": "x", "action": "redirect", "enabled": True},
-            {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
-        ]
-        changes = _diff_rules(phase, desired, current, allow_unmanaged=True)
-        assert not any(c.change_type == ChangeType.REORDER for c in changes)
 
     def test_reorder_of_shared_rules_alongside_an_add(self):
         """Live [r2, r1], file [r1, r2, r3]: the write adds r3 and swaps r1/r2."""

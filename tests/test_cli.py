@@ -1887,21 +1887,12 @@ class TestParallelPlanning:
         assert (rules_dir / "b.com.yaml").exists()
 
 
-class TestAllowUnmanaged:
-    """Tests for allow_unmanaged zone config in CLI."""
+class TestOwnershipRuleCli:
+    """A phase the rules file declares is owned outright; a live phase it does
+    not declare is left alone and listed as not managed."""
 
-    @patch("octorules.commands._providers._init_providers")
-    def test_unmanaged_rules_not_removed(self, mock_init_provs, tmp_path):
-        """With allow_unmanaged, rules in CF but not YAML should be kept."""
-        mock_prov = MagicMock(spec=BaseProvider)
-        mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_dir = tmp_path / "rules"
-        rules_dir.mkdir()
-        # Only r1 in YAML, r2 exists in CF
-        (rules_dir / "example.com.yaml").write_text(
-            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-        )
-        config = Config(
+    def _config(self, rules_dir):
+        return Config(
             providers={
                 "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
             },
@@ -1912,62 +1903,81 @@ class TestAllowUnmanaged:
                     zone_id="zone-abc",
                     sources=["rules"],
                     targets=["cloudflare"],
-                    allow_unmanaged=True,
                 ),
             },
         )
+
+    def _rules(self, tmp_path):
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "example.com.yaml").write_text(
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        return rules_dir
+
+    @patch("octorules.commands._providers._init_providers")
+    def test_live_only_rule_in_declared_phase_is_planned_for_removal(
+        self, mock_init_provs, tmp_path, capsys
+    ):
+        mock_prov = MagicMock(spec=BaseProvider)
+        mock_init_provs.return_value = {"cloudflare": mock_prov}
         mock_prov.get_all_phase_rules.return_value = {
             "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
-                {"ref": "r2", "expression": "true", "action": "redirect", "enabled": True},
+                {"ref": "r2", "expression": "true", "action": "redirect", "enabled": False},
             ],
         }
-        result = cmd_plan(config, ["example.com"])
-        # r2 should NOT be marked for removal, so no changes
-        assert result == 0
+        config = self._config(self._rules(tmp_path))
+        assert cmd_plan(config, ["example.com"], exit_code=True) == 2
+        assert "r2" in capsys.readouterr().out
 
     @patch("octorules.commands._providers._init_providers")
-    def test_unmanaged_phase_not_removed(self, mock_init_provs, tmp_path):
-        """With allow_unmanaged, entire phases in CF but not YAML should be kept."""
+    def test_undeclared_phase_is_reported_not_removed(self, mock_init_provs, tmp_path, capsys):
         mock_prov = MagicMock(spec=BaseProvider)
         mock_init_provs.return_value = {"cloudflare": mock_prov}
-        rules_dir = tmp_path / "rules"
-        rules_dir.mkdir()
-        # Only redirect_rules in YAML, cache_rules exist in CF
-        (rules_dir / "example.com.yaml").write_text(
-            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
-        )
-        config = Config(
-            providers={
-                "cloudflare": ProviderConfig(name="cloudflare", kwargs={"token": "test-token"})
-            },
-            rules_dir=rules_dir,
-            zones={
-                "example.com": ZoneConfig(
-                    name="example.com",
-                    zone_id="zone-abc",
-                    sources=["rules"],
-                    targets=["cloudflare"],
-                    allow_unmanaged=True,
-                ),
-            },
-        )
         mock_prov.get_all_phase_rules.return_value = {
             "fake_http_request_dynamic_redirect": [
                 {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
             ],
             "fake_http_request_cache_settings": [
-                {
-                    "ref": "c1",
-                    "expression": "true",
-                    "action": "set_cache_settings",
-                    "enabled": True,
-                },
+                {"ref": "c1", "expression": "true", "action": "set_cache_settings"},
             ],
         }
-        result = cmd_plan(config, ["example.com"])
-        # cache_rules should NOT be marked for removal
-        assert result == 0
+        config = self._config(self._rules(tmp_path))
+        assert cmd_plan(config, ["example.com"], exit_code=True) == 0
+        out = capsys.readouterr().out
+        assert "Not managed by your files" in out
+        assert "example.com fakeprov.cache_rules: 1 live rule(s): c1" in out
+
+    def test_account_plan_shows_live_only_rules_in_declared_phases(self, tmp_path):
+        """The account path used to hide these, while sync's whole-phase write deleted them."""
+        from octorules.commands._plan import _plan_account
+
+        rules_dir = tmp_path / "rules"
+        rules_dir.mkdir()
+        (rules_dir / "my-account.yaml").write_text(
+            "fakeprov:\n  redirect_rules:\n  - ref: r1\n    expression: 'true'\n"
+        )
+        prov = MagicMock(spec=BaseProvider)
+        prov.account_id = "acct-1"
+        prov.account_name = "my-account"
+        prov.get_all_phase_rules.return_value = {
+            "fake_http_request_dynamic_redirect": [
+                {"ref": "r1", "expression": "true", "action": "redirect", "enabled": True},
+                {"ref": "hand-made", "expression": "true", "action": "redirect", "enabled": False},
+            ],
+            "fake_http_request_cache_settings": [
+                {"ref": "c1", "expression": "true", "action": "set_cache_settings"},
+            ],
+        }
+        config = Config(
+            providers={"cloudflare": ProviderConfig(name="cloudflare", kwargs={})},
+            rules_dir=rules_dir,
+        )
+        zp, _desired, _current = _plan_account(config, prov, None)
+        changes = [(c.change_type.value, c.ref) for pp in zp.phase_plans for c in pp.changes]
+        assert changes == [("remove", "hand-made")]
+        assert [u.phase.friendly_name for u in zp.unmanaged_phases] == ["fakeprov.cache_rules"]
 
 
 class TestPlanErrorIsolation:

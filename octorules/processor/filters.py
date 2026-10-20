@@ -161,9 +161,7 @@ class PreserveFilter:
     Drops planned changes whose ``ref`` matches *refs* and whose
     ``change_type`` is in *change_types*. This protects externally managed
     rules (e.g. rules a security vendor or another team injects out-of-band)
-    from deletion or reordering while other drift is still planned — a scoped
-    middle ground between ``allow_unmanaged`` false (every unmanaged rule
-    becomes a REMOVE) and true (all REMOVEs suppressed).
+    from deletion or reordering while other drift is still planned.
 
     Reads only ``ref`` and ``change_type``, both present on every
     :class:`RuleChange`, so it is provider-agnostic.

@@ -928,7 +928,7 @@ class TestTargetNameThreading:
         prov = self._make_limited_provider()
         cfg = MagicMock()
         cfg.zones = {
-            "example.com": MagicMock(zone_id="z-1", allow_unmanaged=False, processors=[]),
+            "example.com": MagicMock(zone_id="z-1", processors=[]),
         }
         cfg.load_zone_rules.return_value = {
             "fakeprov.waf_custom_rules": [
@@ -962,7 +962,7 @@ class TestTargetNameThreading:
         prov = self._make_limited_provider()
         cfg = MagicMock()
         cfg.zones = {
-            "example.com": MagicMock(zone_id="z-1", allow_unmanaged=False, processors=[]),
+            "example.com": MagicMock(zone_id="z-1", processors=[]),
         }
         cfg.load_zone_rules.return_value = {
             "fakeprov.waf_custom_rules": [

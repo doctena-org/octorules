@@ -110,6 +110,14 @@ class PhasePlan:
 
 
 @dataclass
+class UnmanagedPhase:
+    """A live phase the rules file does not declare; octorules leaves it alone."""
+
+    phase: Phase
+    refs: list[str] = field(default_factory=list)
+
+
+@dataclass
 class CustomRulesetPlan:
     ruleset_name: str
     phase: str
@@ -175,6 +183,8 @@ class ZonePlan:
     custom_ruleset_plans: list[CustomRulesetPlan] = field(default_factory=list)
     list_plans: list[ListPlan] = field(default_factory=list)
     extension_plans: dict[str, list] = field(default_factory=dict)
+    #: Reported, never changed: not part of has_changes or total_changes.
+    unmanaged_phases: list[UnmanagedPhase] = field(default_factory=list)
 
     @property
     def display_name(self) -> str:
@@ -672,15 +682,13 @@ def _diff_rules(
     desired_rules: list[RuleDict],
     current_rules: list[RuleDict],
     *,
-    allow_unmanaged: bool = False,
     order: tuple[list[str], list[str]] | None = None,
 ) -> list[RuleChange]:
     """Compute add/remove/modify/reorder changes between desired and current rules.
 
-    Works for both real phases and synthetic phases (custom rulesets). When
-    allow_unmanaged=True, REMOVE changes are suppressed.  *order* overrides
-    the ``(desired, current)`` ref sequences the reorder check compares, so
-    ignored rules count by their position.
+    Works for both real phases and synthetic phases (custom rulesets).
+    *order* overrides the ``(desired, current)`` ref sequences the reorder
+    check compares, so ignored rules count by their position.
     """
     changes: list[RuleChange] = []
     desired_by_ref = _rules_by_ref(desired_rules)
@@ -700,17 +708,16 @@ def _diff_rules(
             )
         )
 
-    # Removals (skipped when allow_unmanaged is True)
-    if not allow_unmanaged:
-        for ref in current_refs - desired_refs:
-            changes.append(
-                RuleChange(
-                    change_type=ChangeType.REMOVE,
-                    ref=ref,
-                    phase=phase,
-                    current=current_by_ref[ref],
-                )
+    # Removals: a declared phase is owned outright.
+    for ref in current_refs - desired_refs:
+        changes.append(
+            RuleChange(
+                change_type=ChangeType.REMOVE,
+                ref=ref,
+                phase=phase,
+                current=current_by_ref[ref],
             )
+        )
 
     # Modifications (same ref, different content)
     for ref in desired_refs & current_refs:
@@ -752,7 +759,6 @@ def diff_phase(
     desired_rules: list[RuleDict],
     current_rules: list[RuleDict],
     *,
-    allow_unmanaged: bool = False,
     label: str | None = None,
 ) -> PhasePlan:
     """Compute the diff for a single phase.
@@ -771,7 +777,6 @@ def diff_phase(
         phase,
         desired,
         managed_current,
-        allow_unmanaged=allow_unmanaged,
         order=(_ref_order(plan.prepared_rules), _ref_order(current_rules)),
     )
     return plan
@@ -781,43 +786,33 @@ def plan_zone(
     zone_name: str,
     desired_rules_by_phase: dict[str, list[RuleDict]],
     current_rules_by_provider_id: dict[str, list[RuleDict]],
-    *,
-    allow_unmanaged: bool = False,
 ) -> ZonePlan:
-    """Compute the full plan for a zone across all phases."""
+    """Compute the full plan for a zone across all phases.
+
+    A phase the file declares is owned outright.  A live phase it does not
+    declare is left alone and listed in ``unmanaged_phases``.
+    """
     zone_plan = ZonePlan(zone_name=zone_name)
 
-    # Process phases that appear in desired config
-    processed_provider_ids: set[str] = set()
+    declared: set[str] = set()
     for friendly_name, desired_rules in desired_rules_by_phase.items():
         if friendly_name not in PHASE_BY_NAME:
             continue
         phase = get_phase(friendly_name)
-        processed_provider_ids.add(phase.provider_id)
+        declared.add(phase.provider_id)
         current_rules = current_rules_by_provider_id.get(phase.provider_id, [])
         phase_plan = diff_phase(
-            phase,
-            desired_rules,
-            current_rules,
-            allow_unmanaged=allow_unmanaged,
-            label=f"{zone_name}/{friendly_name}",
+            phase, desired_rules, current_rules, label=f"{zone_name}/{friendly_name}"
         )
         if phase_plan.has_changes:
             zone_plan.phase_plans.append(phase_plan)
 
-    # Check for phases that exist in current but not in desired (full removal)
-    # Skip when allow_unmanaged is True (unmanaged phases are left alone)
-    if not allow_unmanaged:
-        for provider_id, current_rules in current_rules_by_provider_id.items():
-            if provider_id not in PHASE_BY_PROVIDER_ID:
-                continue
-            if provider_id in processed_provider_ids:
-                continue
-            phase = PHASE_BY_PROVIDER_ID[provider_id]
-            if current_rules:
-                phase_plan = diff_phase(phase, [], current_rules)
-                if phase_plan.has_changes:
-                    zone_plan.phase_plans.append(phase_plan)
+    for provider_id, current_rules in current_rules_by_provider_id.items():
+        phase = PHASE_BY_PROVIDER_ID.get(provider_id)
+        if phase is None or provider_id in declared or not current_rules:
+            continue
+        refs = [str(r.get("ref") or r.get("id") or "?") for r in current_rules]
+        zone_plan.unmanaged_phases.append(UnmanagedPhase(phase=phase, refs=refs))
 
     return zone_plan
 

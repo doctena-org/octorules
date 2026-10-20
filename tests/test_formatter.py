@@ -20,6 +20,7 @@ from octorules.planner import (
     ChangeType,
     PhasePlan,
     RuleChange,
+    UnmanagedPhase,
     ZonePlan,
 )
 
@@ -1216,3 +1217,57 @@ class TestChangeToDictHelper:
         assert d["ref"] == "r1"
         assert "desired" in d
         assert "current" not in d
+
+
+class TestUnmanagedBlock:
+    """Live phases no rules file declares are listed, in every format, without
+    counting as changes."""
+
+    _TITLE = "Not managed by your files (left as they are)"
+    _SUMMARY = "7 live rule(s): r0, r1, r2, r3, r4 and 2 more"
+
+    def _plans(self, unmanaged=True):
+        zp = ZonePlan(zone_name="example.com")
+        if unmanaged:
+            refs = [f"r{i}" for i in range(7)]
+            zp.unmanaged_phases = [UnmanagedPhase(phase=REDIRECT_PHASE, refs=refs)]
+        return [zp]
+
+    def test_text(self):
+        buf = io.StringIO()
+        print_plan(self._plans(), file=buf)
+        out = buf.getvalue()
+        assert f"{self._TITLE}:" in out
+        assert f"example.com fakeprov.redirect_rules: {self._SUMMARY}" in out
+        assert "No changes detected." in out
+
+    def test_json_lists_every_ref(self):
+        data = json.loads(format_plan_json(self._plans()))
+        assert data["total_changes"] == 0
+        assert data["unmanaged"] == [
+            {
+                "zone": "example.com",
+                "phase": "fakeprov.redirect_rules",
+                "provider_id": REDIRECT_PHASE.provider_id,
+                "refs": [f"r{i}" for i in range(7)],
+            }
+        ]
+
+    def test_markdown(self):
+        md = format_plan_markdown(self._plans())
+        assert f"### {self._TITLE}" in md
+        assert f"| `example.com` | fakeprov.redirect_rules | {self._SUMMARY} |" in md
+        assert "**No changes detected.**" in md
+
+    def test_html(self):
+        html = format_plan_html(self._plans())
+        assert f"<h2>{self._TITLE}</h2>" in html
+        assert "<td>fakeprov.redirect_rules</td>" in html
+
+    def test_absent_when_everything_is_managed(self):
+        plans = self._plans(unmanaged=False)
+        buf = io.StringIO()
+        print_plan(plans, file=buf)
+        for out in (buf.getvalue(), format_plan_markdown(plans), format_plan_html(plans)):
+            assert self._TITLE not in out
+        assert json.loads(format_plan_json(plans))["unmanaged"] == []

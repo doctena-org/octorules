@@ -128,7 +128,7 @@ def _plan_single_zone(
         if skipped:
             desired = {k: v for k, v in desired.items() if k not in failed_friendly}
 
-    zp = plan_zone(zone_name, desired, current, allow_unmanaged=zone_cfg.allow_unmanaged)
+    zp = plan_zone(zone_name, desired, current)
 
     # Apply process_changes hooks
     if processors and zone_cfg.processors:
@@ -352,7 +352,7 @@ def _plan_account(
             if skipped:
                 desired = {k: v for k, v in desired.items() if k not in failed_friendly}
 
-        zp = plan_zone(account_label, desired, current, allow_unmanaged=True)
+        zp = plan_zone(account_label, desired, current)
 
         # Plan custom rulesets
         if cr_future is not None:

@@ -271,6 +271,22 @@ def _iter_extension_plans(zone_plan: ZonePlan):
             yield name, fmt, plans
 
 
+_UNMANAGED_TITLE = "Not managed by your files (left as they are)"
+
+
+def _unmanaged(zone_plans: list[ZonePlan]):
+    """Yield ``(zone_plan, unmanaged_phase)`` for live phases no rules file declares."""
+    for zp in zone_plans:
+        for up in zp.unmanaged_phases:
+            yield zp, up
+
+
+def _refs_summary(refs: list[str], limit: int = 5) -> str:
+    shown = ", ".join(refs[:limit])
+    more = f" and {len(refs) - limit} more" if len(refs) > limit else ""
+    return f"{len(refs)} live rule(s): {shown}{more}"
+
+
 def _total_changes(zone_plans: list[ZonePlan]) -> int:
     """Sum total changes across all zone plans."""
     return sum(zp.total_changes for zp in zone_plans)
@@ -345,10 +361,22 @@ def format_plan_json(zone_plans: list[ZonePlan]) -> str:
         for ext_name, fmt, ext_plans in _iter_extension_plans(zp):
             zone_entry[f"{ext_name}_policy_plans"] = fmt.format_json(ext_plans)
         zones.append(zone_entry)
+    unmanaged = []
+    for zp, up in _unmanaged(zone_plans):
+        entry: dict = {
+            "zone": zp.zone_name,
+            "phase": up.phase.friendly_name,
+            "provider_id": up.phase.provider_id,
+            "refs": up.refs,
+        }
+        if zp.target is not None:
+            entry["target"] = zp.target
+        unmanaged.append(entry)
     result = {
         "zones": zones,
         "total_changes": total_changes,
         "has_changes": total_changes > 0,
+        "unmanaged": unmanaged,
     }
     return json.dumps(result, indent=2)
 
@@ -470,6 +498,17 @@ def format_plan_markdown(zone_plans: list[ZonePlan]) -> str:
                 lines.extend(_md_diff_value(key, old_val, "-"))
                 lines.extend(_md_diff_value(key, new_val, "+"))
             lines.append("```")
+        lines.append("")
+
+    unmanaged = list(_unmanaged(zone_plans))
+    if unmanaged:
+        lines.append(f"### {_UNMANAGED_TITLE}")
+        lines.append("")
+        lines.append("| Zone | Phase | Live rules |")
+        lines.append("|---|---|---|")
+        for zp, up in unmanaged:
+            refs = md_escape(_refs_summary(up.refs))
+            lines.append(f"| `{zp.display_name}` | {up.phase.friendly_name} | {refs} |")
         lines.append("")
 
     if total_changes == 0:
@@ -808,6 +847,23 @@ def format_plan_html(zone_plans: list[ZonePlan]) -> str:
         for _ext_name, fmt, ext_plans in _iter_extension_plans(zp):
             fmt.format_html(ext_plans, lines)
 
+    unmanaged = list(_unmanaged(zone_plans))
+    if unmanaged:
+        lines.append(f"<h2>{e(_UNMANAGED_TITLE)}</h2>")
+        lines.append("<table>")
+        lines.append("  <tr>")
+        lines.append("    <th>Zone</th>")
+        lines.append("    <th>Phase</th>")
+        lines.append("    <th>Live rules</th>")
+        lines.append("  </tr>")
+        for zp, up in unmanaged:
+            lines.append("  <tr>")
+            lines.append(f"    <td>{e(zp.display_name)}</td>")
+            lines.append(f"    <td>{e(up.phase.friendly_name)}</td>")
+            lines.append(f"    <td>{e(_refs_summary(up.refs))}</td>")
+            lines.append("  </tr>")
+        lines.append("</table>")
+
     if not any(zp.has_changes for zp in zone_plans):
         lines.append("<b>No changes were planned</b>")
 
@@ -851,6 +907,16 @@ def print_plan(zone_plans: list[ZonePlan], file: IO[str] | None = None, fmt: str
         # Blank line between zones, but not after the last one.
         if i < len(changed) - 1:
             print(file=file)
+
+    unmanaged = list(_unmanaged(zone_plans))
+    if unmanaged:
+        if changed:
+            print(file=file)
+        print(p.warning(f"{_UNMANAGED_TITLE}:"), file=file)
+        for zp, up in unmanaged:
+            print(
+                f"  {zp.display_name} {up.phase.friendly_name}: {_refs_summary(up.refs)}", file=file
+            )
 
     # Summary goes to stderr when printing to terminal (consistent with
     # lint/audit), but stays in the file when writing to a plan output.
