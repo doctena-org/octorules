@@ -122,15 +122,6 @@ processors:
     class: octorules.processor.filters.RefFilter
     exclude: "^test-"
 
-  # Protect externally-managed rules (whose ref starts with "vendor-") from
-  # deletion or reordering, while still cleaning up other drift.
-  preserve_external_rules:
-    class: octorules.processor.filters.PreserveFilter
-    refs: "^vendor-"
-    change_types:
-      - REMOVE
-      - REORDER
-
 # ---------------------------------------------------------------------------
 # Manager — concurrency and plan output settings
 # ---------------------------------------------------------------------------

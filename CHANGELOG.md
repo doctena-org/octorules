@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Removed
 - The `allow_unmanaged` zone option. **Remove it from your config**; a
   config that sets it no longer loads.
+- `PreserveFilter`. **Remove it from `processors`**; it hid removals from
+  the plan while sync still deleted the rules.
 
 ## [0.36.1] - 2026-09-09
 

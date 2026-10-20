@@ -155,47 +155,11 @@ class ChangeTypeFilter:
         )
 
 
-class PreserveFilter:
-    """Preserve rules whose ``ref`` matches a pattern from selected change types.
-
-    Drops planned changes whose ``ref`` matches *refs* and whose
-    ``change_type`` is in *change_types*. This protects externally managed
-    rules (e.g. rules a security vendor or another team injects out-of-band)
-    from deletion or reordering while other drift is still planned.
-
-    Reads only ``ref`` and ``change_type``, both present on every
-    :class:`RuleChange`, so it is provider-agnostic.
-
-    Args:
-        refs: Regex matched (``re.search``) against each change's ``ref``.
-        change_types: Change types to suppress for matching refs. Defaults to
-            ``["REMOVE", "REORDER"]``. ADD/MODIFY are not meaningful for
-            preservation (an unmanaged rule is never added or modified).
-    """
-
-    def __init__(self, *, refs: str, change_types: list[str] | None = None) -> None:
-        if not refs:
-            raise ConfigError("PreserveFilter: 'refs' is required")
-        try:
-            self._refs = re.compile(refs)
-        except re.error as e:
-            raise ConfigError(f"PreserveFilter: invalid regex pattern: {e}") from None
-        types = change_types if change_types is not None else ["REMOVE", "REORDER"]
-        if not types:
-            raise ConfigError("PreserveFilter: 'change_types' must be a non-empty list")
-        try:
-            self._types = {ChangeType[t.upper()] for t in types}
-        except KeyError as e:
-            valid = ", ".join(ct.name for ct in ChangeType)
-            raise ConfigError(
-                f"PreserveFilter: unknown change type {e}. Valid types: {valid}"
-            ) from None
-
-    def process_changes(
-        self, zone_name: str, plan: "ZonePlan", provider: "BaseProvider"
-    ) -> "ZonePlan":
-        def keep(c: object) -> bool:
-            ct = getattr(c, "change_type", None)
-            return not (ct in self._types and self._refs.search(getattr(c, "ref", "") or ""))
-
-        return _filter_plan_changes(plan, keep)
+def __getattr__(name: str) -> object:
+    if name == "PreserveFilter":
+        raise ConfigError(
+            "PreserveFilter has been removed: it hid removals from the plan while sync"
+            " still deleted the rules. Use `octorules: {ignored: true}` on a rule to keep"
+            " it, or leave its phase out of the rules file"
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -354,18 +354,17 @@ Both default to no-op (pass-through). Processors run in the order listed. The `c
 
 ### Built-in filters
 
-octorules ships four ready-to-use processors in `octorules.processor.filters`:
+octorules ships three ready-to-use processors in `octorules.processor.filters`:
 
 | Filter | Description |
 |--------|-------------|
 | **PhaseFilter** | Include or exclude phases by name (`include`/`exclude` lists); an excluded phase is left alone |
 | **RefFilter** | Include or exclude rules by regex on the `ref` field |
 | **ChangeTypeFilter** | Block specific change types: `ADD`, `REMOVE`, `MODIFY`, `REORDER` |
-| **PreserveFilter** | Protect rules whose `ref` matches a regex from `REMOVE`/`REORDER` changes |
 
 A rule phase or custom ruleset is written as one list, so a change `ChangeTypeFilter` blocks there would still happen on sync. Sync refuses such a zone instead (see [How it works](#how-it-works)); for lists and policies, which are written change by change, the blocked change is simply skipped.
 
-See [`examples/config.yaml`](examples/config.yaml) for working examples of all four.
+See [`examples/config.yaml`](examples/config.yaml) for working examples of all three.
 
 ## Zone discovery
 
