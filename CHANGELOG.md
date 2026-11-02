@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Python 3.15 support.
+
 ### Removed
 - Python 3.10 support (end of life). Python 3.11 or later is required.
 
