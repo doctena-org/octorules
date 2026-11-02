@@ -22,7 +22,7 @@ import json
 import re
 import subprocess
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -150,7 +150,7 @@ _HANDLERS: dict[str, tuple] = {
 
 def sync() -> bool:
     """Fetch all CDN ranges and write per-provider JSON files. Returns True on success."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     ok = True
 
@@ -196,7 +196,7 @@ def sync() -> bool:
 
 def check(max_age_days: int = _MAX_AGE_DAYS) -> bool:
     """Check if baked-in data is stale. Returns True if fresh."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     ok = True
 
     for filename, provider, _src, _fmt in _SOURCES:

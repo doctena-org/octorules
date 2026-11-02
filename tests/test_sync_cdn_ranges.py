@@ -3,7 +3,7 @@
 import importlib.util
 import json
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -15,7 +15,7 @@ _spec.loader.exec_module(sync_cdn_ranges)
 
 
 def _write_data(data_dir: Path, age: timedelta) -> None:
-    stamp = (datetime.now(timezone.utc) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = (datetime.now(UTC) - age).strftime("%Y-%m-%dT%H:%M:%SZ")
     for filename, _provider, _src, _fmt in sync_cdn_ranges._SOURCES:
         payload = {"_generated_at": stamp, "cidrs": ["192.0.2.0/24"]}
         (data_dir / filename).write_text(json.dumps(payload))

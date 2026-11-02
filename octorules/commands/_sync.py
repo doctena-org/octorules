@@ -527,9 +527,9 @@ def _apply_zone_changes(
 
 def _write_audit_log(path: str, results: list[SyncResult]) -> None:
     """Write sync results as JSON lines to an audit log file."""
-    from datetime import datetime, timezone
+    from datetime import UTC, datetime
 
-    ts = datetime.now(timezone.utc).isoformat()
+    ts = datetime.now(UTC).isoformat()
     try:
         with open(Path(path).resolve(), "w", encoding="utf-8") as f:
             for r in results:

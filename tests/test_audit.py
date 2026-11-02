@@ -1,5 +1,6 @@
 """Tests for the audit module — IP overlap, shadow, CDN ranges, zone drift."""
 
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -715,13 +716,13 @@ class TestFetchCDNRanges:
 
     def test_fresh_baked_in_skips_api(self):
         """When baked-in data is fresh, API is not called."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         # Stamped now: the committed files go stale 60 days after each sync.
         fresh = CdnRangeResult(
             ranges={"Cloudflare": ["1.0.0.0/24"]},
             source="baked-in",
-            generated_at=datetime.now(timezone.utc),
+            generated_at=datetime.now(UTC),
         )
         with (
             patch("octorules.audit._load_baked_in_ranges", return_value=fresh),
@@ -735,14 +736,14 @@ class TestFetchCDNRanges:
 
     def test_fetch_failure_falls_back_to_baked_in(self):
         """When all CDN APIs fail and baked-in is stale, falls back to stale baked-in."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from octorules.audit import CdnRangeResult
 
         stale = CdnRangeResult(
             ranges={"Cloudflare": ["1.0.0.0/24"]},
             source="baked-in",
-            generated_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            generated_at=datetime(2020, 1, 1, tzinfo=UTC),
         )
         with (
             patch("octorules.audit._load_baked_in_ranges", return_value=stale),
@@ -755,14 +756,14 @@ class TestFetchCDNRanges:
 
     def test_fetch_partial_success_uses_api(self):
         """When some CDN APIs succeed and baked-in is stale, source is 'api'."""
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from octorules.audit import CdnRangeResult
 
         stale = CdnRangeResult(
             ranges={},
             source="baked-in",
-            generated_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            generated_at=datetime(2020, 1, 1, tzinfo=UTC),
         )
 
         def mock_fetch(url, timeout=15):
@@ -788,14 +789,14 @@ class TestFetchCDNRanges:
         audit command. The contract is: parser failures degrade to baked-in
         fallback, never abort the run.
         """
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from octorules.audit import CdnRangeResult
 
         stale = CdnRangeResult(
             ranges={"Cloudflare": ["203.0.113.0/24"]},
             source="baked-in",
-            generated_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+            generated_at=datetime(2020, 1, 1, tzinfo=UTC),
         )
 
         def boom(_data):
@@ -826,24 +827,24 @@ class TestCdnRangeResult:
         assert not result.is_stale(max_age_days=1)
 
     def test_fresh_baked_in_not_stale(self):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        recent = datetime.now(timezone.utc) - timedelta(days=30)
+        recent = datetime.now(UTC) - timedelta(days=30)
         result = CdnRangeResult(ranges={}, source="baked-in", generated_at=recent)
         assert not result.is_stale(max_age_days=60)
 
     def test_old_baked_in_is_stale(self):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        old = datetime.now(timezone.utc) - timedelta(days=61)
+        old = datetime.now(UTC) - timedelta(days=61)
         result = CdnRangeResult(ranges={}, source="baked-in", generated_at=old)
         assert result.is_stale(max_age_days=60)
 
     def test_boundary_not_stale(self):
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
         # 59 days ago is definitely not stale at threshold of 60
-        just_under = datetime.now(timezone.utc) - timedelta(days=59)
+        just_under = datetime.now(UTC) - timedelta(days=59)
         result = CdnRangeResult(ranges={}, source="baked-in", generated_at=just_under)
         assert not result.is_stale(max_age_days=60)
 
@@ -1026,9 +1027,9 @@ class TestRunAudit:
 
     def test_stale_baked_in_injects_warning(self):
         """When baked-in CDN data is stale, a warning finding is injected."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        old_date = datetime.now(timezone.utc) - timedelta(days=90)
+        old_date = datetime.now(UTC) - timedelta(days=90)
         stale_cdn = CdnRangeResult(
             ranges={"TestCDN": ["198.51.100.0/24"]},
             source="baked-in",
@@ -1046,9 +1047,9 @@ class TestRunAudit:
 
     def test_fresh_baked_in_no_warning(self):
         """Fresh baked-in CDN data does not produce a staleness warning."""
-        from datetime import datetime, timedelta, timezone
+        from datetime import datetime, timedelta
 
-        recent = datetime.now(timezone.utc) - timedelta(days=10)
+        recent = datetime.now(UTC) - timedelta(days=10)
         fresh_cdn = CdnRangeResult(
             ranges={"TestCDN": ["198.51.100.0/24"]},
             source="baked-in",

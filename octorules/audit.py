@@ -14,7 +14,7 @@ import logging
 import re
 from collections.abc import Callable, Container, Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -279,7 +279,7 @@ class CdnRangeResult:
         """Return True if the data is older than *max_age_days*."""
         if self.generated_at is None:
             return False  # API data is always fresh
-        return datetime.now(timezone.utc) - self.generated_at > timedelta(days=max_age_days)
+        return datetime.now(UTC) - self.generated_at > timedelta(days=max_age_days)
 
 
 _CDN_DATA_DIR = Path(__file__).resolve().parent / "data" / "cdn_ranges"
@@ -1267,7 +1267,7 @@ def run_audit(
         if cdn_result.ranges:
             findings.extend(check_cdn_ranges(all_rule_ips, cdn_result.ranges, active_cdn_providers))
             if cdn_result.is_stale(cdn_stale_days):
-                age = (datetime.now(timezone.utc) - cdn_result.generated_at).days
+                age = (datetime.now(UTC) - cdn_result.generated_at).days
                 findings.append(
                     AuditFinding(
                         check="cdn-ranges",
