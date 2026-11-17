@@ -4,7 +4,7 @@
 # race the PyPI CDN; providers resolve to their latest published releases
 # at build time. One image carries all providers so a single config can
 # target any provider mix, including multi-provider files.
-FROM python:3.14-slim AS build
+FROM python:3.15-slim AS build
 
 COPY pyproject.toml README.md LICENSE /src/
 COPY octorules/ /src/octorules/
@@ -19,7 +19,7 @@ RUN python -m venv /opt/octorules \
         octorules-bunny \
     && /opt/octorules/bin/python -m compileall -q /opt/octorules/lib
 
-FROM python:3.14-slim
+FROM python:3.15-slim
 
 # GitHub links the GHCR package to this repository via this label.
 LABEL org.opencontainers.image.source="https://github.com/doctena-org/octorules"
